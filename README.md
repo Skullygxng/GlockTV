@@ -16,8 +16,8 @@ GlockTV is a mobile-first movie and TV discovery experience powered by TMDB. Its
 Set these values in `.env.local`:
 
 ```dotenv
-VITE_MOVIE_EMBED_URL_TEMPLATE=https://video.example/embed/movie/{tmdb_id}
-VITE_TV_EMBED_URL_TEMPLATE=https://video.example/embed/tv/{tmdb_id}/{season_number}/{episode_number}
+VITE_MOVIE_EMBED_URL_TEMPLATE=https://vidcore.org/embed/movie/{tmdb_id}
+VITE_TV_EMBED_URL_TEMPLATE=https://vidcore.org/embed/tv/{tmdb_id}/{season_number}/{episode_number}
 ```
 
 The templates must use HTTPS. GlockTV replaces the placeholders when a viewer selects a movie or TV episode. Because GitHub Pages is a browser-only host, these values are public. Do not put a private API secret in any `VITE_` variable; private-key providers require a serverless proxy.

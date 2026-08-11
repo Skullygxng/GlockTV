@@ -5,6 +5,7 @@ export interface MediaCardProps {
   item: MediaItem;
   match: number;
   saved: boolean;
+  trailerKey?: string | null;
   onToggleList: (item: MediaItem) => void;
   onWatch: (item: MediaItem) => void;
   onTrailer: (item: MediaItem) => void;
@@ -19,14 +20,19 @@ function formatRuntime(minutes: number | null): string {
   return hours ? `${hours}h ${remaining}m` : `${remaining}m`;
 }
 
-export function MediaCard({ item, match, saved, onToggleList, onWatch, onTrailer, onLike, onSkip }: MediaCardProps) {
+export function MediaCard({ item, match, saved, trailerKey = null, onToggleList, onWatch, onTrailer, onLike, onSkip }: MediaCardProps) {
   const artwork = imageUrl(item.posterPath ?? item.backdropPath, 'w780');
   return (
     <article className="media-card" aria-label={`${item.title} recommendation`}>
       <div className="media-card__image-wrap">
         {artwork ? <img className="media-card__image" src={artwork} alt="" /> : <div className="media-card__fallback" />}
+        {trailerKey ? <div className="media-card__video" aria-hidden="true"><iframe
+          title={`${item.title} autoplay trailer`}
+          src={`https://www.youtube-nocookie.com/embed/${trailerKey}?autoplay=1&mute=1&controls=0&loop=1&playlist=${trailerKey}&playsinline=1&rel=0&disablekb=1`}
+          allow="autoplay; encrypted-media; picture-in-picture"
+        /></div> : null}
         <div className="media-card__shade" />
-        <button className="media-card__mute" type="button" aria-label="Mute preview"><VolumeX size={17} /></button>
+        <button className="media-card__mute" type="button" aria-label={trailerKey ? `Play ${item.title} trailer with sound` : 'Trailer preview unavailable'} disabled={!trailerKey} onClick={() => onTrailer(item)}><VolumeX size={17} /></button>
         <div className="media-card__actions" aria-label="Title actions">
           <button type="button" aria-label={`Like ${item.title}`} onClick={() => onLike(item)}><Heart /></button>
           <span>{item.voteCount > 999 ? `${Math.round(item.voteCount / 1000)}K` : item.voteCount}</span>

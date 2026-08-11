@@ -1,7 +1,7 @@
-import { FormEvent, useEffect, useMemo, useReducer, useState } from 'react';
+import { FormEvent, type TouchEvent, type WheelEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Bell, Bookmark, ChevronDown, ChevronLeft, ChevronRight, Clapperboard,
+  Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clapperboard,
   Compass, Film, Filter, Heart, ListVideo, LoaderCircle, Play, Search,
   SlidersHorizontal, Sparkles, Star, Tv, X, Zap,
 } from 'lucide-react';
@@ -54,17 +54,42 @@ export function App({ client }: AppProps) {
   }), [client]);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [slideDirection, setSlideDirection] = useState(1);
   const [view, setView] = useState<View>('discover');
   const [filters, setFilters] = useState(defaultFilters);
   const [draftFilters, setDraftFilters] = useState(defaultFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [vibeOpen, setVibeOpen] = useState(false);
   const [context, setContext] = useState<TitleContext | null>(null);
+  const [previewContext, setPreviewContext] = useState<TitleContext | null>(null);
   const [modalMode, setModalMode] = useState<'details' | 'trailer' | 'channel' | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [session, dispatch] = useReducer(sessionReducer, undefined, loadSession);
+
+  const contextCache = useRef(new Map<string, TitleContext>());
+  const contextRequests = useRef(new Map<string, Promise<TitleContext>>());
+  const touchStartY = useRef<number | null>(null);
+  const wheelLockedUntil = useRef(0);
+
+  const loadTitleContext = useCallback((item: Pick<MediaItem, 'id' | 'mediaType'>) => {
+    const key = `${item.mediaType}:${item.id}`;
+    const cached = contextCache.current.get(key);
+    if (cached) return Promise.resolve(cached);
+    const inFlight = contextRequests.current.get(key);
+    if (inFlight) return inFlight;
+    const pending = api.getTitleContext(item).then((result) => {
+      contextCache.current.set(key, result);
+      contextRequests.current.delete(key);
+      return result;
+    }).catch((reason) => {
+      contextRequests.current.delete(key);
+      throw reason;
+    });
+    contextRequests.current.set(key, pending);
+    return pending;
+  }, [api]);
 
   useEffect(() => { sessionStorage.setItem('glocktv-session', JSON.stringify(session)); }, [session]);
   useEffect(() => {
@@ -87,11 +112,17 @@ export function App({ client }: AppProps) {
     skippedGenreIds: session.skippedGenreIds,
   }) : 0;
 
+  const previewTrailerKey = current && previewContext
+    && previewContext.details.id === current.id
+    && previewContext.details.mediaType === current.mediaType
+    ? previewContext.trailer?.key ?? null
+    : null;
+
   useEffect(() => {
     if (!current || current.runtime !== null || view === 'list') return;
 
     let cancelled = false;
-    api.getTitleContext(current).then(({ details }) => {
+    loadTitleContext(current).then(({ details }) => {
       if (cancelled || details.runtime === null) return;
       setItems((previous) => previous.map((item) => (
         item.id === details.id && item.mediaType === details.mediaType
@@ -105,17 +136,68 @@ export function App({ client }: AppProps) {
     }).catch(() => undefined);
 
     return () => { cancelled = true; };
-  }, [api, current?.id, current?.mediaType, current?.runtime, view]);
+  }, [current?.id, current?.mediaType, current?.runtime, loadTitleContext, view]);
 
-  const move = (direction: number) => {
+  useEffect(() => {
+    if (!current) {
+      setPreviewContext(null);
+      return;
+    }
+    const cacheKey = `${current.mediaType}:${current.id}`;
+    setPreviewContext(contextCache.current.get(cacheKey) ?? null);
+    let cancelled = false;
+    loadTitleContext(current).then((result) => {
+      if (!cancelled) setPreviewContext(result);
+    }).catch(() => { if (!cancelled) setPreviewContext(null); });
+    return () => { cancelled = true; };
+  }, [current?.id, current?.mediaType, loadTitleContext]);
+
+
+
+  const move = useCallback((direction: number) => {
     if (!currentItems.length) return;
+    setSlideDirection(direction);
     setActiveIndex((index) => (index + direction + currentItems.length) % currentItems.length);
+  }, [currentItems.length]);
+
+  useEffect(() => {
+    const handleKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (modalMode || filtersOpen || vibeOpen || target?.tagName === 'INPUT' || target?.isContentEditable) return;
+      if (event.key === 'ArrowDown') { event.preventDefault(); move(1); }
+      if (event.key === 'ArrowUp') { event.preventDefault(); move(-1); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [filtersOpen, modalMode, move, vibeOpen]);
+
+  const handleWheel = (event: WheelEvent<HTMLElement>) => {
+    if (Math.abs(event.deltaY) < 25) return;
+    const now = Date.now();
+    if (now < wheelLockedUntil.current) return;
+    wheelLockedUntil.current = now + 650;
+    move(event.deltaY > 0 ? 1 : -1);
   };
+
+  const handleTouchStart = (event: TouchEvent<HTMLElement>) => {
+    touchStartY.current = event.touches[0]?.clientY ?? null;
+  };
+
+  const handleTouchEnd = (event: TouchEvent<HTMLElement>) => {
+    const start = touchStartY.current;
+    const end = event.changedTouches[0]?.clientY;
+    touchStartY.current = null;
+    if (start === null || end === undefined) return;
+    const distance = start - end;
+    if (Math.abs(distance) < 55) return;
+    move(distance > 0 ? 1 : -1);
+  };
+
 
   const openContext = async (item: MediaItem, mode: 'details' | 'trailer' | 'channel') => {
     setModalMode(mode);
     setContext(null);
-    try { setContext(await api.getTitleContext(item)); }
+    try { setContext(await loadTitleContext(item)); }
     catch { setError('Title details are temporarily unavailable.'); setModalMode(null); }
   };
 
@@ -180,7 +262,7 @@ export function App({ client }: AppProps) {
         <button className="filter-button" aria-label="Open filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><SlidersHorizontal /> Filter</button>
       </aside>
 
-      <main className="feed-stage">
+      <main className="feed-stage" onWheel={handleWheel} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
         <div className="mobile-tabs">
           {(['both', 'movies', 'tv'] as const).map((type) => <button key={type} className={filters.contentType === type ? 'active' : ''} onClick={() => { const next = { ...filters, contentType: type }; setDraftFilters(next); setFilters(next); void api.discover(next).then(setItems); }}>{type === 'both' ? 'All' : type === 'tv' ? 'TV Shows' : 'Movies'}</button>)}
           <button aria-label="Open mobile filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><Filter /></button>
@@ -189,8 +271,9 @@ export function App({ client }: AppProps) {
         {view === 'channels' && <div className="view-title"><span>Instant programming</span><h2>Channel Mode</h2></div>}
         {error && <div className="notice" role="alert">{error}</div>}
         {loading ? <LoadingState /> : current ? (
-          <motion.div key={`${current.mediaType}-${current.id}`} initial={{ opacity: 0, y: 22, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .38 }}>
+          <motion.div key={`${current.mediaType}-${current.id}`} initial={{ opacity: 0, y: slideDirection * 90, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .32, ease: 'easeOut' }}>
             <MediaCard item={current} match={match} saved={saved}
+              trailerKey={previewTrailerKey}
               onToggleList={(item) => dispatch({ type: 'toggle-list', item })}
               onWatch={(item) => void openContext(item, 'details')}
               onTrailer={(item) => void openContext(item, 'trailer')}
@@ -198,7 +281,7 @@ export function App({ client }: AppProps) {
               onSkip={(item) => { dispatch({ type: 'skip', item }); move(1); }} />
           </motion.div>
         ) : <div className="state-panel"><Bookmark /><strong>{view === 'list' ? 'Your list is empty' : 'No matches yet'}</strong><span>{view === 'list' ? 'Save a title from Discover and it will appear here.' : 'Try clearing a few filters.'}</span></div>}
-        {!!currentItems.length && <div className="feed-pagination"><button aria-label="Previous title" onClick={() => move(-1)}><ChevronLeft /></button><div>{currentItems.slice(0, 7).map((item, index) => <span key={`${item.mediaType}-${item.id}`} className={index === activeIndex ? 'active' : ''} />)}</div><button aria-label="Next title" onClick={() => move(1)}><ChevronRight /></button></div>}
+        {!!currentItems.length && <div className="feed-pagination"><button aria-label="Previous title" onClick={() => move(-1)}><ChevronUp /></button><div>{currentItems.slice(0, 7).map((item, index) => <span key={`${item.mediaType}-${item.id}`} className={index === activeIndex ? 'active' : ''} />)}</div><button aria-label="Next title" onClick={() => move(1)}><ChevronDown /></button><small>Scroll, swipe, or use ↑ ↓</small></div>}
       </main>
 
       <aside className="context-panel">
@@ -258,7 +341,7 @@ function TitleModal({ mode, context, onClose, onNext }: { mode: 'details' | 'tra
     <motion.div className={`title-modal ${mode === 'channel' ? 'title-modal--channel' : ''}`} role="dialog" aria-label={mode === 'channel' ? 'Channel player' : mode === 'trailer' ? 'Trailer player' : 'Title details'} initial={{ y: 30, scale: .97 }} animate={{ y: 0, scale: 1 }} exit={{ y: 20, scale: .98 }}>
       <button className="modal-close" aria-label="Close player" onClick={onClose}><X /></button>
       {!context ? <LoadingState /> : <>
-        {mode !== 'details' && context.trailer ? <div className="video-frame"><iframe title={`${context.details.title} trailer`} src={`https://www.youtube-nocookie.com/embed/${context.trailer.key}?autoplay=1&mute=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /></div> : mode !== 'details' ? <div className="video-missing"><Clapperboard /><p>No official trailer is available for this title.</p></div> : null}
+        {mode !== 'details' && context.trailer ? <div className="video-frame"><iframe title={`${context.details.title} trailer`} src={`https://www.youtube-nocookie.com/embed/${context.trailer.key}?autoplay=1&playsinline=1&rel=0`} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen /></div> : mode !== 'details' ? <div className="video-missing"><Clapperboard /><p>No official trailer is available for this title.</p></div> : null}
         <div className="title-modal__body"><span>{mode === 'channel' ? 'Now playing' : context.details.mediaType === 'movie' ? 'Movie' : 'Series'}</span><h2>{context.details.title}</h2><p>{context.details.overview}</p>
           <div className="provider-list">{providers.length ? providers.slice(0, 6).map((provider) => <span key={provider.provider_id}>{imageUrl(provider.logo_path, 'w92') && <img src={imageUrl(provider.logo_path, 'w92')!} alt="" />}{provider.provider_name}</span>) : <small>No US streaming provider is currently listed.</small>}</div>
           <div className="modal-actions">{context.providerLink && <a href={context.providerLink} target="_blank" rel="noreferrer"><Play fill="currentColor" /> See where to watch</a>}{mode === 'channel' && <button onClick={onNext}>Next trailer <ChevronRight /></button>}</div>

@@ -193,11 +193,11 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
 
   const enableGuestSync = () => {
     const desired = livePosition(room);
-    player.current?.mute();
+    player.current?.unmute();
     if (player.current && Math.abs(player.current.getCurrentTime() - desired) > 1.5) player.current.seek(desired);
     if (room.playbackState === 'playing') player.current?.play();
     else player.current?.pause();
-    setMuted(true);
+    setMuted(false);
     setSyncEnabled(true);
   };
 

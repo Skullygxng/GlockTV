@@ -56,6 +56,8 @@ describe('YouTubePartyPlayer', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Join synced playback' }));
 
     expect(player.play).toHaveBeenCalled();
+    expect(player.unmute).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Turn sound off' })).toBeInTheDocument();
     expect(screen.getByText(/Synced to the host/)).toBeInTheDocument();
   });
 

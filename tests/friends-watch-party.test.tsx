@@ -21,6 +21,15 @@ const item: MediaItem = {
   backdropPath: '/heat-backdrop.jpg',
 };
 
+const matrix: MediaItem = {
+  ...item,
+  id: 603,
+  title: 'The Matrix',
+  year: '1999',
+  posterPath: '/matrix.jpg',
+  backdropPath: '/matrix-backdrop.jpg',
+};
+
 const tmdbClient: TmdbClient = {
   getTrending: vi.fn().mockResolvedValue([item]),
   discover: vi.fn().mockResolvedValue([item]),
@@ -56,6 +65,14 @@ function makePartyService() {
     getMessages: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn().mockResolvedValue({ id: 'message-1', roomId: 'room-1', userId: 'user-1', nickname: 'Skully', body: 'Ready?', createdAt: '2026-08-11T00:00:00.000Z' }),
     updatePlayback: vi.fn().mockResolvedValue(undefined),
+    updateTitle: vi.fn().mockImplementation(async (_roomId: string, input: { titleId: number; mediaType: 'movie' | 'tv'; titleName: string; trailerKey: string }) => ({
+      ...room,
+      titleId: input.titleId,
+      mediaType: input.mediaType,
+      titleName: input.titleName,
+      trailerKey: input.trailerKey,
+      playbackPosition: 0,
+    })),
     subscribe: vi.fn().mockReturnValue(() => undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
   };
@@ -116,5 +133,40 @@ describe('Friends watch parties', () => {
 
     await waitFor(() => expect(partyService.sendMessage).toHaveBeenCalledWith('room-1', 'Guest', 'Ready?'));
     expect(await screen.findByText('Ready?')).toBeInTheDocument();
+  });
+
+  it('lets the host search for a different title and changes it for the room', async () => {
+    const partyService = makePartyService();
+    vi.mocked(tmdbClient.search).mockResolvedValueOnce([matrix]);
+    vi.mocked(tmdbClient.getTitleContext).mockImplementationOnce(async () => ({
+      trailer: { key: 'heat-trailer', site: 'YouTube', type: 'Trailer', official: true },
+      providers: null,
+      providerLink: null,
+      details: item,
+    })).mockImplementationOnce(async () => ({
+      trailer: { key: 'matrix-trailer', site: 'YouTube', type: 'Trailer', official: true },
+      providers: null,
+      providerLink: null,
+      details: matrix,
+    }));
+
+    render(<App client={tmdbClient} partyService={partyService as never} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create party' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Change title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search watch party titles' }), { target: { value: 'Matrix' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search titles' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose The Matrix' }));
+
+    await waitFor(() => expect(partyService.updateTitle).toHaveBeenCalledWith('room-1', {
+      titleId: 603,
+      mediaType: 'movie',
+      titleName: 'The Matrix',
+      trailerKey: 'matrix-trailer',
+    }));
+    expect(await screen.findByRole('heading', { name: 'The Matrix' })).toBeInTheDocument();
   });
 });

@@ -6,6 +6,7 @@ export interface PartyPlayer {
   play(): void;
   pause(): void;
   seek(seconds: number): void;
+  mute(): void;
   getCurrentTime(): number;
   destroy(): void;
 }
@@ -21,6 +22,7 @@ interface RawYouTubePlayer {
   playVideo(): void;
   pauseVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
+  mute(): void;
   getCurrentTime(): number;
   destroy(): void;
 }
@@ -77,6 +79,7 @@ export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onRead
     play: () => raw?.playVideo(),
     pause: () => raw?.pauseVideo(),
     seek: (seconds) => raw?.seekTo(seconds, true),
+    mute: () => raw?.mute(),
     getCurrentTime: () => raw?.getCurrentTime() ?? 0,
     destroy: () => { destroyed = true; raw?.destroy(); raw = null; },
   };
@@ -123,6 +126,7 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
   isHostRef.current = isHost;
   commandRef.current = onHostCommand;
   const [readyVersion, setReadyVersion] = useState(0);
+  const [syncEnabled, setSyncEnabled] = useState(isHost);
 
   useEffect(() => {
     if (!mount.current) return;
@@ -138,14 +142,15 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
 
   useEffect(() => {
     if (!readyVersion || !player.current) return;
+    if (!isHost && !syncEnabled) return;
     const desired = livePosition(room);
     if (Math.abs(player.current.getCurrentTime() - desired) > 1.5) player.current.seek(desired);
     if (room.playbackState === 'playing') player.current.play();
     else player.current.pause();
-  }, [readyVersion, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
+  }, [isHost, readyVersion, room.playbackPosition, room.playbackState, room.playbackUpdatedAt, syncEnabled]);
 
   useEffect(() => {
-    if (isHost || !readyVersion) return;
+    if (isHost || !readyVersion || !syncEnabled) return;
     const timer = window.setInterval(() => {
       const desired = livePosition(room);
       if (player.current && Math.abs(player.current.getCurrentTime() - desired) > 1.5) player.current.seek(desired);
@@ -153,7 +158,7 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
       else player.current?.pause();
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [isHost, readyVersion, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
+  }, [isHost, readyVersion, room.playbackPosition, room.playbackState, room.playbackUpdatedAt, syncEnabled]);
 
   const issue = (state: PlaybackState, position?: number) => {
     const current = position ?? player.current?.getCurrentTime() ?? 0;
@@ -163,6 +168,15 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
     onHostCommand(state, current);
   };
 
+  const enableGuestSync = () => {
+    const desired = livePosition(room);
+    player.current?.mute();
+    if (player.current && Math.abs(player.current.getCurrentTime() - desired) > 1.5) player.current.seek(desired);
+    if (room.playbackState === 'playing') player.current?.play();
+    else player.current?.pause();
+    setSyncEnabled(true);
+  };
+
   return <>
     <div className="party-video"><div ref={mount} title={`${room.titleName} watch party trailer`} /></div>
     {isHost ? <div className="host-controls" aria-label="Host playback controls">
@@ -170,6 +184,11 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
       <button type="button" aria-label="Pause for everyone" onClick={() => issue('paused')}><Pause fill="currentColor" /></button>
       <button type="button" aria-label="Restart for everyone" onClick={() => issue('playing', 0)}><RotateCcw /> Restart</button>
       <span>You control the room</span>
-    </div> : <p className="guest-note">The host controls playback. Your volume stays personal.</p>}
+    </div> : syncEnabled
+      ? <p className="guest-note guest-note--synced"><span className="live-dot" /> Synced to the host · unmute in the player</p>
+      : <div className="guest-sync-gate">
+        <button type="button" aria-label="Join synced playback" onClick={enableGuestSync}><Play fill="currentColor" /> Join synced playback</button>
+        <span>Tap once so your browser allows the host to control playback.</span>
+      </div>}
   </>;
 }

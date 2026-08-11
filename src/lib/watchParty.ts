@@ -38,6 +38,8 @@ export interface CreateRoomInput {
   trailerKey: string;
 }
 
+export type UpdateRoomTitleInput = Omit<CreateRoomInput, 'nickname'>;
+
 export interface PartySubscriptionHandlers {
   onRoom: (room: PartyRoom) => void;
   onMessage: (message: PartyMessage) => void;
@@ -55,6 +57,7 @@ export interface WatchPartyService {
   getMessages(roomId: string): Promise<PartyMessage[]>;
   sendMessage(roomId: string, nickname: string, body: string): Promise<PartyMessage>;
   updatePlayback(roomId: string, state: PlaybackState, position: number): Promise<void>;
+  updateTitle(roomId: string, input: UpdateRoomTitleInput): Promise<PartyRoom>;
   subscribe(roomId: string, handlers: PartySubscriptionHandlers): () => void;
   leaveRoom(roomId: string, userId: string): Promise<void>;
 }
@@ -151,6 +154,18 @@ class SupabaseWatchPartyService implements WatchPartyService {
   async updatePlayback(roomId: string, state: PlaybackState, position: number) {
     const { error } = await this.client.from('watch_rooms').update({ playback_state: state, playback_position: Math.max(0, position), playback_updated_at: new Date().toISOString() }).eq('id', roomId);
     if (error) throw new Error(error.message);
+  }
+
+  async updateTitle(roomId: string, input: UpdateRoomTitleInput) {
+    const { data, error } = await this.client.rpc('update_watch_room_title', {
+      p_room_id: roomId,
+      p_title_id: input.titleId,
+      p_media_type: input.mediaType,
+      p_title_name: input.titleName,
+      p_trailer_key: input.trailerKey,
+    }).single();
+    if (error || !data) throw new Error(error?.message ?? 'The room title could not be changed.');
+    return mapRoom(data as RoomRow);
   }
 
   subscribe(roomId: string, handlers: PartySubscriptionHandlers) {

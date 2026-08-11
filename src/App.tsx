@@ -271,7 +271,7 @@ export function App({ client, partyService, playbackConfig }: AppProps) {
       </aside>
 
       <main className={view === 'friends' ? 'friends-stage' : 'feed-stage'} onWheel={view === 'friends' ? undefined : handleWheel} onTouchStart={view === 'friends' ? undefined : handleTouchStart} onTouchEnd={view === 'friends' ? undefined : handleTouchEnd}>
-        {view === 'friends' ? <Suspense fallback={<div className="state-panel"><LoaderCircle className="spin" /><strong>Opening Friends</strong><span>Getting the room ready.</span></div>}><FriendsRoute service={partyService} selectedTitle={current ?? null} trailerKey={previewTrailerKey} initialRoomCode={initialRoomCode} /></Suspense> : <>
+        {view === 'friends' ? <Suspense fallback={<div className="state-panel"><LoaderCircle className="spin" /><strong>Opening Friends</strong><span>Getting the room ready.</span></div>}><FriendsRoute client={api} service={partyService} selectedTitle={current ?? null} trailerKey={previewTrailerKey} initialRoomCode={initialRoomCode} /></Suspense> : <>
         <div className="mobile-tabs">
           {(['both', 'movies', 'tv'] as const).map((type) => <button key={type} className={filters.contentType === type ? 'active' : ''} onClick={() => { const next = { ...filters, contentType: type }; setDraftFilters(next); setFilters(next); void api.discover(next).then(setItems); }}>{type === 'both' ? 'All' : type === 'tv' ? 'TV Shows' : 'Movies'}</button>)}
           <button aria-label="Open mobile filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><Filter /></button>

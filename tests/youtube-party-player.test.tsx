@@ -11,7 +11,7 @@ const room: PartyRoom = {
 
 function makePlayer() {
   const player: PartyPlayer = {
-    play: vi.fn(), pause: vi.fn(), seek: vi.fn(), getCurrentTime: vi.fn(() => 42), destroy: vi.fn(),
+    play: vi.fn(), pause: vi.fn(), seek: vi.fn(), mute: vi.fn(), getCurrentTime: vi.fn(() => 42), destroy: vi.fn(),
   };
   const factory: PartyPlayerFactory = vi.fn((_element, _videoId, onReady) => {
     onReady(player);
@@ -38,6 +38,7 @@ describe('YouTubePartyPlayer', () => {
   it('applies a host update to a guest player', () => {
     const { player, factory } = makePlayer();
     const { rerender } = render(<YouTubePartyPlayer room={room} isHost={false} factory={factory} onHostCommand={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Join synced playback' }));
 
     rerender(<YouTubePartyPlayer room={{ ...room, playbackState: 'playing', playbackPosition: 64 }} isHost={false} factory={factory} onHostCommand={vi.fn()} />);
     expect(player.seek).toHaveBeenLastCalledWith(expect.closeTo(64, 0));
@@ -46,5 +47,15 @@ describe('YouTubePartyPlayer', () => {
     rerender(<YouTubePartyPlayer room={{ ...room, playbackState: 'paused', playbackPosition: 70 }} isHost={false} factory={factory} onHostCommand={vi.fn()} />);
     expect(player.seek).toHaveBeenLastCalledWith(expect.closeTo(70, 1));
     expect(player.pause).toHaveBeenCalled();
+  });
+
+  it('requires a guest gesture once before applying synchronized playback', () => {
+    const { player, factory } = makePlayer();
+    render(<YouTubePartyPlayer room={{ ...room, playbackState: 'playing' }} isHost={false} factory={factory} onHostCommand={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Join synced playback' }));
+
+    expect(player.play).toHaveBeenCalled();
+    expect(screen.getByText(/Synced to the host/)).toBeInTheDocument();
   });
 });

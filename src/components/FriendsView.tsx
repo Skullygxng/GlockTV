@@ -1,11 +1,14 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Copy, DoorOpen, LoaderCircle, MessageCircle, Play, Send, Users } from 'lucide-react';
-import type { MediaItem } from '../lib/media';
+import { Copy, DoorOpen, LoaderCircle, MessageCircle, Play, Search, Send, Users, X } from 'lucide-react';
+import { imageUrl, type MediaItem } from '../lib/media';
+import type { TmdbClient } from '../lib/tmdb';
 import type { PartyMember, PartyMessage, PartyRoom, PlaybackState, WatchPartyService } from '../lib/watchParty';
 import { YouTubePartyPlayer } from './YouTubePartyPlayer';
+import '../friends.css';
 
 interface FriendsViewProps {
+  client: TmdbClient;
   service: WatchPartyService | null;
   selectedTitle: MediaItem | null;
   trailerKey: string | null;
@@ -16,7 +19,7 @@ function upsertMessage(messages: PartyMessage[], message: PartyMessage) {
   return messages.some((item) => item.id === message.id) ? messages : [...messages, message];
 }
 
-export function FriendsView({ service, selectedTitle, trailerKey, initialRoomCode = '' }: FriendsViewProps) {
+export function FriendsView({ client, service, selectedTitle, trailerKey, initialRoomCode = '' }: FriendsViewProps) {
   const [nickname, setNickname] = useState(() => sessionStorage.getItem('glocktv-nickname') ?? '');
   const [roomCode, setRoomCode] = useState(initialRoomCode.toUpperCase());
   const [room, setRoom] = useState<PartyRoom | null>(null);
@@ -27,6 +30,10 @@ export function FriendsView({ service, selectedTitle, trailerKey, initialRoomCod
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [titlePickerOpen, setTitlePickerOpen] = useState(false);
+  const [titleQuery, setTitleQuery] = useState('');
+  const [titleResults, setTitleResults] = useState<MediaItem[]>([]);
+  const [titleBusy, setTitleBusy] = useState(false);
   const messageEnd = useRef<HTMLDivElement>(null);
 
   const refreshMembers = useCallback(async (roomId: string) => {
@@ -68,6 +75,20 @@ export function FriendsView({ service, selectedTitle, trailerKey, initialRoomCod
       onReady: () => { void refreshSnapshot(room.id); },
     });
   }, [refreshMembers, refreshSnapshot, room?.id, service]);
+
+  useEffect(() => {
+    if (!service || !room) return;
+    const refreshRoom = () => { void service.getRoom(room.id).then(setRoom).catch(() => undefined); };
+    const timer = window.setInterval(refreshRoom, 5000);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refreshRoom();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [room?.id, service]);
 
   useEffect(() => { messageEnd.current?.scrollIntoView?.({ behavior: 'smooth' }); }, [messages.length]);
 
@@ -118,6 +139,36 @@ export function FriendsView({ service, selectedTitle, trailerKey, initialRoomCod
     setRoom({ ...room, playbackState: state, playbackPosition: position, playbackUpdatedAt: new Date().toISOString() });
     try { await service.updatePlayback(room.id, state, position); }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Playback did not sync.'); }
+  };
+
+  const searchTitles = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!titleQuery.trim()) return;
+    setTitleBusy(true); setError('');
+    try { setTitleResults(await client.search(titleQuery.trim())); }
+    catch { setError('Title search is unavailable right now.'); }
+    finally { setTitleBusy(false); }
+  };
+
+  const chooseTitle = async (item: MediaItem) => {
+    if (!service || !room || room.hostId !== userId) return;
+    setTitleBusy(true); setError('');
+    try {
+      const context = await client.getTitleContext(item);
+      if (!context.trailer) throw new Error('That title does not have a playable trailer.');
+      const nextRoom = await service.updateTitle(room.id, {
+        titleId: context.details.id,
+        mediaType: context.details.mediaType,
+        titleName: context.details.title,
+        trailerKey: context.trailer.key,
+      });
+      setRoom(nextRoom);
+      setTitlePickerOpen(false);
+      setTitleQuery('');
+      setTitleResults([]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'The room title could not be changed.');
+    } finally { setTitleBusy(false); }
   };
 
   const copyInvite = async () => {
@@ -186,7 +237,10 @@ export function FriendsView({ service, selectedTitle, trailerKey, initialRoomCod
           <YouTubePartyPlayer room={room} isHost={isHost} onHostCommand={(state, position) => void updatePlayback(state, position)} />
           <div className="party-title-row">
             <div><span>Now watching</span><h1>{room.titleName}</h1></div>
-            <div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · synced</div>
+            <div className="party-title-actions">
+              {isHost && <button type="button" onClick={() => setTitlePickerOpen(true)}><Search /> Change title</button>}
+              <div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · synced</div>
+            </div>
           </div>
           {error && <p className="friends-error" role="alert">{error}</p>}
         </section>
@@ -210,6 +264,24 @@ export function FriendsView({ service, selectedTitle, trailerKey, initialRoomCod
           </form>
         </aside>
       </div>
+
+      {titlePickerOpen && <div className="party-picker-backdrop">
+        <section className="party-picker" role="dialog" aria-modal="true" aria-label="Change watch party title">
+          <header><div><span>Host controls</span><h2>Change what you're watching</h2></div><button type="button" aria-label="Close title picker" onClick={() => setTitlePickerOpen(false)}><X /></button></header>
+          <form onSubmit={(event) => void searchTitles(event)}>
+            <Search />
+            <input autoFocus aria-label="Search watch party titles" value={titleQuery} onChange={(event) => setTitleQuery(event.target.value)} placeholder="Search movies and TV shows" />
+            <button type="submit" aria-label="Search titles" disabled={titleBusy || !titleQuery.trim()}>{titleBusy ? <LoaderCircle className="spin" /> : 'Search'}</button>
+          </form>
+          <div className="party-picker__results">
+            {titleResults.map((item) => <button type="button" key={`${item.mediaType}-${item.id}`} aria-label={`Choose ${item.title}`} onClick={() => void chooseTitle(item)} disabled={titleBusy}>
+              {imageUrl(item.posterPath, 'w185') ? <img src={imageUrl(item.posterPath, 'w185')!} alt="" /> : <span className="party-picker__poster"><Play /></span>}
+              <span><strong>{item.title}</strong><small>{item.year} · {item.mediaType === 'movie' ? 'Movie' : 'TV show'}</small></span>
+            </button>)}
+            {!titleBusy && titleQuery && !titleResults.length && <p>Search for the movie or show you want to watch together.</p>}
+          </div>
+        </section>
+      </div>}
     </motion.section>
   );
 }

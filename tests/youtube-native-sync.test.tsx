@@ -10,7 +10,7 @@ const room: PartyRoom = {
 
 describe('native YouTube playback sync', () => {
   it('broadcasts native player changes made by the host', () => {
-    const player: PartyPlayer = { play: vi.fn(), pause: vi.fn(), seek: vi.fn(), getCurrentTime: vi.fn(() => 18), destroy: vi.fn() };
+    const player: PartyPlayer = { play: vi.fn(), pause: vi.fn(), seek: vi.fn(), mute: vi.fn(), getCurrentTime: vi.fn(() => 18), destroy: vi.fn() };
     let nativeChange: (state: PlaybackState, position: number) => void = () => undefined;
     const factory = vi.fn((...args: unknown[]) => {
       (args[2] as (ready: PartyPlayer) => void)(player);

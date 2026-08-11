@@ -32,7 +32,7 @@ npm run build
 
 ## GitHub Pages
 
-The workflow in `.github/workflows/deploy-pages.yml` builds and publishes the site whenever `main` changes. Add the TMDB v3 API key as the repository Actions secret `TMDB_API_KEY`. Add `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `MOVIE_EMBED_URL_TEMPLATE`, and `TV_EMBED_URL_TEMPLATE` as repository Actions variables; then select **GitHub Actions** as the Pages source.
+The workflow in `.github/workflows/deploy-pages.yml` builds and publishes the site whenever `main` changes. Add the TMDB v3 API key as the repository Actions secret `TMDB_API_KEY`. Add `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` as repository Actions variables. The authorized public movie and TV embed templates are committed directly in the Pages build environment.
 
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 

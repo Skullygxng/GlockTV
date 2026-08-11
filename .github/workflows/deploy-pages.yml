@@ -39,8 +39,8 @@ jobs:
           VITE_TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
-          VITE_MOVIE_EMBED_URL_TEMPLATE: ${{ vars.MOVIE_EMBED_URL_TEMPLATE }}
-          VITE_TV_EMBED_URL_TEMPLATE: ${{ vars.TV_EMBED_URL_TEMPLATE }}
+          VITE_MOVIE_EMBED_URL_TEMPLATE: 'https://vidsrc.sbs/embed/movie/{tmdb_id}'
+          VITE_TV_EMBED_URL_TEMPLATE: 'https://vidsrc.sbs/embed/tv/{tmdb_id}/{season_number}/{episode_number}'
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

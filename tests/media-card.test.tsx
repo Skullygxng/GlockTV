@@ -24,6 +24,7 @@ describe('MediaCard', () => {
   it('shows movie information and invokes the primary actions', () => {
     const onToggleList = vi.fn();
     const onWatch = vi.fn();
+    const onDetails = vi.fn();
     const onTrailer = vi.fn();
     const onLike = vi.fn();
     const onSkip = vi.fn();
@@ -35,6 +36,7 @@ describe('MediaCard', () => {
         saved={false}
         onToggleList={onToggleList}
         onWatch={onWatch}
+        onDetails={onDetails}
         onTrailer={onTrailer}
         onLike={onLike}
         onSkip={onSkip}
@@ -47,12 +49,14 @@ describe('MediaCard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
     fireEvent.click(screen.getByRole('button', { name: 'Play trailer' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Details for Joker' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Joker to My List' }));
     fireEvent.click(screen.getByRole('button', { name: 'Like Joker' }));
     fireEvent.click(screen.getByRole('button', { name: 'Not for me' }));
 
     expect(onWatch).toHaveBeenCalledWith(item);
     expect(onTrailer).toHaveBeenCalledWith(item);
+    expect(onDetails).toHaveBeenCalledWith(item);
     expect(onToggleList).toHaveBeenCalledWith(item);
     expect(onLike).toHaveBeenCalledWith(item);
     expect(onSkip).toHaveBeenCalledWith(item);

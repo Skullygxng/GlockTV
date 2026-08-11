@@ -6,13 +6,15 @@ import {
   SlidersHorizontal, Sparkles, Star, Tv, Users, X, Zap,
 } from 'lucide-react';
 import { MediaCard } from './components/MediaCard';
+import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { imageUrl, scoreMatch, type MediaItem } from './lib/media';
+import { getPlaybackConfig, type PlaybackConfig } from './lib/playback';
 import { initialSessionState, sessionReducer } from './lib/session';
 import { createTmdbClient, type TitleContext, type TmdbClient } from './lib/tmdb';
 import type { WatchPartyService } from './lib/watchParty';
 
-export interface AppProps { client?: TmdbClient; partyService?: WatchPartyService | null }
+export interface AppProps { client?: TmdbClient; partyService?: WatchPartyService | null; playbackConfig?: PlaybackConfig }
 
 type View = 'discover' | 'friends' | 'vibe' | 'list';
 const FriendsRoute = lazy(() => import('./components/FriendsRoute').then((module) => ({ default: module.FriendsRoute })));
@@ -50,11 +52,12 @@ function LoadingState() {
   return <div className="state-panel"><LoaderCircle className="spin" /><strong>Loading your feed</strong><span>Finding something worth watching.</span></div>;
 }
 
-export function App({ client, partyService }: AppProps) {
+export function App({ client, partyService, playbackConfig }: AppProps) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
   }), [client]);
+  const playback = useMemo(() => playbackConfig ?? getPlaybackConfig(), [playbackConfig]);
   const initialRoomCode = useMemo(() => new URLSearchParams(window.location.search).get('room') ?? '', []);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -67,6 +70,7 @@ export function App({ client, partyService }: AppProps) {
   const [context, setContext] = useState<TitleContext | null>(null);
   const [previewContext, setPreviewContext] = useState<TitleContext | null>(null);
   const [modalMode, setModalMode] = useState<'details' | 'trailer' | 'channel' | null>(null);
+  const [playbackItem, setPlaybackItem] = useState<MediaItem | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -167,13 +171,13 @@ export function App({ client, partyService }: AppProps) {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (modalMode || filtersOpen || vibeOpen || target?.tagName === 'INPUT' || target?.isContentEditable) return;
+      if (modalMode || playbackItem || filtersOpen || vibeOpen || target?.tagName === 'INPUT' || target?.isContentEditable) return;
       if (event.key === 'ArrowDown') { event.preventDefault(); move(1); }
       if (event.key === 'ArrowUp') { event.preventDefault(); move(-1); }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [filtersOpen, modalMode, move, vibeOpen]);
+  }, [filtersOpen, modalMode, move, playbackItem, vibeOpen]);
 
   const handleWheel = (event: WheelEvent<HTMLElement>) => {
     if (Math.abs(event.deltaY) < 25) return;
@@ -279,7 +283,8 @@ export function App({ client, partyService }: AppProps) {
             <MediaCard item={current} match={match} saved={saved}
               trailerKey={previewTrailerKey}
               onToggleList={(item) => dispatch({ type: 'toggle-list', item })}
-              onWatch={(item) => void openContext(item, 'details')}
+              onWatch={setPlaybackItem}
+              onDetails={(item) => void openContext(item, 'details')}
               onTrailer={(item) => void openContext(item, 'trailer')}
               onLike={(item) => { dispatch({ type: 'like', item }); move(1); }}
               onSkip={(item) => { dispatch({ type: 'skip', item }); move(1); }} />
@@ -307,6 +312,7 @@ export function App({ client, partyService }: AppProps) {
       <AnimatePresence>{vibeOpen && <VibePanel onClose={() => setVibeOpen(false)} onChoose={(ids) => void chooseVibe(ids)} />}</AnimatePresence>
       <AnimatePresence>{modalMode && <TitleModal mode={modalMode} context={context} onClose={() => { setModalMode(null); setContext(null); }} onNext={() => { setModalMode(null); setContext(null); move(1); setTimeout(() => { const next = currentItems[(activeIndex + 1) % currentItems.length]; if (next) void openContext(next, 'channel'); }, 0); }} />}</AnimatePresence>
 
+      <AnimatePresence>{playbackItem && <PlaybackModal item={playbackItem} config={playback} onClose={() => setPlaybackItem(null)} />}</AnimatePresence>
       <footer className="credits">Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.</footer>
     </div>
   );

@@ -30,6 +30,7 @@ describe('autoplay trailer preview', () => {
         trailerKey="official-trailer-key"
         onToggleList={vi.fn()}
         onWatch={vi.fn()}
+        onDetails={vi.fn()}
         onTrailer={vi.fn()}
         onLike={vi.fn()}
         onSkip={vi.fn()}

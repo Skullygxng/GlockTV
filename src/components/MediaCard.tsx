@@ -8,6 +8,7 @@ export interface MediaCardProps {
   trailerKey?: string | null;
   onToggleList: (item: MediaItem) => void;
   onWatch: (item: MediaItem) => void;
+  onDetails: (item: MediaItem) => void;
   onTrailer: (item: MediaItem) => void;
   onLike: (item: MediaItem) => void;
   onSkip: (item: MediaItem) => void;
@@ -20,7 +21,7 @@ function formatRuntime(minutes: number | null): string {
   return hours ? `${hours}h ${remaining}m` : `${remaining}m`;
 }
 
-export function MediaCard({ item, match, saved, trailerKey = null, onToggleList, onWatch, onTrailer, onLike, onSkip }: MediaCardProps) {
+export function MediaCard({ item, match, saved, trailerKey = null, onToggleList, onWatch, onDetails, onTrailer, onLike, onSkip }: MediaCardProps) {
   const artwork = imageUrl(item.posterPath ?? item.backdropPath, 'w780');
   return (
     <article className="media-card" aria-label={`${item.title} recommendation`}>
@@ -40,7 +41,7 @@ export function MediaCard({ item, match, saved, trailerKey = null, onToggleList,
             {saved ? <Bookmark fill="currentColor" /> : <Plus />}
           </button>
           <span>My List</span>
-          <button type="button" aria-label={`Details for ${item.title}`} onClick={() => onWatch(item)}><Info /></button>
+          <button type="button" aria-label={`Details for ${item.title}`} onClick={() => onDetails(item)}><Info /></button>
           <span>Details</span>
           <button type="button" aria-label="Not for me" onClick={() => onSkip(item)}><ThumbsDown /></button>
           <span>Skip</span>
@@ -56,7 +57,7 @@ export function MediaCard({ item, match, saved, trailerKey = null, onToggleList,
         </p>
         <p className="media-card__rating"><strong>★ {item.rating.toFixed(1)}</strong><span>/10</span></p>
         <p className="media-card__overview">{item.overview || 'Discover why this title belongs in your next watch.'}</p>
-        <button className="media-card__watch" type="button" onClick={() => onWatch(item)}><Play size={18} fill="currentColor" /> Watch movie</button>
+        <button className="media-card__watch" type="button" onClick={() => onWatch(item)}><Play size={18} fill="currentColor" /> {item.mediaType === 'movie' ? 'Watch movie' : 'Watch episode'}</button>
         <button className="media-card__trailer" type="button" onClick={() => onTrailer(item)}><VolumeX size={16} /> Play trailer</button>
       </div>
     </article>

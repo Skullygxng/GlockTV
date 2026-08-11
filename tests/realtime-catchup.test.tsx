@@ -42,6 +42,7 @@ describe('watch-party realtime readiness', () => {
     fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create party' }));
     await screen.findByText('HEAT95');
+    await waitFor(() => expect(service.subscribe).toHaveBeenCalledTimes(1));
 
     service.getMessages.mockResolvedValueOnce([{ id: 'message-catchup', roomId: 'room-1', userId: 'user-2', nickname: 'Guest', body: 'Did you miss me?', createdAt: '2026-08-11T00:00:01.000Z' }]);
     onReady();

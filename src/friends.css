@@ -10,11 +10,13 @@
 
 .party-video__tools {
   position: absolute;
-  top: 12px;
-  right: 12px;
+  top: 50%;
+  right: 14px;
   z-index: 2;
   display: flex;
+  flex-direction: column;
   gap: 7px;
+  transform: translateY(-50%);
 }
 
 .party-video__tools button {

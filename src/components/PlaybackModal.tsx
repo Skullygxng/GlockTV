@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Film, X } from 'lucide-react';
+import { Film, RotateCw, X } from 'lucide-react';
 import type { MediaItem } from '../lib/media';
 import { buildPlaybackUrl, type PlaybackConfig } from '../lib/playback';
 import '../playback.css';
@@ -19,6 +19,7 @@ const normalizeSelection = (value: string) => {
 export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
+  const [playerRevision, setPlayerRevision] = useState(0);
   const playbackUrl = buildPlaybackUrl(item, config, { season, episode });
   const playerName = item.mediaType === 'movie' ? 'Movie player' : 'TV player';
 
@@ -34,11 +35,14 @@ export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
     <motion.section className="playback-modal" role="dialog" aria-label={playerName} aria-modal="true" initial={{ y: 26, scale: .985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .99 }}>
       <header className="playback-modal__header">
         <div><span>{item.mediaType === 'movie' ? 'Now playing' : `Season ${season} · Episode ${episode}`}</span><h2>{item.title}</h2></div>
-        <button type="button" aria-label="Close player" onClick={onClose}><X /></button>
+        <div className="playback-modal__actions">
+          <button type="button" className="playback-retry" aria-label="Retry player" onClick={() => setPlayerRevision((revision) => revision + 1)}><RotateCw /><span>Retry</span></button>
+          <button type="button" aria-label="Close player" onClick={onClose}><X /></button>
+        </div>
       </header>
       {playbackUrl ? <div className="playback-frame">
         <iframe
-          key={playbackUrl}
+          key={`${playbackUrl}-${playerRevision}`}
           title={`${item.title} playback`}
           src={playbackUrl}
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture"

@@ -34,6 +34,19 @@ describe('authorized playback modal', () => {
     expect(frame).toHaveAttribute('src', 'https://video.example/embed/movie/533535');
   });
 
+  it('reloads the embed when a viewer retries a timed-out provider', async () => {
+    render(<App client={clientFor(movie) as never} playbackConfig={config} />);
+    await screen.findByRole('heading', { name: movie.title });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+    const originalFrame = screen.getByTitle(`${movie.title} playback`);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry player' }));
+
+    expect(screen.getByTitle(`${movie.title} playback`)).not.toBe(originalFrame);
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/movie/533535');
+  });
+
   it('lets viewers choose a TV season and episode without leaving the player', async () => {
     render(<App client={clientFor(series) as never} playbackConfig={config} />);
     await screen.findByRole('heading', { name: series.title });

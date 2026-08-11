@@ -47,6 +47,19 @@ describe('authorized playback modal', () => {
     expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/movie/533535');
   });
 
+  it('fullscreens the GlockTV playback wrapper from a visible control', async () => {
+    render(<App client={clientFor(movie) as never} playbackConfig={config} />);
+    await screen.findByRole('heading', { name: movie.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+    const frame = screen.getByTestId('playback-frame');
+    const requestFullscreen = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(frame, 'requestFullscreen', { configurable: true, value: requestFullscreen });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }));
+
+    expect(requestFullscreen).toHaveBeenCalledOnce();
+  });
+
   it('lets viewers choose a TV season and episode without leaving the player', async () => {
     render(<App client={clientFor(series) as never} playbackConfig={config} />);
     await screen.findByRole('heading', { name: series.title });

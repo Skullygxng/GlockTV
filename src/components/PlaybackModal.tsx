@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Film, RotateCw, X } from 'lucide-react';
+import { Film, Maximize, Minimize, RotateCw, X } from 'lucide-react';
 import type { MediaItem } from '../lib/media';
 import { buildPlaybackUrl, type PlaybackConfig } from '../lib/playback';
 import '../playback.css';
@@ -20,6 +20,8 @@ export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
   const [playerRevision, setPlayerRevision] = useState(0);
+  const [fullscreen, setFullscreen] = useState(false);
+  const playerFrame = useRef<HTMLDivElement>(null);
   const playbackUrl = buildPlaybackUrl(item, config, { season, episode });
   const playerName = item.mediaType === 'movie' ? 'Movie player' : 'TV player';
 
@@ -31,6 +33,22 @@ export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
+
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === playerFrame.current);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
+
+  const toggleFullscreen = async () => {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen?.();
+      return;
+    }
+    const target = playerFrame.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
+    if (target?.requestFullscreen) await target.requestFullscreen();
+    else target?.webkitRequestFullscreen?.();
+  };
   return <motion.div className="overlay playback-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
     <motion.section className="playback-modal" role="dialog" aria-label={playerName} aria-modal="true" initial={{ y: 26, scale: .985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .99 }}>
       <header className="playback-modal__header">
@@ -40,7 +58,7 @@ export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
           <button type="button" aria-label="Close player" onClick={onClose}><X /></button>
         </div>
       </header>
-      {playbackUrl ? <div className="playback-frame">
+      {playbackUrl ? <div className="playback-frame" data-testid="playback-frame" ref={playerFrame}>
         <iframe
           key={`${playbackUrl}-${playerRevision}`}
           title={`${item.title} playback`}
@@ -49,6 +67,7 @@ export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
           allowFullScreen
           referrerPolicy="strict-origin-when-cross-origin"
         />
+        <button type="button" className="playback-fullscreen" aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize /> : <Maximize />}</button>
       </div> : <div className="playback-unconfigured">
         <Film />
         <strong>Playback source not connected</strong>

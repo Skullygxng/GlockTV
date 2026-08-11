@@ -105,7 +105,13 @@ export function FriendsView({ client, service, selectedTitle, trailerKey, initia
         titleName: selectedTitle.title,
         trailerKey,
       });
-      await enterRoom(nextRoom, user.id);
+      await service.updatePlayback(nextRoom.id, 'playing', 0);
+      await enterRoom({
+        ...nextRoom,
+        playbackState: 'playing',
+        playbackPosition: 0,
+        playbackUpdatedAt: new Date().toISOString(),
+      }, user.id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'The party could not be created.'); }
     finally { setBusy(false); }
   };

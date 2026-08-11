@@ -113,6 +113,7 @@ describe('Friends watch parties', () => {
       titleName: 'Heat',
       trailerKey: 'heat-trailer',
     }));
+    expect(partyService.updatePlayback).toHaveBeenCalledWith('room-1', 'playing', 0);
     expect(screen.getByRole('textbox', { name: 'Message the room' })).toBeInTheDocument();
   });
 

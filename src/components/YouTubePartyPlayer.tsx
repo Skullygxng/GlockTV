@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw } from 'lucide-react';
+import { Maximize, Minimize, Pause, Play, RotateCcw, Volume2, VolumeX } from 'lucide-react';
 import type { PartyRoom, PlaybackState } from '../lib/watchParty';
 
 export interface PartyPlayer {
@@ -7,6 +7,7 @@ export interface PartyPlayer {
   pause(): void;
   seek(seconds: number): void;
   mute(): void;
+  unmute(): void;
   getCurrentTime(): number;
   destroy(): void;
 }
@@ -23,7 +24,9 @@ interface RawYouTubePlayer {
   pauseVideo(): void;
   seekTo(seconds: number, allowSeekAhead: boolean): void;
   mute(): void;
+  unMute(): void;
   getCurrentTime(): number;
+  getIframe(): HTMLIFrameElement;
   destroy(): void;
 }
 
@@ -80,6 +83,7 @@ export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onRead
     pause: () => raw?.pauseVideo(),
     seek: (seconds) => raw?.seekTo(seconds, true),
     mute: () => raw?.mute(),
+    unmute: () => raw?.unMute(),
     getCurrentTime: () => raw?.getCurrentTime() ?? 0,
     destroy: () => { destroyed = true; raw?.destroy(); raw = null; },
   };
@@ -96,7 +100,12 @@ export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onRead
         origin: window.location.origin,
       },
       events: {
-        onReady: () => onReady(controller),
+        onReady: () => {
+          const iframe = raw?.getIframe();
+          iframe?.setAttribute('allow', 'autoplay; encrypted-media; picture-in-picture; fullscreen');
+          if (iframe) iframe.allowFullscreen = true;
+          onReady(controller);
+        },
         onStateChange: (event) => { if (event.data === 1 || event.data === 2) onStateChange(event.data === 1 ? 'playing' : 'paused', event.target.getCurrentTime()); },
       },
     });
@@ -120,6 +129,7 @@ function livePosition(room: PartyRoom) {
 
 export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = createYouTubePlayer }: YouTubePartyPlayerProps) {
   const mount = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLDivElement>(null);
   const player = useRef<PartyPlayer | null>(null);
   const isHostRef = useRef(isHost);
   const commandRef = useRef(onHostCommand);
@@ -127,18 +137,31 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
   commandRef.current = onHostCommand;
   const [readyVersion, setReadyVersion] = useState(0);
   const [syncEnabled, setSyncEnabled] = useState(isHost);
+  const [muted, setMuted] = useState(true);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     if (!mount.current) return;
     const created = factory(
       mount.current,
       room.trailerKey,
-      (readyPlayer) => { player.current = readyPlayer; setReadyVersion((version) => version + 1); },
+      (readyPlayer) => {
+        player.current = readyPlayer;
+        readyPlayer.mute();
+        setMuted(true);
+        setReadyVersion((version) => version + 1);
+      },
       (state, position) => { if (isHostRef.current) commandRef.current(state, position); },
     );
     player.current = created;
     return () => { created.destroy(); player.current = null; };
   }, [factory, room.trailerKey]);
+
+  useEffect(() => {
+    const updateFullscreen = () => setFullscreen(document.fullscreenElement === frame.current);
+    document.addEventListener('fullscreenchange', updateFullscreen);
+    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
+  }, []);
 
   useEffect(() => {
     if (!readyVersion || !player.current) return;
@@ -174,11 +197,34 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
     if (player.current && Math.abs(player.current.getCurrentTime() - desired) > 1.5) player.current.seek(desired);
     if (room.playbackState === 'playing') player.current?.play();
     else player.current?.pause();
+    setMuted(true);
     setSyncEnabled(true);
   };
 
+  const toggleSound = () => {
+    if (muted) player.current?.unmute();
+    else player.current?.mute();
+    setMuted((current) => !current);
+  };
+
+  const toggleFullscreen = async () => {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen?.();
+      return;
+    }
+    const target = frame.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
+    if (target?.requestFullscreen) await target.requestFullscreen();
+    else target?.webkitRequestFullscreen?.();
+  };
+
   return <>
-    <div className="party-video"><div ref={mount} title={`${room.titleName} watch party trailer`} /></div>
+    <div className="party-video" data-testid="party-video" ref={frame}>
+      <div className="party-video__embed" ref={mount} title={`${room.titleName} watch party trailer`} />
+      <div className="party-video__tools" aria-label="Viewer controls">
+        <button type="button" aria-label={muted ? 'Turn sound on' : 'Turn sound off'} onClick={toggleSound}>{muted ? <VolumeX /> : <Volume2 />}</button>
+        <button type="button" aria-label={fullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize /> : <Maximize />}</button>
+      </div>
+    </div>
     {isHost ? <div className="host-controls" aria-label="Host playback controls">
       <button type="button" aria-label="Play for everyone" onClick={() => issue('playing')}><Play fill="currentColor" /></button>
       <button type="button" aria-label="Pause for everyone" onClick={() => issue('paused')}><Pause fill="currentColor" /></button>

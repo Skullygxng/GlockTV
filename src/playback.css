@@ -78,6 +78,7 @@
 }
 
 .playback-frame {
+  position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
   background: #000;
@@ -87,6 +88,32 @@
   width: 100%;
   height: 100%;
   border: 0;
+}
+
+.playback-fullscreen {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 50%;
+  background: rgba(5, 5, 8, .72);
+  color: #fff;
+  backdrop-filter: blur(12px);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.playback-fullscreen svg { width: 18px; }
+
+.playback-frame:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  aspect-ratio: auto;
+  background: #000;
 }
 
 .playback-unconfigured {

@@ -11,7 +11,7 @@ const room: PartyRoom = {
 
 function makePlayer() {
   const player: PartyPlayer = {
-    play: vi.fn(), pause: vi.fn(), seek: vi.fn(), mute: vi.fn(), getCurrentTime: vi.fn(() => 42), destroy: vi.fn(),
+    play: vi.fn(), pause: vi.fn(), seek: vi.fn(), mute: vi.fn(), unmute: vi.fn(), getCurrentTime: vi.fn(() => 42), destroy: vi.fn(),
   };
   const factory: PartyPlayerFactory = vi.fn((_element, _videoId, onReady) => {
     onReady(player);
@@ -57,5 +57,29 @@ describe('YouTubePartyPlayer', () => {
 
     expect(player.play).toHaveBeenCalled();
     expect(screen.getByText(/Synced to the host/)).toBeInTheDocument();
+  });
+
+  it('starts a playing room muted and lets the viewer turn sound on', () => {
+    const { player, factory } = makePlayer();
+    render(<YouTubePartyPlayer room={{ ...room, playbackState: 'playing' }} isHost factory={factory} onHostCommand={vi.fn()} />);
+
+    expect(player.mute).toHaveBeenCalled();
+    expect(player.play).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Turn sound on' }));
+
+    expect(player.unmute).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Turn sound off' })).toBeInTheDocument();
+  });
+
+  it('lets a viewer fullscreen the GlockTV player wrapper', () => {
+    const { factory } = makePlayer();
+    const requestFullscreen = vi.fn().mockResolvedValue(undefined);
+    render(<YouTubePartyPlayer room={room} isHost factory={factory} onHostCommand={vi.fn()} />);
+    const frame = screen.getByTestId('party-video');
+    Object.defineProperty(frame, 'requestFullscreen', { configurable: true, value: requestFullscreen });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }));
+
+    expect(requestFullscreen).toHaveBeenCalledOnce();
   });
 });

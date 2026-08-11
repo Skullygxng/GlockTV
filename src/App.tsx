@@ -1,19 +1,22 @@
-import { FormEvent, type TouchEvent, type WheelEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, type TouchEvent, type WheelEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clapperboard,
   Compass, Film, Filter, Heart, ListVideo, LoaderCircle, Play, Search,
-  SlidersHorizontal, Sparkles, Star, Tv, X, Zap,
+  SlidersHorizontal, Sparkles, Star, Tv, Users, X, Zap,
 } from 'lucide-react';
 import { MediaCard } from './components/MediaCard';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { imageUrl, scoreMatch, type MediaItem } from './lib/media';
 import { initialSessionState, sessionReducer } from './lib/session';
 import { createTmdbClient, type TitleContext, type TmdbClient } from './lib/tmdb';
+import type { WatchPartyService } from './lib/watchParty';
 
-export interface AppProps { client?: TmdbClient }
+export interface AppProps { client?: TmdbClient; partyService?: WatchPartyService | null }
 
-type View = 'discover' | 'channels' | 'vibe' | 'list';
+type View = 'discover' | 'friends' | 'vibe' | 'list';
+const FriendsRoute = lazy(() => import('./components/FriendsRoute').then((module) => ({ default: module.FriendsRoute })));
+
 
 const defaultFilters: DiscoveryFilters = {
   contentType: 'both', genreIds: [], releaseEra: 'any', rating: null, runtime: 'any', sort: 'popularity',
@@ -47,15 +50,16 @@ function LoadingState() {
   return <div className="state-panel"><LoaderCircle className="spin" /><strong>Loading your feed</strong><span>Finding something worth watching.</span></div>;
 }
 
-export function App({ client }: AppProps) {
+export function App({ client, partyService }: AppProps) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
   }), [client]);
+  const initialRoomCode = useMemo(() => new URLSearchParams(window.location.search).get('room') ?? '', []);
   const [items, setItems] = useState<MediaItem[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [slideDirection, setSlideDirection] = useState(1);
-  const [view, setView] = useState<View>('discover');
+  const [view, setView] = useState<View>(() => initialRoomCode ? 'friends' : 'discover');
   const [filters, setFilters] = useState(defaultFilters);
   const [draftFilters, setDraftFilters] = useState(defaultFilters);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -231,12 +235,12 @@ export function App({ client }: AppProps) {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${view === 'friends' ? 'app-shell--friends' : ''}`}>
       <header className="topbar">
         <Logo />
         <nav className="topbar__nav" aria-label="Primary navigation">
           <button className={view === 'discover' ? 'active' : ''} onClick={() => setNav('discover')}>Discover</button>
-          <button className={view === 'channels' ? 'active' : ''} onClick={() => setNav('channels')}>Channels</button>
+          <button className={view === 'friends' ? 'active' : ''} onClick={() => setNav('friends')}>Friends</button>
           <button aria-label="Vibe" onClick={() => setNav('vibe')}>Vibe</button>
           <button aria-label="My List" className={view === 'list' ? 'active' : ''} onClick={() => setNav('list')}>My List</button>
         </nav>
@@ -247,7 +251,7 @@ export function App({ client }: AppProps) {
         <div className="avatar">G</div>
       </header>
 
-      <aside className="sidebar">
+      <aside className={`sidebar ${view === 'friends' ? 'sidebar--hidden' : ''}`}>
         <p>Your feed</p>
         <nav>
           <button className={view === 'discover' ? 'active' : ''} onClick={() => setNav('discover')}><Sparkles /> For You</button>
@@ -262,13 +266,13 @@ export function App({ client }: AppProps) {
         <button className="filter-button" aria-label="Open filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><SlidersHorizontal /> Filter</button>
       </aside>
 
-      <main className="feed-stage" onWheel={handleWheel} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <main className={view === 'friends' ? 'friends-stage' : 'feed-stage'} onWheel={view === 'friends' ? undefined : handleWheel} onTouchStart={view === 'friends' ? undefined : handleTouchStart} onTouchEnd={view === 'friends' ? undefined : handleTouchEnd}>
+        {view === 'friends' ? <Suspense fallback={<div className="state-panel"><LoaderCircle className="spin" /><strong>Opening Friends</strong><span>Getting the room ready.</span></div>}><FriendsRoute service={partyService} selectedTitle={current ?? null} trailerKey={previewTrailerKey} initialRoomCode={initialRoomCode} /></Suspense> : <>
         <div className="mobile-tabs">
           {(['both', 'movies', 'tv'] as const).map((type) => <button key={type} className={filters.contentType === type ? 'active' : ''} onClick={() => { const next = { ...filters, contentType: type }; setDraftFilters(next); setFilters(next); void api.discover(next).then(setItems); }}>{type === 'both' ? 'All' : type === 'tv' ? 'TV Shows' : 'Movies'}</button>)}
           <button aria-label="Open mobile filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><Filter /></button>
         </div>
         {view === 'list' && <div className="view-title"><span>Saved for this session</span><h2>Your List</h2></div>}
-        {view === 'channels' && <div className="view-title"><span>Instant programming</span><h2>Channel Mode</h2></div>}
         {error && <div className="notice" role="alert">{error}</div>}
         {loading ? <LoadingState /> : current ? (
           <motion.div key={`${current.mediaType}-${current.id}`} initial={{ opacity: 0, y: slideDirection * 90, scale: .985 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: .32, ease: 'easeOut' }}>
@@ -282,9 +286,10 @@ export function App({ client }: AppProps) {
           </motion.div>
         ) : <div className="state-panel"><Bookmark /><strong>{view === 'list' ? 'Your list is empty' : 'No matches yet'}</strong><span>{view === 'list' ? 'Save a title from Discover and it will appear here.' : 'Try clearing a few filters.'}</span></div>}
         {!!currentItems.length && <div className="feed-pagination"><button aria-label="Previous title" onClick={() => move(-1)}><ChevronUp /></button><div>{currentItems.slice(0, 7).map((item, index) => <span key={`${item.mediaType}-${item.id}`} className={index === activeIndex ? 'active' : ''} />)}</div><button aria-label="Next title" onClick={() => move(1)}><ChevronDown /></button><small>Scroll, swipe, or use ↑ ↓</small></div>}
+        </>}
       </main>
 
-      <aside className="context-panel">
+      <aside className={`context-panel ${view === 'friends' ? 'context-panel--hidden' : ''}`}>
         <section><p>Why this?</p><strong>{session.likedGenreIds.length ? 'Your session leans toward' : 'Popular with viewers who like'}</strong><h3>{current?.genres.slice(0, 2).join(' + ') || 'bold storytelling'}</h3></section>
         <section><p>Top genres</p><div className="chips">{(current?.genres ?? ['Crime', 'Thriller', 'Drama']).slice(0, 3).map((genre) => <span key={genre}>{genre}</span>)}</div></section>
         <section className="similar"><p>Similar vibes</p>{currentItems.slice(activeIndex + 1, activeIndex + 4).map((item) => <button key={`${item.mediaType}-${item.id}`} onClick={() => setActiveIndex(currentItems.indexOf(item))}>{imageUrl(item.posterPath, 'w185') && <img src={imageUrl(item.posterPath, 'w185')!} alt="" />}<span><b>{item.title}</b><small>{item.year} · ★ {item.rating.toFixed(1)}</small></span></button>)}</section>
@@ -293,7 +298,7 @@ export function App({ client }: AppProps) {
 
       <nav className="bottom-nav" aria-label="Mobile navigation">
         <button className={view === 'discover' ? 'active' : ''} onClick={() => setNav('discover')}><Compass /><span>Discover</span></button>
-        <button onClick={() => setNav('channels')}><Tv /><span>Channels</span></button>
+        <button className={view === 'friends' ? 'active' : ''} onClick={() => setNav('friends')}><Users /><span>Friends</span></button>
         <button aria-label="Mobile Vibe" onClick={() => setNav('vibe')}><Sparkles /><span>Vibe</span></button>
         <button aria-label="Mobile My List" className={view === 'list' ? 'active' : ''} onClick={() => setNav('list')}><Bookmark /><span>My List</span></button>
       </nav>

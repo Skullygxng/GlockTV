@@ -21,6 +21,7 @@ export interface TitleContext {
   trailer: VideoResult | null;
   providers: ProviderRegion | null;
   providerLink: string | null;
+  recommendations?: MediaItem[];
 }
 
 export interface TvSeasonSummary {
@@ -139,10 +140,11 @@ export function createTmdbClient({ apiKey, readToken, fetcher = fetch }: ClientO
     },
 
     async getTitleContext(item) {
-      const [details, providerPayload] = await Promise.all([
-        request<RawMedia & { videos?: { results?: VideoResult[] } }>(`/${item.mediaType}/${item.id}`, {
+      const [genres, details, providerPayload] = await Promise.all([
+        getGenres(),
+        request<RawMedia & { videos?: { results?: VideoResult[] }; recommendations?: { results?: RawMedia[] }; similar?: { results?: RawMedia[] } }>(`/${item.mediaType}/${item.id}`, {
           language: 'en-US',
-          append_to_response: 'videos',
+          append_to_response: 'videos,recommendations,similar',
         }),
         request<{ results?: Record<string, ProviderRegion> }>(`/${item.mediaType}/${item.id}/watch/providers`),
       ]);
@@ -153,6 +155,10 @@ export function createTmdbClient({ apiKey, readToken, fetcher = fetch }: ClientO
         trailer: pickTrailer(details.videos?.results ?? []),
         providers,
         providerLink: providers?.link ?? null,
+        recommendations: dedupe([...(details.recommendations?.results ?? []), ...(details.similar?.results ?? [])]
+          .map((result) => normalizeMedia(result, item.mediaType, genres)))
+          .filter((result) => result.id !== item.id)
+          .slice(0, 12),
       };
     },
 

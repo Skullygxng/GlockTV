@@ -35,6 +35,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [results, setResults] = useState<MediaItem[]>([]);
   const [searching, setSearching] = useState(false);
   const messageEnd = useRef<HTMLDivElement>(null);
+  const autoJoinAttempted = useRef('');
 
   useEffect(() => {
     if (!service?.listPublicRooms) return;
@@ -64,6 +65,28 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
       onReady: () => { void refreshSnapshot(room.id); },
     });
   }, [refreshMembers, refreshSnapshot, room?.id, service]);
+
+  useEffect(() => {
+    if (!service || !room) return;
+    const roomId = room.id;
+    let active = true;
+    const pollRoom = async () => {
+      try {
+        const nextRoom = await service.getRoom(roomId);
+        if (active) setRoom(nextRoom);
+      } catch {
+        // Realtime remains primary; the next poll can recover from a transient request failure.
+      }
+    };
+    void pollRoom();
+    const roomTimer = window.setInterval(() => { void pollRoom(); }, 2000);
+    const snapshotTimer = window.setInterval(() => { void refreshSnapshot(roomId); }, 6000);
+    return () => {
+      active = false;
+      window.clearInterval(roomTimer);
+      window.clearInterval(snapshotTimer);
+    };
+  }, [refreshSnapshot, room?.id, service]);
 
   useEffect(() => { messageEnd.current?.scrollIntoView?.({ behavior: 'smooth' }); }, [messages.length]);
 
@@ -95,6 +118,13 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'That room is unavailable.'); }
     finally { setBusy(false); }
   };
+
+  useEffect(() => {
+    const code = initialRoomCode.trim().toUpperCase();
+    if (!service || !code || !nickname.trim() || room || autoJoinAttempted.current === code) return;
+    autoJoinAttempted.current = code;
+    void joinCode(code);
+  }, [initialRoomCode, nickname, room, service]);
 
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
@@ -192,7 +222,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     <div className="watch-party__layout">
       <section className="party-screen">
         <PartyPlaybackPlayer room={room} config={partyConfig} isHost={isHost} onHostCommand={(state, position) => void updatePlayback(state, position)} />
-        <div className="party-title-row"><div><span>{room.mediaType === 'tv' ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : 'Now watching'}</span><h1>{room.titleName}</h1></div><div className="party-title-actions">{isHost && <button type="button" onClick={() => setPickerOpen(true)}><Search /> Change title</button>}<div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · synced</div></div></div>
+        <div className="party-title-row"><div><span>{room.mediaType === 'tv' ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : 'Now watching'}</span><h1>{room.titleName}</h1>{room.isOfficial && <p className="official-room-note"><Radio /> Automated GlockTV host keeps the public lounge on one shared timeline.</p>}</div><div className="party-title-actions">{isHost && <button type="button" onClick={() => setPickerOpen(true)}><Search /> Change title</button>}<div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · room clock</div></div></div>
         {room.mediaType === 'tv' && <EpisodeBrowser compact client={client} seriesId={room.titleId} activeSeason={room.seasonNumber ?? 1} activeEpisode={room.episodeNumber ?? 1} canSelect={isHost} onSelect={(season, episode) => void chooseEpisode(season, episode)} />}
         {error && <p className="friends-error" role="alert">{error}</p>}
       </section>

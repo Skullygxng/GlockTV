@@ -313,7 +313,7 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
       <AnimatePresence>{vibeOpen && <VibePanel onClose={() => setVibeOpen(false)} onChoose={(ids) => void chooseVibe(ids)} />}</AnimatePresence>
       <AnimatePresence>{modalMode && <TitleModal mode={modalMode} context={context} onClose={() => { setModalMode(null); setContext(null); }} onNext={() => { setModalMode(null); setContext(null); move(1); setTimeout(() => { const next = currentItems[(activeIndex + 1) % currentItems.length]; if (next) void openContext(next, 'channel'); }, 0); }} />}</AnimatePresence>
 
-      <AnimatePresence>{playbackItem && <PlaybackModal item={playbackItem} config={playback} client={api} onClose={() => setPlaybackItem(null)} />}</AnimatePresence>
+      <AnimatePresence>{playbackItem && <PlaybackModal item={playbackItem} config={playback} client={api} onClose={() => setPlaybackItem(null)} onSelect={setPlaybackItem} />}</AnimatePresence>
       <footer className="credits">Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.</footer>
     </div>
   );

@@ -18,3 +18,51 @@
 .party-fullscreen-open {
   overflow: hidden !important;
 }
+
+.party-video__paused {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  isolation: isolate;
+  text-align: center;
+  background: #050506;
+  color: #fff;
+}
+
+.party-video__paused::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background-image: var(--paused-backdrop);
+  background-position: center;
+  background-size: cover;
+  opacity: .32;
+  filter: saturate(.75);
+}
+
+.party-video__paused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(circle at center, rgba(115, 31, 191, .2), transparent 30%), linear-gradient(180deg, rgba(0, 0, 0, .32), rgba(0, 0, 0, .82));
+}
+
+.party-video__paused > span {
+  width: 54px;
+  height: 54px;
+  border: 1px solid rgba(255, 255, 255, .3);
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(11, 9, 14, .7);
+  box-shadow: 0 0 35px rgba(151, 43, 247, .28);
+}
+
+.party-video__paused svg { width: 18px; }
+.party-video__paused strong { font: 700 22px/1 'Barlow Condensed'; letter-spacing: .04em; text-transform: uppercase; }
+.party-video__paused small { color: #aaa3ae; font-size: 9px; }

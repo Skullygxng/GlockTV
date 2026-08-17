@@ -3,11 +3,24 @@ import type { MediaItem } from './media';
 export interface PlaybackConfig {
   movieUrlTemplate?: string;
   tvUrlTemplate?: string;
+  servers?: PlaybackServer[];
+}
+
+export type PlayerCommandMode = 'none' | 'vidzen';
+
+export interface PlaybackServer {
+  id: string;
+  label: string;
+  description: string;
+  movieUrlTemplate?: string;
+  tvUrlTemplate?: string;
+  commandMode?: PlayerCommandMode;
 }
 
 export interface PlaybackSelection {
   season?: number;
   episode?: number;
+  startAt?: number;
 }
 
 const positiveInteger = (value: number | undefined) => (
@@ -18,8 +31,11 @@ export function buildPlaybackUrl(
   item: Pick<MediaItem, 'id' | 'mediaType'>,
   config: PlaybackConfig,
   selection: PlaybackSelection = {},
+  serverId?: string,
 ): string | null {
-  const template = item.mediaType === 'movie' ? config.movieUrlTemplate : config.tvUrlTemplate;
+  const servers = getPlaybackServers(config);
+  const server = servers.find((candidate) => candidate.id === serverId) ?? servers[0];
+  const template = item.mediaType === 'movie' ? server?.movieUrlTemplate : server?.tvUrlTemplate;
   if (!template?.trim() || !template.includes('{tmdb_id}')) return null;
   if (item.mediaType === 'tv' && (!template.includes('{season_number}') || !template.includes('{episode_number}'))) return null;
 
@@ -36,15 +52,41 @@ export function buildPlaybackUrl(
 
   try {
     const url = new URL(resolved);
-    return url.protocol === 'https:' ? url.toString() : null;
+    if (url.protocol !== 'https:') return null;
+    if (Number.isFinite(selection.startAt) && (selection.startAt ?? 0) > 0) {
+      url.searchParams.set('startAt', String(Math.floor(selection.startAt!)));
+    }
+    return url.toString();
   } catch {
     return null;
   }
 }
 
+export function getPlaybackServers(config: PlaybackConfig): PlaybackServer[] {
+  const candidates = config.servers?.length ? config.servers : [{
+    id: 'primary',
+    label: 'Glock Auto',
+    description: 'Automatic source fallback',
+    movieUrlTemplate: config.movieUrlTemplate,
+    tvUrlTemplate: config.tvUrlTemplate,
+    commandMode: 'none' as const,
+  }];
+  const seen = new Set<string>();
+  return candidates.filter((server) => {
+    if (!server.id.trim() || seen.has(server.id)) return false;
+    if (!server.movieUrlTemplate?.trim() && !server.tvUrlTemplate?.trim()) return false;
+    seen.add(server.id);
+    return true;
+  });
+}
+
 export function getPlaybackConfig(): PlaybackConfig {
-  return {
-    movieUrlTemplate: import.meta.env.VITE_MOVIE_EMBED_URL_TEMPLATE,
-    tvUrlTemplate: import.meta.env.VITE_TV_EMBED_URL_TEMPLATE,
-  };
+  const movieUrlTemplate = import.meta.env.VITE_MOVIE_EMBED_URL_TEMPLATE;
+  const tvUrlTemplate = import.meta.env.VITE_TV_EMBED_URL_TEMPLATE;
+  const backupMovie = import.meta.env.VITE_BACKUP_MOVIE_EMBED_URL_TEMPLATE;
+  const backupTv = import.meta.env.VITE_BACKUP_TV_EMBED_URL_TEMPLATE;
+  return { movieUrlTemplate, tvUrlTemplate, servers: [
+    { id: 'auto', label: 'Glock Auto', description: 'Fast automatic source fallback · popup protected', movieUrlTemplate, tvUrlTemplate, commandMode: 'none' },
+    { id: 'backup', label: 'Backup stream', description: 'Use when the first server is slow', movieUrlTemplate: backupMovie, tvUrlTemplate: backupTv, commandMode: 'vidzen' },
+  ] };
 }

@@ -14,6 +14,14 @@ const config = {
   tvUrlTemplate: 'https://video.example/embed/tv/{tmdb_id}/{season_number}/{episode_number}',
 };
 
+const multiServerConfig = {
+  ...config,
+  servers: [
+    { id: 'auto', label: 'Glock Auto', description: 'Fast automatic fallback', movieUrlTemplate: config.movieUrlTemplate, tvUrlTemplate: config.tvUrlTemplate },
+    { id: 'backup', label: 'Backup stream', description: 'Use when the first server is slow', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}', tvUrlTemplate: 'https://backup.example/tv/{tmdb_id}/{season_number}/{episode_number}' },
+  ],
+};
+
 function clientFor(item: MediaItem) {
   return {
     getTrending: vi.fn().mockResolvedValue([item]), discover: vi.fn().mockResolvedValue([item]), search: vi.fn().mockResolvedValue([item]),
@@ -79,5 +87,32 @@ describe('authorized playback modal', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Play episode 1 Seven Thirty-Seven/i }));
 
     expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/tv/1396/2/1');
+  });
+
+  it('lets viewers change servers and blocks provider pop-up windows', async () => {
+    render(<App client={clientFor(movie) as never} playbackConfig={multiServerConfig} />);
+    await screen.findByRole('heading', { name: movie.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+
+    const frame = screen.getByTitle(`${movie.title} playback`);
+    expect(frame).toHaveAttribute('sandbox');
+    expect(frame.getAttribute('sandbox')).not.toContain('allow-popups');
+    fireEvent.click(screen.getByRole('button', { name: 'Open server list' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Backup stream/i }));
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://backup.example/movie/533535');
+  });
+
+  it('keeps a viewport fullscreen fallback when native fullscreen is rejected', async () => {
+    render(<App client={clientFor(movie) as never} playbackConfig={config} />);
+    await screen.findByRole('heading', { name: movie.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+    const frame = screen.getByTestId('playback-frame');
+    Object.defineProperty(frame, 'requestFullscreen', { configurable: true, value: vi.fn().mockRejectedValue(new Error('denied')) });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }));
+
+    await screen.findByRole('button', { name: 'Exit fullscreen' });
+    expect(frame).toHaveClass('is-expanded');
+    expect(document.body).toHaveClass('playback-fullscreen-open');
   });
 });

@@ -65,6 +65,7 @@ function makePartyService() {
     ensureUser: vi.fn().mockResolvedValue({ id: 'user-1' }),
     createRoom: vi.fn().mockResolvedValue(room),
     joinRoom: vi.fn().mockResolvedValue(room),
+    getRoom: vi.fn().mockResolvedValue(room),
     getMembers: vi.fn().mockResolvedValue([{ userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z' }]),
     listPublicRooms: vi.fn().mockResolvedValue([publicRoom]),
     getMessages: vi.fn().mockResolvedValue([]),
@@ -123,7 +124,8 @@ describe('Friends watch parties', () => {
       durationSeconds: 10200,
     }));
     expect(screen.getByRole('textbox', { name: 'Message the room' })).toBeInTheDocument();
-    expect(screen.getByTitle('Heat full movie')).toHaveAttribute('src', 'https://party.example/movie/1');
+    expect(screen.getByText('Room paused')).toBeInTheDocument();
+    expect(screen.queryByTitle('Heat full movie')).not.toBeInTheDocument();
   });
 
   it('joins a room code and sends a live message', async () => {
@@ -143,6 +145,31 @@ describe('Friends watch parties', () => {
 
     await waitFor(() => expect(partyService.sendMessage).toHaveBeenCalledWith('room-1', 'Guest', 'Ready?'));
     expect(await screen.findByText('Ready?')).toBeInTheDocument();
+  });
+
+  it('rejoins a linked room automatically when the browser already knows the nickname', async () => {
+    const partyService = makePartyService();
+    sessionStorage.setItem('glocktv-nickname', 'Returning guest');
+    window.history.replaceState({}, '', '/?room=heat95');
+
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+
+    await waitFor(() => expect(partyService.joinRoom).toHaveBeenCalledWith('HEAT95', 'Returning guest'));
+    expect(await screen.findByRole('region', { name: 'Watch party HEAT95' })).toBeInTheDocument();
+  });
+
+  it('polls room state as a fallback when realtime delivery is delayed', async () => {
+    const partyService = makePartyService();
+    partyService.getRoom.mockResolvedValueOnce({ ...room, playbackState: 'playing' });
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
+    fireEvent.change(screen.getByLabelText('Room code'), { target: { value: 'heat95' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+
+    await waitFor(() => expect(partyService.getRoom).toHaveBeenCalledWith('room-1'));
+    expect(await screen.findByText(/Playing · room clock/i)).toBeInTheDocument();
   });
 
   it('lets the host search for a different title and changes it for the room', async () => {
@@ -179,5 +206,18 @@ describe('Friends watch parties', () => {
       durationSeconds: 10200,
     }));
     expect(await screen.findByRole('heading', { name: 'The Matrix' })).toBeInTheDocument();
+  });
+
+  it('explains that the public lounge is synchronized by an automated GlockTV host', async () => {
+    const partyService = makePartyService();
+    partyService.joinRoom.mockResolvedValueOnce(publicRoom);
+    partyService.getRoom.mockResolvedValue(publicRoom);
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Join room' }));
+
+    expect(await screen.findByText(/Automated GlockTV host/i)).toBeInTheDocument();
   });
 });

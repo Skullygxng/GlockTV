@@ -34,18 +34,29 @@
   text-transform: uppercase;
 }
 
-.playback-modal__header h2 {
-  margin: 0;
-  font: 700 clamp(24px, 3vw, 40px)/.95 'Barlow Condensed';
-  letter-spacing: -.015em;
-  text-transform: uppercase;
-}
+.playback-brand { min-width: 0; display: grid; gap: 4px; }
+.playback-brand small { overflow: hidden; color: #bab4c0; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 
 .playback-modal__actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+
+.server-picker { position: relative; }
+.playback-modal__header .server-picker__trigger { width: auto; min-width: 156px; height: 42px; padding: 0 10px; border-radius: 9px; display: flex; gap: 8px; text-align: left; }
+.server-picker__trigger>svg:first-child { color: #a83bff; }
+.server-picker__trigger>svg:last-child { width: 13px; color: #7d7683; }
+.server-picker__trigger>span { min-width: 0; flex: 1; font-size: 10px; }
+.server-picker__trigger small { display: block; margin: 0 0 2px; color: #716a78; font-size: 7px; letter-spacing: .1em; text-transform: uppercase; }
+.server-picker__menu { position: absolute; top: 48px; right: 0; z-index: 20; width: min(310px, calc(100vw - 32px)); overflow: hidden; border: 1px solid #3b3143; border-radius: 12px; background: rgba(15,14,18,.98); box-shadow: 0 22px 70px #000; backdrop-filter: blur(18px); }
+.playback-modal__header .server-picker__menu button { width: 100%; height: auto; min-height: 66px; padding: 13px 14px; border: 0; border-bottom: 1px solid #28232d; border-radius: 0; display: flex; justify-content: space-between; text-align: left; }
+.server-picker__menu button:last-child { border-bottom: 0; }
+.server-picker__menu button.active { background: linear-gradient(90deg,rgba(137,31,236,.22),transparent); }
+.server-picker__menu button span { display: grid; gap: 5px; }
+.server-picker__menu strong { font-size: 11px; }
+.server-picker__menu small { color: #837c89; font-size: 9px; }
+.server-picker__menu svg { color: #ad42ff; }
 
 .playback-modal__header button {
   width: 38px;
@@ -90,6 +101,10 @@
   border: 0;
 }
 
+.playback-status { position: absolute; left: 14px; bottom: 14px; z-index: 4; max-width: calc(100% - 84px); min-height: 38px; padding: 8px 11px; border: 1px solid rgba(255,255,255,.16); border-radius: 999px; background: rgba(5,5,8,.82); display: flex; align-items: center; gap: 8px; color: #c8c1ce; font-size: 9px; backdrop-filter: blur(12px); }
+.playback-status svg { width: 14px; color: #a83bff; }
+.playback-status button { border: 0; border-radius: 999px; background: #7f1ce7; padding: 6px 9px; color: #fff; font-size: 8px; font-weight: 700; }
+
 .playback-fullscreen {
   position: absolute;
   top: 14px;
@@ -115,6 +130,9 @@
   aspect-ratio: auto;
   background: #000;
 }
+
+.playback-frame.is-expanded { position: fixed; inset: 0; z-index: 10000; width: 100vw; height: 100dvh; aspect-ratio: auto; background: #000; }
+.playback-fullscreen-open { overflow: hidden !important; }
 
 .playback-unconfigured {
   min-height: min(58vh, 620px);
@@ -150,6 +168,20 @@
   min-height: 70px;
   border-top: 1px solid #1d1a20;
 }
+
+.playback-modal__footer h2 { margin: 4px 0 5px; font: 700 clamp(25px,3vw,36px)/.95 'Barlow Condensed'; text-transform: uppercase; }
+.playback-modal__footer>small { max-width: 390px; display: flex; align-items: center; gap: 7px; color: #77717e; font-size: 8px; line-height: 1.5; text-align: right; }
+.playback-modal__footer>small svg { width: 14px; flex: 0 0 auto; color: #8e29e8; }
+
+.playback-recommendations { padding: 20px 18px 24px; border-top: 1px solid #1d1a20; }
+.playback-recommendations header span { color: #a83bff; font-size: 8px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; }
+.playback-recommendations h3 { margin: 4px 0 13px; font: 700 25px/1 'Barlow Condensed'; text-transform: uppercase; }
+.playback-recommendations>div { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.playback-recommendations button { min-width: 0; border: 1px solid #28232e; border-radius: 9px; background: #0d0c10; padding: 0 0 10px; overflow: hidden; display: grid; gap: 4px; text-align: left; }
+.playback-recommendations img,.playback-recommendations__fallback { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #15121a; display: grid; place-items: center; }
+.playback-recommendations button strong,.playback-recommendations button small { overflow: hidden; padding: 0 10px; text-overflow: ellipsis; white-space: nowrap; }
+.playback-recommendations button strong { font-size: 10px; }
+.playback-recommendations button small { color: #7f7885; font-size: 8px; }
 
 .playback-modal__footer strong {
   font-size: 10px;
@@ -189,11 +221,20 @@
 
 @media (max-width: 700px) {
   .playback-overlay { padding: 0; }
-  .playback-modal { width: 100%; max-height: 100svh; min-height: 100svh; border: 0; border-radius: 0; }
-  .playback-modal__header { min-height: 74px; padding: 14px 16px; }
-  .playback-modal__header h2 { font-size: 28px; }
-  .playback-frame { aspect-ratio: 16 / 10; }
+  .playback-modal { width: 100%; max-height: 100svh; border: 0; border-radius: 0; }
+  .playback-modal__header { min-height: 58px; padding: 8px 10px; gap: 8px; }
+  .playback-brand small { max-width: 118px; font-size: 8px; }
+  .playback-modal__actions { gap: 5px; }
+  .playback-modal__header button { width: 34px; height: 34px; }
+  .playback-modal__header .server-picker__trigger { min-width: 0; width: 44px; padding: 0; justify-content: center; }
+  .server-picker__trigger>span,.server-picker__trigger>svg:last-child,.playback-retry span { display: none; }
+  .server-picker__menu { position: fixed; top: 58px; right: 8px; }
+  .playback-modal__header .playback-retry { width: 34px; padding: 0; justify-content: center; }
+  .playback-frame { aspect-ratio: 16 / 9; }
   .playback-unconfigured { min-height: 58svh; }
-  .playback-modal__footer { align-items: flex-end; padding: 16px; }
+  .playback-modal__footer { align-items: flex-start; padding: 14px 16px; }
+  .playback-modal__footer>small { display: none; }
+  .playback-recommendations { padding: 18px 16px 24px; }
+  .playback-recommendations>div { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .episode-controls input { width: 64px; }
 }

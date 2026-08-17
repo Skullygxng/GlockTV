@@ -28,6 +28,7 @@ describe('TMDB client', () => {
   it('returns provider and official trailer details for a title', async () => {
     const fetcher = vi.fn((input: string | URL | Request) => {
       const url = String(input);
+      if (url.includes('/genre/movie/list') || url.includes('/genre/tv/list')) return response({ genres: [] });
       if (url.includes('/watch/providers')) {
         return response({ results: { US: { link: 'https://www.themoviedb.org/watch', flatrate: [{ provider_id: 8, provider_name: 'Netflix', logo_path: '/netflix.jpg' }] } } });
       }

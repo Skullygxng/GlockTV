@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Maximize, Minimize, Pause, Play, RotateCcw, Volume2 } from 'lucide-react';
+import { Check, ChevronDown, Maximize, Minimize, Pause, Play, RotateCcw, Server, Volume2 } from 'lucide-react';
+import { imageUrl } from '../lib/media';
 import type { PartyRoom, PlaybackState } from '../lib/watchParty';
+import { buildPlaybackUrl, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
 import '../party-player.css';
 
-export interface PartyPlaybackConfig {
-  movieUrlTemplate: string;
-  tvUrlTemplate: string;
-}
+export interface PartyPlaybackConfig extends PlaybackConfig { movieUrlTemplate: string; tvUrlTemplate: string }
 
 type PlayerEventName = 'ready' | 'play' | 'pause' | 'seeked' | 'timeupdate' | 'ended';
 export interface PartyPlayerEvent { event: PlayerEventName; currentTime: number }
@@ -16,16 +15,33 @@ const replaceTokens = (template: string, room: PartyRoom) => template
   .replaceAll('{season_number}', String(room.seasonNumber ?? 1))
   .replaceAll('{episode_number}', String(room.episodeNumber ?? 1));
 
-export function buildPartyPlaybackUrl(room: PartyRoom, config: PartyPlaybackConfig) {
-  const template = room.mediaType === 'movie' ? config.movieUrlTemplate : config.tvUrlTemplate;
-  return template ? replaceTokens(template, room) : '';
+export function buildPartyPlaybackUrl(room: PartyRoom, config: PartyPlaybackConfig, serverId?: string, startAt?: number) {
+  if (!config.servers?.length) {
+    const template = room.mediaType === 'movie' ? config.movieUrlTemplate : config.tvUrlTemplate;
+    return template ? replaceTokens(template, room) : '';
+  }
+  const url = buildPlaybackUrl({ id: room.titleId, mediaType: room.mediaType }, config, {
+    season: room.seasonNumber, episode: room.episodeNumber, startAt,
+  }, serverId) ?? '';
+  if (!url || startAt === undefined) return url;
+  try {
+    const playback = new URL(url);
+    playback.searchParams.set('autoPlay', String(room.playbackState === 'playing'));
+    return playback.toString();
+  } catch {
+    return url;
+  }
 }
 
 export function getPartyPlaybackConfig(): PartyPlaybackConfig {
-  return {
-    movieUrlTemplate: import.meta.env.VITE_PARTY_MOVIE_EMBED_URL_TEMPLATE ?? '',
-    tvUrlTemplate: import.meta.env.VITE_PARTY_TV_EMBED_URL_TEMPLATE ?? '',
-  };
+  const movieUrlTemplate = import.meta.env.VITE_PARTY_MOVIE_EMBED_URL_TEMPLATE ?? '';
+  const tvUrlTemplate = import.meta.env.VITE_PARTY_TV_EMBED_URL_TEMPLATE ?? '';
+  const backupMovie = import.meta.env.VITE_PARTY_BACKUP_MOVIE_EMBED_URL_TEMPLATE ?? '';
+  const backupTv = import.meta.env.VITE_PARTY_BACKUP_TV_EMBED_URL_TEMPLATE ?? '';
+  return { movieUrlTemplate, tvUrlTemplate, servers: [
+    { id: 'sync', label: 'Room Sync', description: 'Synchronized controls · best for private rooms', movieUrlTemplate, tvUrlTemplate, commandMode: 'vidzen' },
+    { id: 'auto', label: 'Glock Auto', description: 'Automatic source fallback · popup protected', movieUrlTemplate: backupMovie, tvUrlTemplate: backupTv, commandMode: 'none' },
+  ] };
 }
 
 export function parsePartyPlayerEvent(raw: unknown): PartyPlayerEvent | null {
@@ -59,11 +75,26 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   const [loaded, setLoaded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const playbackUrl = useMemo(() => buildPartyPlaybackUrl(room, config), [config, room.episodeNumber, room.mediaType, room.seasonNumber, room.titleId]);
-  const origin = useMemo(() => { try { return new URL(playbackUrl).origin; } catch { return ''; } }, [playbackUrl]);
-
+  const [guestUnlocked, setGuestUnlocked] = useState(false);
+  const servers = useMemo(() => getPlaybackServers(config), [config]);
+  const [serverId, setServerId] = useState(() => servers[0]?.id ?? '');
+  const [serverOpen, setServerOpen] = useState(false);
+  const activeServer = servers.find((server) => server.id === serverId) ?? servers[0];
+  const commandMode = config.servers?.length ? activeServer?.commandMode ?? 'none' : 'vidzen';
+  const startAt = commandMode === 'none' ? roomPosition(room) : undefined;
+  const playbackUrl = useMemo(() => buildPartyPlaybackUrl(room, config, serverId, startAt), [config, room.episodeNumber, room.mediaType, room.playbackPosition, room.playbackUpdatedAt, room.seasonNumber, room.titleId, serverId]);
+  const shouldMountPlayer = room.isOfficial || room.playbackState === 'playing';
   const send = (command: string, values: Record<string, unknown> = {}) => {
-    iframe.current?.contentWindow?.postMessage(buildPartyPlayerCommand(command, values), '*');
+    if (commandMode !== 'vidzen') return;
+    // VidZen documents wildcard delivery because its player can hand playback to a
+    // different origin. The message contains commands only, and the receiver is
+    // still the exact iframe window rather than an arbitrary browsing context.
+    const receiver = iframe.current?.contentWindow;
+    const payload = { command, ...values };
+    receiver?.postMessage(buildPartyPlayerCommand(command, values), '*');
+    // Some VidZen source handoffs expose the same API but accept the structured
+    // clone rather than the serialized envelope advertised by the landing page.
+    receiver?.postMessage(payload, '*');
   };
 
   const syncPlayer = () => {
@@ -73,11 +104,15 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   };
 
   useEffect(() => {
+    if (!shouldMountPlayer) setLoaded(false);
+  }, [shouldMountPlayer]);
+
+  useEffect(() => {
     if (!loaded) return;
     syncPlayer();
     const retries = [450, 2000, 5000].map((delay) => window.setTimeout(syncPlayer, delay));
     return () => retries.forEach((timer) => window.clearTimeout(timer));
-  }, [loaded, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
+  }, [commandMode, loaded, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -95,7 +130,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [isHost, onHostCommand, origin, room.playbackState]);
+  }, [isHost, onHostCommand, room.playbackState]);
 
   useEffect(() => {
     const update = () => {
@@ -119,6 +154,16 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
     };
   }, [expanded]);
 
+  useEffect(() => {
+    if (!guestUnlocked) return;
+    const retries = [750, 1750, 3500, 6000].map((delay) => window.setTimeout(syncPlayer, delay));
+    const timer = window.setTimeout(() => setGuestUnlocked(false), 8000);
+    return () => {
+      retries.forEach((retry) => window.clearTimeout(retry));
+      window.clearTimeout(timer);
+    };
+  }, [guestUnlocked]);
+
   const toggleFullscreen = async () => {
     if (expanded || document.fullscreenElement) {
       setExpanded(false);
@@ -137,9 +182,20 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
 
   if (!playbackUrl) return <div className="party-player-missing"><strong>Friends playback is not connected</strong><span>Add the authorized party embed templates to the environment.</span></div>;
 
-  return <div className={`party-video party-video--full ${isHost ? 'is-host' : 'is-guest'} ${expanded ? 'is-expanded' : ''}`} ref={frame}>
-    <iframe ref={iframe} key={playbackUrl} title={`${room.titleName} full ${room.mediaType === 'movie' ? 'movie' : 'episode'}`} src={playbackUrl} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setLoaded(true)} />
-    {!isHost && <div className="party-video__lock"><span>Host controls playback</span></div>}
+  return <div className={`party-video party-video--full ${isHost ? 'is-host' : 'is-guest'} ${room.isOfficial ? 'is-official' : ''} ${guestUnlocked ? 'is-guest-unlocked' : ''} ${expanded ? 'is-expanded' : ''}`} ref={frame}>
+    {shouldMountPlayer
+      ? <iframe ref={iframe} key={playbackUrl} title={`${room.titleName} full ${room.mediaType === 'movie' ? 'movie' : 'episode'}`} src={playbackUrl} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setLoaded(true)} />
+      : <div className="party-video__paused" role="status" style={imageUrl(room.backdropPath ?? null, 'w1280') ? { '--paused-backdrop': `url(${imageUrl(room.backdropPath ?? null, 'w1280')})` } as React.CSSProperties : undefined}><span><Pause fill="currentColor" /></span><strong>{isHost ? 'Room paused' : 'Paused by the host'}</strong><small>{isHost ? 'Resume when everyone is ready.' : 'Playback will resume for everyone together.'}</small></div>}
+    {!isHost && shouldMountPlayer && <div className="party-video__lock">{room.isOfficial
+      ? <span>Tap the player once to join the public timeline</span>
+      : guestUnlocked
+        ? <span>Tap play in the player · controls lock again shortly</span>
+        : <button type="button" aria-label="Enable video playback" onClick={() => setGuestUnlocked(true)}>Enable video · host stays in control</button>}
+    </div>}
+    <div className="party-server-picker">
+      <button type="button" aria-label="Open room server list" aria-expanded={serverOpen} onClick={() => setServerOpen((open) => !open)}><Server /><span>{activeServer?.label ?? 'Server'}</span><ChevronDown /></button>
+      {serverOpen && <div role="menu">{servers.map((server) => <button type="button" role="menuitem" key={server.id} className={server.id === serverId ? 'active' : ''} onClick={() => { setServerId(server.id); setServerOpen(false); setLoaded(false); }}><span><strong>{server.label}</strong><small>{server.description}</small></span>{server.id === serverId && <Check />}</button>)}</div>}
+    </div>
     <div className="party-video__toolbar">
       {isHost && <>
         <button type="button" aria-label={room.playbackState === 'playing' ? 'Pause room' : 'Play room'} onClick={() => onHostCommand(room.playbackState === 'playing' ? 'paused' : 'playing', roomPosition(room))}>{room.playbackState === 'playing' ? <Pause fill="currentColor" /> : <Play fill="currentColor" />}</button>

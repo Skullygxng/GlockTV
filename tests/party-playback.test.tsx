@@ -16,6 +16,18 @@ const multiServerConfig = {
   ],
 };
 
+const cineSrcConfig = {
+  ...config,
+  servers: [{
+    id: 'cinesrc',
+    label: 'CineSrc Sync',
+    description: 'Documented room controls',
+    movieUrlTemplate: 'https://cinesrc.st/embed/movie/{tmdb_id}?color=%238b24ed',
+    tvUrlTemplate: 'https://cinesrc.st/embed/tv/{tmdb_id}?s={season_number}&e={episode_number}',
+    commandMode: 'cinesrc',
+  }],
+} as never;
+
 const room: PartyRoom = {
   id: 'room-1', code: 'HEAT95', hostId: 'host-1', titleId: 1, mediaType: 'movie', titleName: 'Heat',
   playbackState: 'paused', playbackPosition: 42, playbackUpdatedAt: '2026-08-11T00:00:00.000Z',
@@ -31,6 +43,12 @@ describe('full-title party playback', () => {
   it('parses documented player events defensively', () => {
     expect(parsePartyPlayerEvent(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'pause', currentTime: 55 } }))).toEqual({ event: 'pause', currentTime: 55 });
     expect(parsePartyPlayerEvent({ type: 'not-a-player', data: {} })).toBeNull();
+  });
+
+  it('parses CineSrc playback events with their documented current time', () => {
+    expect(parsePartyPlayerEvent({ type: 'cinesrc:ready' })).toEqual({ event: 'ready', currentTime: 0 });
+    expect(parsePartyPlayerEvent({ type: 'cinesrc:timeupdate', currentTime: 73.5, duration: 8880 })).toEqual({ event: 'timeupdate', currentTime: 73.5 });
+    expect(parsePartyPlayerEvent({ type: 'cinesrc:pause', currentTime: 74 })).toEqual({ event: 'pause', currentTime: 74 });
   });
 
   it('uses the documented VidZen command envelope', () => {
@@ -103,6 +121,25 @@ describe('full-title party playback', () => {
     expect(firstRetryCommands).toBeGreaterThan(initialCommands);
     act(() => vi.advanceTimersByTime(3500));
     expect(postMessage.mock.calls.length).toBeGreaterThan(firstRetryCommands);
+    vi.useRealTimers();
+  });
+
+  it('sends CineSrc commands using the documented envelope and exact origin', () => {
+    vi.useFakeTimers();
+    render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={cineSrcConfig} isHost onHostCommand={vi.fn()} />);
+    const player = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(player.contentWindow!, 'postMessage');
+
+    act(() => fireEvent.load(player));
+
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'cinesrc:command', command: 'seek', args: [expect.any(Number)] },
+      'https://cinesrc.st',
+    );
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'cinesrc:command', command: 'play', args: [] },
+      'https://cinesrc.st',
+    );
     vi.useRealTimers();
   });
 

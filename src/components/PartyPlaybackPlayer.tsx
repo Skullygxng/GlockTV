@@ -34,13 +34,16 @@ export function buildPartyPlaybackUrl(room: PartyRoom, config: PartyPlaybackConf
 }
 
 export function getPartyPlaybackConfig(): PartyPlaybackConfig {
-  const movieUrlTemplate = import.meta.env.VITE_PARTY_MOVIE_EMBED_URL_TEMPLATE ?? '';
-  const tvUrlTemplate = import.meta.env.VITE_PARTY_TV_EMBED_URL_TEMPLATE ?? '';
-  const backupMovie = import.meta.env.VITE_PARTY_BACKUP_MOVIE_EMBED_URL_TEMPLATE ?? '';
-  const backupTv = import.meta.env.VITE_PARTY_BACKUP_TV_EMBED_URL_TEMPLATE ?? '';
-  return { movieUrlTemplate, tvUrlTemplate, servers: [
-    { id: 'sync', label: 'Room Sync', description: 'Synchronized controls · best for private rooms', movieUrlTemplate, tvUrlTemplate, commandMode: 'vidzen' },
-    { id: 'auto', label: 'Glock Auto', description: 'Automatic source fallback · popup protected', movieUrlTemplate: backupMovie, tvUrlTemplate: backupTv, commandMode: 'none' },
+  const legacyMovie = import.meta.env.VITE_PARTY_MOVIE_EMBED_URL_TEMPLATE ?? '';
+  const legacyTv = import.meta.env.VITE_PARTY_TV_EMBED_URL_TEMPLATE ?? '';
+  const autoMovie = import.meta.env.VITE_PARTY_BACKUP_MOVIE_EMBED_URL_TEMPLATE ?? '';
+  const autoTv = import.meta.env.VITE_PARTY_BACKUP_TV_EMBED_URL_TEMPLATE ?? '';
+  const cineSrcMovie = import.meta.env.VITE_CINESRC_MOVIE_EMBED_URL_TEMPLATE ?? '';
+  const cineSrcTv = import.meta.env.VITE_CINESRC_TV_EMBED_URL_TEMPLATE ?? '';
+  return { movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, servers: [
+    { id: 'cinesrc', label: 'CineSrc Sync', description: 'Documented play, pause and seek controls', movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, commandMode: 'cinesrc', startTimeParam: 't' },
+    { id: 'auto', label: 'Glock Auto', description: 'Automatic source fallback · popup protected', movieUrlTemplate: autoMovie, tvUrlTemplate: autoTv, commandMode: 'none' },
+    { id: 'backup', label: 'Backup stream', description: 'Alternate provider when other servers are slow', movieUrlTemplate: legacyMovie, tvUrlTemplate: legacyTv, commandMode: 'vidzen' },
   ] };
 }
 
@@ -49,10 +52,13 @@ export function parsePartyPlayerEvent(raw: unknown): PartyPlayerEvent | null {
     const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!payload || typeof payload !== 'object') return null;
     const message = payload as { type?: unknown; event?: unknown; currentTime?: unknown; data?: { event?: unknown; currentTime?: unknown; time?: unknown } };
+    const cineSrcEvent = typeof message.type === 'string' && message.type.startsWith('cinesrc:')
+      ? message.type.slice('cinesrc:'.length)
+      : null;
     const isMPlayer = message.type === 'mplayer';
-    const eventName = isMPlayer ? message.event : message.data?.event;
-    const eventTime = isMPlayer ? message.currentTime : message.data?.currentTime ?? message.data?.time;
-    if ((message.type !== 'PLAYER_EVENT' && !isMPlayer) || !['ready', 'play', 'pause', 'seeked', 'timeupdate', 'ended'].includes(String(eventName))) return null;
+    const eventName = cineSrcEvent ?? (isMPlayer ? message.event : message.data?.event);
+    const eventTime = cineSrcEvent ? message.currentTime : isMPlayer ? message.currentTime : message.data?.currentTime ?? message.data?.time;
+    if ((!cineSrcEvent && message.type !== 'PLAYER_EVENT' && !isMPlayer) || !['ready', 'play', 'pause', 'seeked', 'timeupdate', 'ended'].includes(String(eventName))) return null;
     const currentTime = Number(eventTime ?? 0);
     return { event: eventName as PlayerEventName, currentTime: Number.isFinite(currentTime) ? Math.max(0, currentTime) : 0 };
   } catch { return null; }
@@ -72,6 +78,7 @@ function roomPosition(room: PartyRoom) {
 export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { room: PartyRoom; config: PartyPlaybackConfig; isHost: boolean; onHostCommand: (state: PlaybackState, position: number) => void }) {
   const iframe = useRef<HTMLIFrameElement>(null);
   const frame = useRef<HTMLDivElement>(null);
+  const lastPlayerTime = useRef(0);
   const [loaded, setLoaded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -85,11 +92,23 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   const playbackUrl = useMemo(() => buildPartyPlaybackUrl(room, config, serverId, startAt), [config, room.episodeNumber, room.mediaType, room.playbackPosition, room.playbackUpdatedAt, room.seasonNumber, room.titleId, serverId]);
   const shouldMountPlayer = room.isOfficial || room.playbackState === 'playing';
   const send = (command: string, values: Record<string, unknown> = {}) => {
+    const receiver = iframe.current?.contentWindow;
+    if (commandMode === 'cinesrc') {
+      const mapped = command === 'mute' ? 'setMuted' : command === 'volume' ? 'setVolume' : command;
+      const args = command === 'seek'
+        ? [Number(values.time ?? 0)]
+        : command === 'mute'
+          ? [Boolean(values.muted)]
+          : command === 'volume'
+            ? [Number(values.level ?? 1)]
+            : [];
+      receiver?.postMessage({ type: 'cinesrc:command', command: mapped, args }, 'https://cinesrc.st');
+      return;
+    }
     if (commandMode !== 'vidzen') return;
     // VidZen documents wildcard delivery because its player can hand playback to a
     // different origin. The message contains commands only, and the receiver is
     // still the exact iframe window rather than an arbitrary browsing context.
-    const receiver = iframe.current?.contentWindow;
     const payload = { command, ...values };
     receiver?.postMessage(buildPartyPlayerCommand(command, values), '*');
     // Some VidZen source handoffs expose the same API but accept the structured
@@ -117,20 +136,23 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== iframe.current?.contentWindow) return;
+      if (commandMode === 'cinesrc' && event.origin !== 'https://cinesrc.st') return;
       const playerEvent = parsePartyPlayerEvent(event.data);
       if (!playerEvent) return;
       if (playerEvent.event === 'ready') { syncPlayer(); return; }
+      if (playerEvent.currentTime > 0) lastPlayerTime.current = playerEvent.currentTime;
       if (!isHost || playerEvent.event === 'timeupdate') return;
-      if (playerEvent.event === 'play' && room.playbackState !== 'playing') onHostCommand('playing', playerEvent.currentTime);
-      if (playerEvent.event === 'pause' && room.playbackState !== 'paused') onHostCommand('paused', playerEvent.currentTime);
-      if (playerEvent.event === 'ended') onHostCommand('paused', playerEvent.currentTime);
-      if (playerEvent.event === 'seeked' && Math.abs(playerEvent.currentTime - roomPosition(room)) > 1.5) {
-        onHostCommand(room.playbackState, playerEvent.currentTime);
+      const effectiveTime = playerEvent.currentTime || lastPlayerTime.current;
+      if (playerEvent.event === 'play' && room.playbackState !== 'playing') onHostCommand('playing', effectiveTime);
+      if (playerEvent.event === 'pause' && room.playbackState !== 'paused') onHostCommand('paused', effectiveTime);
+      if (playerEvent.event === 'ended') onHostCommand('paused', effectiveTime);
+      if (playerEvent.event === 'seeked' && Math.abs(effectiveTime - roomPosition(room)) > 1.5) {
+        onHostCommand(room.playbackState, effectiveTime);
       }
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [isHost, onHostCommand, room.playbackState]);
+  }, [commandMode, isHost, onHostCommand, room.playbackState]);
 
   useEffect(() => {
     const update = () => {

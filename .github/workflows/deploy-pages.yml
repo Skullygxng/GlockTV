@@ -47,6 +47,8 @@ jobs:
           VITE_TV_EMBED_URL_TEMPLATE: 'https://www.vidcore.org/embed/tv/{tmdb_id}/{season_number}/{episode_number}?autoPlay=true&theme=8B24ED&fullscreenButton=true&title=false'
           VITE_BACKUP_MOVIE_EMBED_URL_TEMPLATE: 'https://vidzen.fun/movie/{tmdb_id}'
           VITE_BACKUP_TV_EMBED_URL_TEMPLATE: 'https://vidzen.fun/tv/{tmdb_id}/{season_number}/{episode_number}'
+          VITE_CINESRC_MOVIE_EMBED_URL_TEMPLATE: 'https://cinesrc.st/embed/movie/{tmdb_id}?autoplay=true&color=%238b24ed&prioritize=true'
+          VITE_CINESRC_TV_EMBED_URL_TEMPLATE: 'https://cinesrc.st/embed/tv/{tmdb_id}?s={season_number}&e={episode_number}&autoplay=true&color=%238b24ed&prioritize=true'
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

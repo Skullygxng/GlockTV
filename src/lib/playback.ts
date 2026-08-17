@@ -6,7 +6,7 @@ export interface PlaybackConfig {
   servers?: PlaybackServer[];
 }
 
-export type PlayerCommandMode = 'none' | 'vidzen';
+export type PlayerCommandMode = 'none' | 'vidzen' | 'cinesrc';
 
 export interface PlaybackServer {
   id: string;
@@ -15,6 +15,7 @@ export interface PlaybackServer {
   movieUrlTemplate?: string;
   tvUrlTemplate?: string;
   commandMode?: PlayerCommandMode;
+  startTimeParam?: string;
 }
 
 export interface PlaybackSelection {
@@ -54,7 +55,7 @@ export function buildPlaybackUrl(
     const url = new URL(resolved);
     if (url.protocol !== 'https:') return null;
     if (Number.isFinite(selection.startAt) && (selection.startAt ?? 0) > 0) {
-      url.searchParams.set('startAt', String(Math.floor(selection.startAt!)));
+      url.searchParams.set(server?.startTimeParam ?? 'startAt', String(Math.floor(selection.startAt!)));
     }
     return url.toString();
   } catch {
@@ -85,8 +86,11 @@ export function getPlaybackConfig(): PlaybackConfig {
   const tvUrlTemplate = import.meta.env.VITE_TV_EMBED_URL_TEMPLATE;
   const backupMovie = import.meta.env.VITE_BACKUP_MOVIE_EMBED_URL_TEMPLATE;
   const backupTv = import.meta.env.VITE_BACKUP_TV_EMBED_URL_TEMPLATE;
+  const cineSrcMovie = import.meta.env.VITE_CINESRC_MOVIE_EMBED_URL_TEMPLATE;
+  const cineSrcTv = import.meta.env.VITE_CINESRC_TV_EMBED_URL_TEMPLATE;
   return { movieUrlTemplate, tvUrlTemplate, servers: [
     { id: 'auto', label: 'Glock Auto', description: 'Fast automatic source fallback · popup protected', movieUrlTemplate, tvUrlTemplate, commandMode: 'none' },
+    { id: 'cinesrc', label: 'CineSrc', description: 'Native fullscreen · PiP · alternate sources', movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, commandMode: 'cinesrc', startTimeParam: 't' },
     { id: 'backup', label: 'Backup stream', description: 'Use when the first server is slow', movieUrlTemplate: backupMovie, tvUrlTemplate: backupTv, commandMode: 'vidzen' },
   ] };
 }

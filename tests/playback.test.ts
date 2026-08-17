@@ -42,4 +42,22 @@ describe('authorized playback URLs', () => {
     );
     expect(url).toBe('https://www.vidcore.org/embed/movie/533535?autoPlay=true&title=false&startAt=91');
   });
+
+  it('uses a provider-specific start-time parameter when switching to CineSrc', () => {
+    const cineSrc = {
+      servers: [{
+        id: 'cinesrc',
+        label: 'CineSrc',
+        description: 'Native fullscreen and room controls',
+        movieUrlTemplate: 'https://cinesrc.st/embed/movie/{tmdb_id}?color=%238b24ed',
+        tvUrlTemplate: 'https://cinesrc.st/embed/tv/{tmdb_id}?s={season_number}&e={episode_number}&color=%238b24ed',
+        startTimeParam: 't',
+      }],
+    } as never;
+
+    expect(buildPlaybackUrl({ id: 27205, mediaType: 'movie' }, cineSrc, { startAt: 125 }, 'cinesrc'))
+      .toBe('https://cinesrc.st/embed/movie/27205?color=%238b24ed&t=125');
+    expect(buildPlaybackUrl({ id: 1396, mediaType: 'tv' }, cineSrc, { season: 2, episode: 3 }, 'cinesrc'))
+      .toBe('https://cinesrc.st/embed/tv/1396?s=2&e=3&color=%238b24ed');
+  });
 });

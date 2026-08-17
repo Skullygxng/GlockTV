@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PartyPlaybackPlayer, buildPartyPlaybackUrl, buildPartyPlayerCommand, parsePartyPlayerEvent } from '../src/components/PartyPlaybackPlayer';
 import type { PartyRoom } from '../src/lib/watchParty';
@@ -49,5 +49,21 @@ describe('full-title party playback', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enter room fullscreen' }));
     await waitFor(() => expect(player).toHaveClass('is-expanded'));
     expect(document.body).toHaveClass('party-fullscreen-open');
+  });
+
+  it('retries room synchronization while a full-title source resolves', () => {
+    vi.useFakeTimers();
+    render(<PartyPlaybackPlayer room={room} config={config} isHost onHostCommand={vi.fn()} />);
+    const player = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(player.contentWindow!, 'postMessage');
+    act(() => fireEvent.load(player));
+    const initialCommands = postMessage.mock.calls.length;
+    expect(initialCommands).toBeGreaterThanOrEqual(2);
+    act(() => vi.advanceTimersByTime(500));
+    const firstRetryCommands = postMessage.mock.calls.length;
+    expect(firstRetryCommands).toBeGreaterThan(initialCommands);
+    act(() => vi.advanceTimersByTime(3500));
+    expect(postMessage.mock.calls.length).toBeGreaterThan(firstRetryCommands);
+    vi.useRealTimers();
   });
 });

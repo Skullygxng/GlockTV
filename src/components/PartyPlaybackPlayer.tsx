@@ -75,6 +75,8 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   useEffect(() => {
     if (!loaded) return;
     syncPlayer();
+    const retries = [450, 2000, 5000].map((delay) => window.setTimeout(syncPlayer, delay));
+    return () => retries.forEach((timer) => window.clearTimeout(timer));
   }, [loaded, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
 
   useEffect(() => {
@@ -136,7 +138,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   if (!playbackUrl) return <div className="party-player-missing"><strong>Friends playback is not connected</strong><span>Add the authorized party embed templates to the environment.</span></div>;
 
   return <div className={`party-video party-video--full ${isHost ? 'is-host' : 'is-guest'} ${expanded ? 'is-expanded' : ''}`} ref={frame}>
-    <iframe ref={iframe} key={playbackUrl} title={`${room.titleName} full ${room.mediaType === 'movie' ? 'movie' : 'episode'}`} src={playbackUrl} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => { setLoaded(true); window.setTimeout(syncPlayer, 450); }} />
+    <iframe ref={iframe} key={playbackUrl} title={`${room.titleName} full ${room.mediaType === 'movie' ? 'movie' : 'episode'}`} src={playbackUrl} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setLoaded(true)} />
     {!isHost && <div className="party-video__lock"><span>Host controls playback</span></div>}
     <div className="party-video__toolbar">
       {isHost && <>

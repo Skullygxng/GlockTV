@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Check, ChevronDown, Film, LoaderCircle, Maximize, Minimize, RotateCw, ShieldCheck, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import { buildPlaybackUrl, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
+import { parsePlaybackProgressEvent, readPlaybackProgress, savePlaybackProgress } from '../lib/playbackProgress';
 import type { TitleContext, TmdbClient } from '../lib/tmdb';
 import { EpisodeBrowser } from './EpisodeBrowser';
 import '../playback.css';
@@ -17,9 +18,11 @@ interface PlaybackModalProps {
 
 export function PlaybackModal({ item, config, client, onClose, onSelect }: PlaybackModalProps) {
   const servers = useMemo(() => getPlaybackServers(config), [config]);
+  const initialProgress = useMemo(() => readPlaybackProgress(item), [item.id, item.mediaType]);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
-  const [serverId, setServerId] = useState(() => servers[0]?.id ?? '');
+  const [serverId, setServerId] = useState(() => servers.some((server) => server.id === initialProgress?.serverId) ? initialProgress!.serverId! : servers[0]?.id ?? '');
+  const [resumeAt, setResumeAt] = useState(() => initialProgress?.position ?? 0);
   const [serverOpen, setServerOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
   const [playerState, setPlayerState] = useState<'loading' | 'loaded' | 'slow'>('loading');
@@ -27,11 +30,40 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   const [expanded, setExpanded] = useState(false);
   const [context, setContext] = useState<TitleContext | null>(null);
   const playerFrame = useRef<HTMLDivElement>(null);
-  const playbackUrl = buildPlaybackUrl(item, config, { season, episode }, serverId);
+  const iframe = useRef<HTMLIFrameElement>(null);
+  const progressPosition = useRef(initialProgress?.position ?? 0);
+  const progressDuration = useRef(initialProgress?.duration);
+  const playbackUrl = buildPlaybackUrl(item, config, { season, episode, startAt: resumeAt }, serverId);
   const activeServer = servers.find((server) => server.id === serverId) ?? servers[0];
   const playerName = item.mediaType === 'movie' ? 'Movie player' : 'TV player';
 
-  useEffect(() => { setServerId(servers[0]?.id ?? ''); }, [item.id, item.mediaType, servers]);
+  useEffect(() => {
+    const saved = readPlaybackProgress(item, season, episode);
+    const savedServer = servers.find((server) => server.id === saved?.serverId)?.id;
+    setServerId(savedServer ?? servers[0]?.id ?? '');
+    setResumeAt(saved?.position ?? 0);
+    progressPosition.current = saved?.position ?? 0;
+    progressDuration.current = saved?.duration;
+  }, [episode, item.id, item.mediaType, season, servers]);
+
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== iframe.current?.contentWindow) return;
+      if (activeServer?.commandMode === 'cinesrc' && event.origin !== 'https://cinesrc.st') return;
+      const progress = parsePlaybackProgressEvent(event.data);
+      if (!progress) return;
+      if (progress.currentTime !== null) progressPosition.current = progress.currentTime;
+      if (progress.duration) progressDuration.current = progress.duration;
+      if (progress.event === 'ended' && progressDuration.current) progressPosition.current = 0;
+      savePlaybackProgress(item, {
+        position: progressPosition.current,
+        duration: progressDuration.current,
+        serverId,
+      }, season, episode);
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [activeServer?.commandMode, episode, item.id, item.mediaType, season, serverId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -88,7 +120,13 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   };
 
   const retry = () => setPlayerRevision((revision) => revision + 1);
-  const selectServer = (nextId: string) => { setServerId(nextId); setServerOpen(false); setPlayerRevision((revision) => revision + 1); };
+  const selectServer = (nextId: string) => {
+    savePlaybackProgress(item, { position: progressPosition.current, duration: progressDuration.current, serverId: nextId }, season, episode);
+    setResumeAt(progressPosition.current);
+    setServerId(nextId);
+    setServerOpen(false);
+    setPlayerRevision((revision) => revision + 1);
+  };
   const nextServer = () => {
     if (servers.length < 2) { retry(); return; }
     const index = Math.max(0, servers.findIndex((server) => server.id === serverId));
@@ -110,7 +148,7 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
         </div>
       </header>
       {playbackUrl ? <div className={`playback-frame ${expanded ? 'is-expanded' : ''}`} data-testid="playback-frame" ref={playerFrame}>
-        <iframe key={`${playbackUrl}-${playerRevision}`} title={`${item.title} playback`} src={playbackUrl}
+        <iframe ref={iframe} key={`${playbackUrl}-${playerRevision}`} title={`${item.title} playback`} src={playbackUrl}
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
           referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setPlayerState('loaded')} />

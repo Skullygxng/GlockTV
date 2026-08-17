@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
 
@@ -22,6 +22,14 @@ const multiServerConfig = {
   ],
 };
 
+const cineSrcConfig = {
+  ...config,
+  servers: [
+    { id: 'cinesrc', label: 'CineSrc', description: 'Room-ready provider', movieUrlTemplate: 'https://cinesrc.st/embed/movie/{tmdb_id}?color=%238b24ed', tvUrlTemplate: 'https://cinesrc.st/embed/tv/{tmdb_id}?s={season_number}&e={episode_number}', commandMode: 'cinesrc' as const, startTimeParam: 't' },
+    ...multiServerConfig.servers,
+  ],
+};
+
 function clientFor(item: MediaItem) {
   return {
     getTrending: vi.fn().mockResolvedValue([item]), discover: vi.fn().mockResolvedValue([item]), search: vi.fn().mockResolvedValue([item]),
@@ -39,6 +47,8 @@ function clientFor(item: MediaItem) {
 }
 
 describe('authorized playback modal', () => {
+  beforeEach(() => window.localStorage.clear());
+
   it('opens a configured movie embed from the primary watch action', async () => {
     render(<App client={clientFor(movie) as never} playbackConfig={config} />);
     await screen.findByRole('heading', { name: movie.title });
@@ -114,5 +124,37 @@ describe('authorized playback modal', () => {
     await screen.findByRole('button', { name: 'Exit fullscreen' });
     expect(frame).toHaveClass('is-expanded');
     expect(document.body).toHaveClass('playback-fullscreen-open');
+  });
+
+  it('restores a saved movie position and provider after a page refresh', async () => {
+    window.localStorage.setItem('glocktv:playback-progress:v1', JSON.stringify({
+      'movie:533535': { position: 321, duration: 7680, serverId: 'backup', updatedAt: '2026-08-17T22:00:00.000Z' },
+    }));
+
+    render(<App client={clientFor(movie) as never} playbackConfig={multiServerConfig} />);
+    await screen.findByRole('heading', { name: movie.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute(
+      'src',
+      'https://backup.example/movie/533535?startAt=321',
+    );
+    expect(screen.getByRole('button', { name: 'Open server list' })).toHaveTextContent('Backup stream');
+  });
+
+  it('records CineSrc time updates so the same title can resume later', async () => {
+    render(<App client={clientFor(movie) as never} playbackConfig={cineSrcConfig} />);
+    await screen.findByRole('heading', { name: movie.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+    const frame = screen.getByTitle(`${movie.title} playback`) as HTMLIFrameElement;
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: frame.contentWindow,
+      data: { type: 'cinesrc:timeupdate', currentTime: 187.8, duration: 7680 },
+    }));
+
+    const saved = JSON.parse(window.localStorage.getItem('glocktv:playback-progress:v1') ?? '{}');
+    expect(saved['movie:533535']).toMatchObject({ position: 187, duration: 7680, serverId: 'cinesrc' });
   });
 });

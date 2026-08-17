@@ -89,8 +89,8 @@ export function getPlaybackConfig(): PlaybackConfig {
   const cineSrcMovie = import.meta.env.VITE_CINESRC_MOVIE_EMBED_URL_TEMPLATE;
   const cineSrcTv = import.meta.env.VITE_CINESRC_TV_EMBED_URL_TEMPLATE;
   return { movieUrlTemplate, tvUrlTemplate, servers: [
-    { id: 'auto', label: 'Glock Auto', description: 'Fast automatic source fallback · popup protected', movieUrlTemplate, tvUrlTemplate, commandMode: 'none' },
     { id: 'cinesrc', label: 'CineSrc', description: 'Native fullscreen · PiP · alternate sources', movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, commandMode: 'cinesrc', startTimeParam: 't' },
+    { id: 'auto', label: 'Glock Auto', description: 'Fast automatic source fallback · popup protected', movieUrlTemplate, tvUrlTemplate, commandMode: 'none' },
     { id: 'backup', label: 'Backup stream', description: 'Use when the first server is slow', movieUrlTemplate: backupMovie, tvUrlTemplate: backupTv, commandMode: 'vidzen' },
   ] };
 }

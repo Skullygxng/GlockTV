@@ -3,20 +3,18 @@ import { motion } from 'motion/react';
 import { Film, Maximize, Minimize, RotateCw, X } from 'lucide-react';
 import type { MediaItem } from '../lib/media';
 import { buildPlaybackUrl, type PlaybackConfig } from '../lib/playback';
+import type { TmdbClient } from '../lib/tmdb';
+import { EpisodeBrowser } from './EpisodeBrowser';
 import '../playback.css';
 
 interface PlaybackModalProps {
   item: MediaItem;
   config: PlaybackConfig;
+  client: TmdbClient;
   onClose: () => void;
 }
 
-const normalizeSelection = (value: string) => {
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-};
-
-export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
+export function PlaybackModal({ item, config, client, onClose }: PlaybackModalProps) {
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
   const [playerRevision, setPlayerRevision] = useState(0);
@@ -75,11 +73,8 @@ export function PlaybackModal({ item, config, onClose }: PlaybackModalProps) {
       </div>}
       <footer className="playback-modal__footer">
         <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><strong>{item.year} · {item.genres.slice(0, 2).join(' · ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>
-        {item.mediaType === 'tv' && <div className="episode-controls">
-          <label>Season<input aria-label="Season" type="number" min="1" step="1" value={season} onChange={(event) => setSeason(normalizeSelection(event.target.value))} /></label>
-          <label>Episode<input aria-label="Episode" type="number" min="1" step="1" value={episode} onChange={(event) => setEpisode(normalizeSelection(event.target.value))} /></label>
-        </div>}
       </footer>
+      {item.mediaType === 'tv' && <EpisodeBrowser client={client} seriesId={item.id} activeSeason={season} activeEpisode={episode} onSelect={(nextSeason, nextEpisode) => { setSeason(nextSeason); setEpisode(nextEpisode); }} />}
     </motion.section>
   </motion.div>;
 }

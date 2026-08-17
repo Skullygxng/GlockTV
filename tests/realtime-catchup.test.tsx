@@ -40,7 +40,7 @@ describe('watch-party realtime readiness', () => {
     await screen.findByRole('heading', { name: 'Heat' });
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
     fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create party' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
     await screen.findByText('HEAT95');
     await waitFor(() => expect(service.subscribe).toHaveBeenCalledTimes(1));
 

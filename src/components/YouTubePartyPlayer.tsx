@@ -144,7 +144,7 @@ export function YouTubePartyPlayer({ room, isHost, onHostCommand, factory = crea
     if (!mount.current) return;
     const created = factory(
       mount.current,
-      room.trailerKey,
+      room.trailerKey ?? '',
       (readyPlayer) => {
         player.current = readyPlayer;
         readyPlayer.mute();

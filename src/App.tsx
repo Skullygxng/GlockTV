@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import {
   Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clapperboard,
   Compass, Film, Filter, Heart, ListVideo, LoaderCircle, Play, Search,
-  SlidersHorizontal, Sparkles, Star, Tv, Users, X, Zap,
+  SlidersHorizontal, Sparkles, Star, Users, X, Zap,
 } from 'lucide-react';
 import { MediaCard } from './components/MediaCard';
 import { PlaybackModal } from './components/PlaybackModal';
@@ -12,9 +12,10 @@ import { imageUrl, scoreMatch, type MediaItem } from './lib/media';
 import { getPlaybackConfig, type PlaybackConfig } from './lib/playback';
 import { initialSessionState, sessionReducer } from './lib/session';
 import { createTmdbClient, type TitleContext, type TmdbClient } from './lib/tmdb';
+import type { PartyPlaybackConfig } from './components/PartyPlaybackPlayer';
 import type { WatchPartyService } from './lib/watchParty';
 
-export interface AppProps { client?: TmdbClient; partyService?: WatchPartyService | null; playbackConfig?: PlaybackConfig }
+export interface AppProps { client?: TmdbClient; partyService?: WatchPartyService | null; playbackConfig?: PlaybackConfig; partyPlaybackConfig?: PartyPlaybackConfig }
 
 type View = 'discover' | 'friends' | 'vibe' | 'list';
 const FriendsRoute = lazy(() => import('./components/FriendsRoute').then((module) => ({ default: module.FriendsRoute })));
@@ -52,7 +53,7 @@ function LoadingState() {
   return <div className="state-panel"><LoaderCircle className="spin" /><strong>Loading your feed</strong><span>Finding something worth watching.</span></div>;
 }
 
-export function App({ client, partyService, playbackConfig }: AppProps) {
+export function App({ client, partyService, playbackConfig, partyPlaybackConfig }: AppProps) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
@@ -271,7 +272,7 @@ export function App({ client, partyService, playbackConfig }: AppProps) {
       </aside>
 
       <main className={view === 'friends' ? 'friends-stage' : 'feed-stage'} onWheel={view === 'friends' ? undefined : handleWheel} onTouchStart={view === 'friends' ? undefined : handleTouchStart} onTouchEnd={view === 'friends' ? undefined : handleTouchEnd}>
-        {view === 'friends' ? <Suspense fallback={<div className="state-panel"><LoaderCircle className="spin" /><strong>Opening Friends</strong><span>Getting the room ready.</span></div>}><FriendsRoute client={api} service={partyService} selectedTitle={current ?? null} trailerKey={previewTrailerKey} initialRoomCode={initialRoomCode} /></Suspense> : <>
+        {view === 'friends' ? <Suspense fallback={<div className="state-panel"><LoaderCircle className="spin" /><strong>Opening Friends</strong><span>Getting the room ready.</span></div>}><FriendsRoute client={api} service={partyService} selectedTitle={current ?? null} trailerKey={previewTrailerKey} initialRoomCode={initialRoomCode} partyPlaybackConfig={partyPlaybackConfig} /></Suspense> : <>
         <div className="mobile-tabs">
           {(['both', 'movies', 'tv'] as const).map((type) => <button key={type} className={filters.contentType === type ? 'active' : ''} onClick={() => { const next = { ...filters, contentType: type }; setDraftFilters(next); setFilters(next); void api.discover(next).then(setItems); }}>{type === 'both' ? 'All' : type === 'tv' ? 'TV Shows' : 'Movies'}</button>)}
           <button aria-label="Open mobile filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><Filter /></button>
@@ -298,7 +299,7 @@ export function App({ client, partyService, playbackConfig }: AppProps) {
         <section><p>Why this?</p><strong>{session.likedGenreIds.length ? 'Your session leans toward' : 'Popular with viewers who like'}</strong><h3>{current?.genres.slice(0, 2).join(' + ') || 'bold storytelling'}</h3></section>
         <section><p>Top genres</p><div className="chips">{(current?.genres ?? ['Crime', 'Thriller', 'Drama']).slice(0, 3).map((genre) => <span key={genre}>{genre}</span>)}</div></section>
         <section className="similar"><p>Similar vibes</p>{currentItems.slice(activeIndex + 1, activeIndex + 4).map((item) => <button key={`${item.mediaType}-${item.id}`} onClick={() => setActiveIndex(currentItems.indexOf(item))}>{imageUrl(item.posterPath, 'w185') && <img src={imageUrl(item.posterPath, 'w185')!} alt="" />}<span><b>{item.title}</b><small>{item.year} · ★ {item.rating.toFixed(1)}</small></span></button>)}</section>
-        <section className="channel-card"><Tv /><h3>Channel Mode</h3><p>Sit back and let GlockTV line up trailer after trailer.</p><button aria-label="Channel Mode" onClick={() => current && void openContext(current, 'channel')}><Play fill="currentColor" /> Start channel</button></section>
+        <section className="channel-card"><Users /><h3>Watch with friends</h3><p>Open a private movie night or meet new people in the public lounge.</p><button aria-label="Open Friends" onClick={() => setNav('friends')}><Users /> Watch together</button></section>
       </aside>
 
       <nav className="bottom-nav" aria-label="Mobile navigation">
@@ -312,7 +313,7 @@ export function App({ client, partyService, playbackConfig }: AppProps) {
       <AnimatePresence>{vibeOpen && <VibePanel onClose={() => setVibeOpen(false)} onChoose={(ids) => void chooseVibe(ids)} />}</AnimatePresence>
       <AnimatePresence>{modalMode && <TitleModal mode={modalMode} context={context} onClose={() => { setModalMode(null); setContext(null); }} onNext={() => { setModalMode(null); setContext(null); move(1); setTimeout(() => { const next = currentItems[(activeIndex + 1) % currentItems.length]; if (next) void openContext(next, 'channel'); }, 0); }} />}</AnimatePresence>
 
-      <AnimatePresence>{playbackItem && <PlaybackModal item={playbackItem} config={playback} onClose={() => setPlaybackItem(null)} />}</AnimatePresence>
+      <AnimatePresence>{playbackItem && <PlaybackModal item={playbackItem} config={playback} client={api} onClose={() => setPlaybackItem(null)} />}</AnimatePresence>
       <footer className="credits">Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.</footer>
     </div>
   );

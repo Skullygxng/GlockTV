@@ -46,4 +46,19 @@ describe('TMDB client', () => {
     expect(context.providers?.flatrate?.[0].provider_name).toBe('Netflix');
     expect(context.providerLink).toBe('https://www.themoviedb.org/watch');
   });
+
+  it('loads polished season and episode metadata for TV playback', async () => {
+    const fetcher = vi.fn((input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('/tv/1396/season/2')) return response({ episodes: [{ id: 62085, episode_number: 1, name: 'Seven Thirty-Seven', overview: 'Walt and Jesse face the consequences.', still_path: '/episode.jpg', air_date: '2009-03-08', runtime: 47 }] });
+      return response({ seasons: [{ id: 3572, season_number: 0, name: 'Specials', episode_count: 11, poster_path: null }, { id: 3573, season_number: 1, name: 'Season 1', episode_count: 7, poster_path: '/s1.jpg' }, { id: 3575, season_number: 2, name: 'Season 2', episode_count: 13, poster_path: '/s2.jpg' }] });
+    });
+    const client = createTmdbClient({ apiKey: 'test-key', fetcher });
+
+    const seasons = await client.getTvSeriesGuide(1396);
+    const episodes = await client.getTvSeason(1396, 2);
+
+    expect(seasons.map((season) => season.seasonNumber)).toEqual([1, 2]);
+    expect(episodes[0]).toMatchObject({ episodeNumber: 1, name: 'Seven Thirty-Seven', stillPath: '/episode.jpg', runtime: 47 });
+  });
 });

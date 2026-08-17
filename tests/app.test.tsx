@@ -36,7 +36,7 @@ describe('GlockTV app', () => {
     expect(screen.getByText('GLOCKTV')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Heat' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open filters' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Channel Mode' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Friends' })).toBeInTheDocument();
   });
 
   it('opens filters and the Vibe mood picker', async () => {

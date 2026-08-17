@@ -19,6 +19,14 @@ function clientFor(item: MediaItem) {
     getTrending: vi.fn().mockResolvedValue([item]), discover: vi.fn().mockResolvedValue([item]), search: vi.fn().mockResolvedValue([item]),
     getTitleContext: vi.fn().mockResolvedValue({ trailer: null, providers: null, providerLink: null, details: item }),
     getPersonCredits: vi.fn().mockResolvedValue([item]),
+    getTvSeriesGuide: vi.fn().mockResolvedValue([
+      { id: 1, seasonNumber: 1, name: 'Season 1', episodeCount: 2, posterPath: '/season.jpg', airDate: '2008-01-20' },
+      { id: 2, seasonNumber: 2, name: 'Season 2', episodeCount: 1, posterPath: '/season-2.jpg', airDate: '2009-03-08' },
+    ]),
+    getTvSeason: vi.fn().mockImplementation(async (_id: number, season: number) => season === 1 ? [
+      { id: 11, episodeNumber: 1, name: 'Pilot', overview: 'A chemistry teacher begins a dangerous new life.', stillPath: '/pilot.jpg', airDate: '2008-01-20', runtime: 58 },
+      { id: 12, episodeNumber: 2, name: "Cat's in the Bag...", overview: 'Walt and Jesse clean up after the first cook.', stillPath: '/cat.jpg', airDate: '2008-01-27', runtime: 48 },
+    ] : [{ id: 21, episodeNumber: 1, name: 'Seven Thirty-Seven', overview: 'The second season begins.', stillPath: '/737.jpg', airDate: '2009-03-08', runtime: 47 }]),
   };
 }
 
@@ -60,14 +68,16 @@ describe('authorized playback modal', () => {
     expect(requestFullscreen).toHaveBeenCalledOnce();
   });
 
-  it('lets viewers choose a TV season and episode without leaving the player', async () => {
+  it('presents image-led season and episode choices without raw number fields', async () => {
     render(<App client={clientFor(series) as never} playbackConfig={config} />);
     await screen.findByRole('heading', { name: series.title });
 
     fireEvent.click(screen.getByRole('button', { name: 'Watch episode' }));
-    fireEvent.change(screen.getByLabelText('Season'), { target: { value: '3' } });
-    fireEvent.change(screen.getByLabelText('Episode'), { target: { value: '7' } });
+    expect(await screen.findByRole('heading', { name: 'Episodes' })).toBeInTheDocument();
+    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Season 2' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Play episode 1 Seven Thirty-Seven/i }));
 
-    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/tv/1396/3/7');
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/tv/1396/2/1');
   });
 });

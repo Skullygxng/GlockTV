@@ -23,12 +23,33 @@ export interface TitleContext {
   providerLink: string | null;
 }
 
+export interface TvSeasonSummary {
+  id: number;
+  seasonNumber: number;
+  name: string;
+  episodeCount: number;
+  posterPath: string | null;
+  airDate: string;
+}
+
+export interface TvEpisode {
+  id: number;
+  episodeNumber: number;
+  name: string;
+  overview: string;
+  stillPath: string | null;
+  airDate: string;
+  runtime: number | null;
+}
+
 export interface TmdbClient {
   getTrending(): Promise<MediaItem[]>;
   discover(filters: DiscoveryFilters): Promise<MediaItem[]>;
   search(query: string): Promise<MediaItem[]>;
   getTitleContext(item: Pick<MediaItem, 'id' | 'mediaType'>): Promise<TitleContext>;
   getPersonCredits(personId: number): Promise<MediaItem[]>;
+  getTvSeriesGuide?(seriesId: number): Promise<TvSeasonSummary[]>;
+  getTvSeason?(seriesId: number, seasonNumber: number): Promise<TvEpisode[]>;
 }
 
 interface ClientOptions {
@@ -49,7 +70,7 @@ function dedupe(items: MediaItem[]): MediaItem[] {
   });
 }
 
-export function createTmdbClient({ apiKey, readToken, fetcher = fetch }: ClientOptions): TmdbClient {
+export function createTmdbClient({ apiKey, readToken, fetcher = fetch }: ClientOptions): TmdbClient & Required<Pick<TmdbClient, 'getTvSeriesGuide' | 'getTvSeason'>> {
   if (!apiKey && !readToken) {
     throw new Error('TMDB authentication is missing. Add VITE_TMDB_API_KEY or VITE_TMDB_READ_TOKEN.');
   }
@@ -133,6 +154,33 @@ export function createTmdbClient({ apiKey, readToken, fetcher = fetch }: ClientO
         providers,
         providerLink: providers?.link ?? null,
       };
+    },
+
+    async getTvSeriesGuide(seriesId) {
+      const payload = await request<{ seasons?: Array<{ id: number; season_number: number; name: string; episode_count: number; poster_path?: string | null; air_date?: string }> }>(`/tv/${seriesId}`, { language: 'en-US' });
+      return (payload.seasons ?? [])
+        .filter((season) => season.season_number > 0 && season.episode_count > 0)
+        .map((season) => ({
+          id: season.id,
+          seasonNumber: season.season_number,
+          name: season.name || `Season ${season.season_number}`,
+          episodeCount: season.episode_count,
+          posterPath: season.poster_path ?? null,
+          airDate: season.air_date ?? '',
+        }));
+    },
+
+    async getTvSeason(seriesId, seasonNumber) {
+      const payload = await request<{ episodes?: Array<{ id: number; episode_number: number; name: string; overview?: string; still_path?: string | null; air_date?: string; runtime?: number | null }> }>(`/tv/${seriesId}/season/${seasonNumber}`, { language: 'en-US' });
+      return (payload.episodes ?? []).map((episode) => ({
+        id: episode.id,
+        episodeNumber: episode.episode_number,
+        name: episode.name || `Episode ${episode.episode_number}`,
+        overview: episode.overview ?? '',
+        stillPath: episode.still_path ?? null,
+        airDate: episode.air_date ?? '',
+        runtime: episode.runtime ?? null,
+      }));
     },
 
     async getPersonCredits(personId) {

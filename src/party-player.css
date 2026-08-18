@@ -66,3 +66,7 @@
 .party-video__paused svg { width: 18px; }
 .party-video__paused strong { font: 700 22px/1 'Barlow Condensed'; letter-spacing: .04em; text-transform: uppercase; }
 .party-video__paused small { color: #aaa3ae; font-size: 9px; }
+
+.party-video--full.is-guest.is-guest-activated iframe {
+  pointer-events: auto;
+}

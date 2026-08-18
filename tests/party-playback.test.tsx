@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { PartyPlaybackPlayer, buildPartyPlaybackUrl, buildPartyPlayerCommand, parsePartyPlayerEvent } from '../src/components/PartyPlaybackPlayer';
 import type { PartyRoom } from '../src/lib/watchParty';
@@ -56,16 +56,16 @@ describe('full-title party playback', () => {
     expect(buildPartyPlayerCommand('volume', { level: 1 })).toBe('{"command":"volume","level":1}');
   });
 
-  it('only exposes playback controls to the host', () => {
+  it('uses the provider as the single host control surface', () => {
     const onHostCommand = vi.fn();
-    const { rerender } = render(<PartyPlaybackPlayer room={room} config={config} isHost onHostCommand={onHostCommand} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Play room' }));
-    expect(onHostCommand).toHaveBeenCalledWith('playing', 42);
+    render(<PartyPlaybackPlayer room={room} config={cineSrcConfig} isHost onHostCommand={onHostCommand} />);
 
-    rerender(<PartyPlaybackPlayer room={room} config={config} isHost={false} onHostCommand={onHostCommand} />);
+    expect(screen.getByTitle('Heat full movie')).toBeInTheDocument();
+    expect(screen.getByTitle('Heat full movie')).toHaveAttribute('src', expect.stringContaining('autoplay=false'));
     expect(screen.queryByRole('button', { name: 'Play room' })).not.toBeInTheDocument();
-    expect(screen.getByText(/Paused by the host/i)).toBeInTheDocument();
-    expect(screen.queryByTitle('Heat full movie')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause room' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restart room' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Enter room fullscreen' })).not.toBeInTheDocument();
   });
 
   it('hard-stops the cross-origin player while the room is paused and remounts it on play', () => {
@@ -75,35 +75,97 @@ describe('full-title party playback', () => {
 
     rerender(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing', playbackUpdatedAt: '2026-08-11T00:01:00.000Z' }} config={config} isHost={false} onHostCommand={vi.fn()} />);
     expect(screen.getByTitle('Heat full movie')).toHaveAttribute('src', 'https://party.example/movie/1');
-    expect(screen.getByRole('button', { name: 'Enable video playback' })).toHaveTextContent(/host stays in control/i);
+    expect(screen.getByRole('button', { name: 'Join playback' })).toHaveTextContent(/One tap unlocks video/i);
   });
 
-  it('gives a private guest a brief browser-required playback activation window', () => {
+  it('gives a private guest one clear browser-required playback activation', () => {
     vi.useFakeTimers();
-    render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={config} isHost={false} onHostCommand={vi.fn()} />);
+    render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} />);
     const player = screen.getByTitle('Heat full movie').parentElement!;
     const iframe = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
     const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enable video playback' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Join playback' }));
     expect(player).toHaveClass('is-guest-unlocked');
-    expect(screen.getByText(/Tap play in the player/i)).toBeInTheDocument();
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'cinesrc:command', command: 'play', args: [] },
+      'https://cinesrc.st',
+    );
 
-    act(() => vi.advanceTimersByTime(800));
-    expect(postMessage.mock.calls.some(([message]) => String(message).includes('"command":"seek"'))).toBe(true);
-
-    act(() => vi.advanceTimersByTime(7200));
+    act(() => vi.advanceTimersByTime(15000));
     expect(player).not.toHaveClass('is-guest-unlocked');
     vi.useRealTimers();
   });
 
-  it('falls back to viewport fullscreen when native fullscreen is unavailable', async () => {
+  it('keeps a CineSrc guest activated across host pause and resume', () => {
+    const { rerender } = render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Join playback' }));
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: (screen.getByTitle('Heat full movie') as HTMLIFrameElement).contentWindow,
+      data: { type: 'cinesrc:play', currentTime: 43 },
+    }));
+    expect(screen.queryByRole('button', { name: 'Join playback' })).not.toBeInTheDocument();
+
+    rerender(<PartyPlaybackPlayer room={{ ...room, playbackState: 'paused', playbackPosition: 43 }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} />);
+    expect(screen.getByTitle('Heat full movie')).toBeInTheDocument();
+    expect(screen.getByText('Paused by host')).toBeInTheDocument();
+
+    rerender(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing', playbackPosition: 43 }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Join playback' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the host authoritative when a CineSrc guest pauses locally', () => {
+    render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Join playback' }));
+    const iframe = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage');
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: iframe.contentWindow,
+      data: { type: 'cinesrc:pause', currentTime: 44 },
+    }));
+
+    expect(postMessage).toHaveBeenCalledWith(
+      { type: 'cinesrc:command', command: 'play', args: [] },
+      'https://cinesrc.st',
+    );
+  });
+
+  it('does not add a duplicate fullscreen button over the provider player', () => {
     render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={config} isHost onHostCommand={vi.fn()} />);
-    const player = screen.getByTitle('Heat full movie').parentElement!;
-    expect(player).not.toHaveClass('is-expanded');
-    fireEvent.click(screen.getByRole('button', { name: 'Enter room fullscreen' }));
-    await waitFor(() => expect(player).toHaveClass('is-expanded'));
-    expect(document.body).toHaveClass('party-fullscreen-open');
+    expect(screen.queryByRole('button', { name: 'Enter room fullscreen' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Exit room fullscreen' })).not.toBeInTheDocument();
+  });
+
+  it('turns a CineSrc native host play event into shared room state', () => {
+    const onHostCommand = vi.fn();
+    render(<PartyPlaybackPlayer room={room} config={cineSrcConfig} isHost onHostCommand={onHostCommand} />);
+    const iframe = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: iframe.contentWindow,
+      data: { type: 'cinesrc:play' },
+    }));
+
+    expect(onHostCommand).toHaveBeenCalledWith('playing', 0);
+  });
+
+  it('re-anchors an already-playing room to the host provider after refresh', () => {
+    const onHostCommand = vi.fn();
+    render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing', playbackPosition: 120, playbackUpdatedAt: new Date(Date.now() - 10_000).toISOString() }} config={cineSrcConfig} isHost onHostCommand={onHostCommand} />);
+    const iframe = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: iframe.contentWindow,
+      data: { type: 'cinesrc:play', currentTime: 121 },
+    }));
+
+    expect(onHostCommand).toHaveBeenCalledWith('playing', 121);
   });
 
   it('retries room synchronization while a full-title source resolves', () => {

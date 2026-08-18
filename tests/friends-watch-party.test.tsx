@@ -124,8 +124,9 @@ describe('Friends watch parties', () => {
       durationSeconds: 10200,
     }));
     expect(screen.getByRole('textbox', { name: 'Message the room' })).toBeInTheDocument();
-    expect(screen.getByText('Room paused')).toBeInTheDocument();
-    expect(screen.queryByTitle('Heat full movie')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Heat full movie')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Play room' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Use the player controls/i)).toBeInTheDocument();
   });
 
   it('joins a room code and sends a live message', async () => {

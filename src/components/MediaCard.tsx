@@ -3,6 +3,18 @@ import { Bookmark, Heart, Info, Play, Plus, ThumbsDown, Volume2, VolumeX } from 
 import { imageUrl, type MediaItem } from '../lib/media';
 import { createYouTubePlayer, type PartyPlayer, type PartyPlayerFactory } from './YouTubePartyPlayer';
 
+const previewSoundKey = 'glocktv-preview-sound';
+
+function loadPreviewSoundPreference() {
+  try { return sessionStorage.getItem(previewSoundKey) === 'on'; }
+  catch { return false; }
+}
+
+function savePreviewSoundPreference(enabled: boolean) {
+  try { sessionStorage.setItem(previewSoundKey, enabled ? 'on' : 'off'); }
+  catch { /* Sound still works for the current trailer when storage is unavailable. */ }
+}
+
 export interface MediaCardProps {
   item: MediaItem;
   match: number;
@@ -29,24 +41,26 @@ export function MediaCard({ item, match, saved, trailerKey = null, onToggleList,
   const previewMount = useRef<HTMLDivElement>(null);
   const previewPlayer = useRef<PartyPlayer | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
-  const [previewMuted, setPreviewMuted] = useState(true);
+  const [previewMuted, setPreviewMuted] = useState(() => !loadPreviewSoundPreference());
 
   useEffect(() => {
     if (!trailerKey || !previewMount.current) {
       previewPlayer.current = null;
       setPreviewReady(false);
-      setPreviewMuted(true);
+      setPreviewMuted(!loadPreviewSoundPreference());
       return;
     }
 
+    const soundEnabled = loadPreviewSoundPreference();
     setPreviewReady(false);
-    setPreviewMuted(true);
+    setPreviewMuted(!soundEnabled);
     const player = trailerPlayerFactory(
       previewMount.current,
       trailerKey,
       (readyPlayer) => {
         previewPlayer.current = readyPlayer;
-        readyPlayer.mute();
+        if (soundEnabled) readyPlayer.unmute();
+        else readyPlayer.mute();
         readyPlayer.play();
         setPreviewReady(true);
       },
@@ -69,7 +83,9 @@ export function MediaCard({ item, match, saved, trailerKey = null, onToggleList,
     } else {
       player.mute();
     }
-    setPreviewMuted((muted) => !muted);
+    const soundEnabled = previewMuted;
+    savePreviewSoundPreference(soundEnabled);
+    setPreviewMuted(!soundEnabled);
   };
 
   return (

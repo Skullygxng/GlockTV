@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MediaCard } from '../src/components/MediaCard';
 import type { PartyPlayer, PartyPlayerFactory } from '../src/components/YouTubePartyPlayer';
 import type { MediaItem } from '../src/lib/media';
@@ -33,6 +33,8 @@ function makePreviewPlayer() {
 }
 
 describe('autoplay trailer preview', () => {
+  beforeEach(() => sessionStorage.clear());
+
   it('renders the active TMDB YouTube trailer as a muted looping autoplay preview', () => {
     const { player, factory } = makePreviewPlayer();
     render(
@@ -88,6 +90,49 @@ describe('autoplay trailer preview', () => {
     expect(player.unmute).toHaveBeenCalledOnce();
     expect(player.play).toHaveBeenCalledTimes(2);
     expect(screen.getByRole('button', { name: 'Mute Joker trailer' })).toBeInTheDocument();
+  });
+
+  it('keeps trailer sound on when the viewer moves to the next recommendation', () => {
+    const first = makePreviewPlayer();
+    const firstCard = render(
+      <MediaCard
+        item={item}
+        match={93}
+        saved={false}
+        trailerKey="joker-trailer"
+        onToggleList={vi.fn()}
+        onWatch={vi.fn()}
+        onDetails={vi.fn()}
+        onTrailer={vi.fn()}
+        onLike={vi.fn()}
+        onSkip={vi.fn()}
+        trailerPlayerFactory={first.factory}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play Joker trailer with sound' }));
+    firstCard.unmount();
+
+    const nextItem = { ...item, id: 603, title: 'The Matrix' };
+    const next = makePreviewPlayer();
+    render(
+      <MediaCard
+        item={nextItem}
+        match={95}
+        saved={false}
+        trailerKey="matrix-trailer"
+        onToggleList={vi.fn()}
+        onWatch={vi.fn()}
+        onDetails={vi.fn()}
+        onTrailer={vi.fn()}
+        onLike={vi.fn()}
+        onSkip={vi.fn()}
+        trailerPlayerFactory={next.factory}
+      />,
+    );
+
+    expect(next.player.unmute).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Mute The Matrix trailer' })).toBeInTheDocument();
   });
 });
 

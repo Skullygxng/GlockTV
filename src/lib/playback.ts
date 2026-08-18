@@ -16,6 +16,8 @@ export interface PlaybackServer {
   tvUrlTemplate?: string;
   commandMode?: PlayerCommandMode;
   startTimeParam?: string;
+  preferredFor?: Array<MediaItem['mediaType']>;
+  resumeDisabledFor?: Array<MediaItem['mediaType']>;
 }
 
 export interface PlaybackSelection {
@@ -82,6 +84,24 @@ export function getPlaybackServers(config: PlaybackConfig): PlaybackServer[] {
   });
 }
 
+export function getDefaultPlaybackServerId(
+  servers: PlaybackServer[],
+  mediaType: MediaItem['mediaType'],
+): string {
+  const templateKey = mediaType === 'movie' ? 'movieUrlTemplate' : 'tvUrlTemplate';
+  const compatible = servers.filter((server) => server[templateKey]?.trim());
+  return compatible.find((server) => server.preferredFor?.includes(mediaType))?.id
+    ?? compatible[0]?.id
+    ?? '';
+}
+
+export function canResumePlaybackServer(
+  server: PlaybackServer | undefined,
+  mediaType: MediaItem['mediaType'],
+): boolean {
+  return Boolean(server && !server.resumeDisabledFor?.includes(mediaType));
+}
+
 export function getPlaybackConfig(): PlaybackConfig {
   const movieUrlTemplate = import.meta.env.VITE_MOVIE_EMBED_URL_TEMPLATE;
   const tvUrlTemplate = import.meta.env.VITE_TV_EMBED_URL_TEMPLATE;
@@ -90,8 +110,8 @@ export function getPlaybackConfig(): PlaybackConfig {
   const cineSrcMovie = import.meta.env.VITE_CINESRC_MOVIE_EMBED_URL_TEMPLATE;
   const cineSrcTv = import.meta.env.VITE_CINESRC_TV_EMBED_URL_TEMPLATE;
   return { movieUrlTemplate, tvUrlTemplate, servers: [
-    { id: 'cinesrc', label: 'CineSrc', description: 'Native fullscreen · PiP · alternate sources', movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, commandMode: 'cinesrc', startTimeParam: 't' },
-    { id: 'auto', label: 'VidCore', description: 'Automatic source fallback · popup protected', movieUrlTemplate, tvUrlTemplate, commandMode: 'none' },
+    { id: 'cinesrc', label: 'CineSrc', description: 'Movie default · TV backup', movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, commandMode: 'cinesrc', startTimeParam: 't', resumeDisabledFor: ['tv'] },
+    { id: 'auto', label: 'VidCore', description: 'TV default · automatic source fallback', movieUrlTemplate, tvUrlTemplate, commandMode: 'none', preferredFor: ['tv'] },
     { id: 'backup', label: 'VidZen Backup', description: 'Use when CineSrc or VidCore is slow', movieUrlTemplate: backupMovie, tvUrlTemplate: backupTv, commandMode: 'vidzen' },
   ] };
 }

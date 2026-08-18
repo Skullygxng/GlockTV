@@ -30,6 +30,14 @@ const cineSrcConfig = {
   ],
 };
 
+const tvReliableConfig = {
+  ...config,
+  servers: [
+    { id: 'cinesrc', label: 'CineSrc', description: 'Movie default', movieUrlTemplate: 'https://cinesrc.st/embed/movie/{tmdb_id}', tvUrlTemplate: 'https://cinesrc.st/embed/tv/{tmdb_id}?s={season_number}&e={episode_number}', commandMode: 'cinesrc' as const, startTimeParam: 't', resumeDisabledFor: ['tv' as const] },
+    { id: 'auto', label: 'VidCore', description: 'TV default', movieUrlTemplate: 'https://www.vidcore.org/embed/movie/{tmdb_id}', tvUrlTemplate: 'https://www.vidcore.org/embed/tv/{tmdb_id}/{season_number}/{episode_number}', preferredFor: ['tv' as const] },
+  ],
+};
+
 function clientFor(item: MediaItem) {
   return {
     getTrending: vi.fn().mockResolvedValue([item]), discover: vi.fn().mockResolvedValue([item]), search: vi.fn().mockResolvedValue([item]),
@@ -93,6 +101,38 @@ describe('authorized playback modal', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Play episode 1 Seven Thirty-Seven/i }));
 
     expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/tv/1396/2/1');
+  });
+
+  it('uses the TV-reliable provider by default while preserving the movie default', async () => {
+    const { unmount } = render(<App client={clientFor(series) as never} playbackConfig={tvReliableConfig} />);
+    await screen.findByRole('heading', { name: series.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch episode' }));
+
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute(
+      'src',
+      'https://www.vidcore.org/embed/tv/1396/1/1',
+    );
+    expect(screen.getByRole('button', { name: 'Open server list' })).toHaveTextContent('VidCore');
+
+    unmount();
+    render(<App client={clientFor(movie) as never} playbackConfig={tvReliableConfig} />);
+    await screen.findByRole('heading', { name: movie.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://cinesrc.st/embed/movie/533535?t=0');
+  });
+
+  it('does not resume a TV timestamp captured from the displaced provider', async () => {
+    window.localStorage.setItem('glocktv:playback-progress:v1', JSON.stringify({
+      'tv:1396:s1:e1': { position: 94, duration: 3156, serverId: 'cinesrc', updatedAt: '2026-08-18T12:00:00.000Z' },
+    }));
+    render(<App client={clientFor(series) as never} playbackConfig={tvReliableConfig} />);
+    await screen.findByRole('heading', { name: series.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch episode' }));
+
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute(
+      'src',
+      'https://www.vidcore.org/embed/tv/1396/1/1',
+    );
   });
 
   it('lets viewers change servers and blocks provider pop-up windows', async () => {

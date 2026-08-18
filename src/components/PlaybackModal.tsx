@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Check, ChevronDown, Film, LoaderCircle, RotateCw, ShieldCheck, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
-import { buildPlaybackUrl, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
+import { buildPlaybackUrl, canResumePlaybackServer, getDefaultPlaybackServerId, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
 import { parsePlaybackProgressEvent, readPlaybackProgress, savePlaybackProgress } from '../lib/playbackProgress';
 import type { TitleContext, TmdbClient } from '../lib/tmdb';
 import { EpisodeBrowser } from './EpisodeBrowser';
@@ -19,28 +19,31 @@ interface PlaybackModalProps {
 export function PlaybackModal({ item, config, client, onClose, onSelect }: PlaybackModalProps) {
   const servers = useMemo(() => getPlaybackServers(config), [config]);
   const initialProgress = useMemo(() => readPlaybackProgress(item), [item.id, item.mediaType]);
+  const initialSavedServer = servers.find((server) => server.id === initialProgress?.serverId);
+  const canResumeInitialProgress = canResumePlaybackServer(initialSavedServer, item.mediaType);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
-  const [serverId, setServerId] = useState(() => servers.some((server) => server.id === initialProgress?.serverId) ? initialProgress!.serverId! : servers[0]?.id ?? '');
-  const [resumeAt, setResumeAt] = useState(() => initialProgress?.position ?? 0);
+  const [serverId, setServerId] = useState(() => canResumeInitialProgress ? initialSavedServer!.id : getDefaultPlaybackServerId(servers, item.mediaType));
+  const [resumeAt, setResumeAt] = useState(() => canResumeInitialProgress ? initialProgress?.position ?? 0 : 0);
   const [serverOpen, setServerOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
   const [playerState, setPlayerState] = useState<'loading' | 'loaded' | 'slow'>('loading');
   const [context, setContext] = useState<TitleContext | null>(null);
   const iframe = useRef<HTMLIFrameElement>(null);
-  const progressPosition = useRef(initialProgress?.position ?? 0);
-  const progressDuration = useRef(initialProgress?.duration);
+  const progressPosition = useRef(canResumeInitialProgress ? initialProgress?.position ?? 0 : 0);
+  const progressDuration = useRef(canResumeInitialProgress ? initialProgress?.duration : undefined);
   const playbackUrl = buildPlaybackUrl(item, config, { season, episode, startAt: resumeAt }, serverId);
   const activeServer = servers.find((server) => server.id === serverId) ?? servers[0];
   const playerName = item.mediaType === 'movie' ? 'Movie player' : 'TV player';
 
   useEffect(() => {
     const saved = readPlaybackProgress(item, season, episode);
-    const savedServer = servers.find((server) => server.id === saved?.serverId)?.id;
-    setServerId(savedServer ?? servers[0]?.id ?? '');
-    setResumeAt(saved?.position ?? 0);
-    progressPosition.current = saved?.position ?? 0;
-    progressDuration.current = saved?.duration;
+    const savedServer = servers.find((server) => server.id === saved?.serverId);
+    const canResumeSaved = canResumePlaybackServer(savedServer, item.mediaType);
+    setServerId(canResumeSaved ? savedServer!.id : getDefaultPlaybackServerId(servers, item.mediaType));
+    setResumeAt(canResumeSaved ? saved?.position ?? 0 : 0);
+    progressPosition.current = canResumeSaved ? saved?.position ?? 0 : 0;
+    progressDuration.current = canResumeSaved ? saved?.duration : undefined;
   }, [episode, item.id, item.mediaType, season, servers]);
 
   useEffect(() => {
@@ -98,13 +101,14 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   };
   const selectEpisode = (nextSeason: number, nextEpisode: number) => {
     const saved = readPlaybackProgress(item, nextSeason, nextEpisode);
-    const savedServer = servers.find((server) => server.id === saved?.serverId)?.id;
+    const savedServer = servers.find((server) => server.id === saved?.serverId);
+    const canResumeSaved = canResumePlaybackServer(savedServer, item.mediaType);
     setSeason(nextSeason);
     setEpisode(nextEpisode);
-    setServerId(savedServer ?? servers[0]?.id ?? '');
-    setResumeAt(saved?.position ?? 0);
-    progressPosition.current = saved?.position ?? 0;
-    progressDuration.current = saved?.duration;
+    setServerId(canResumeSaved ? savedServer!.id : getDefaultPlaybackServerId(servers, item.mediaType));
+    setResumeAt(canResumeSaved ? saved?.position ?? 0 : 0);
+    progressPosition.current = canResumeSaved ? saved?.position ?? 0 : 0;
+    progressDuration.current = canResumeSaved ? saved?.duration : undefined;
     setPlayerRevision((revision) => revision + 1);
   };
   const recommendations = context?.recommendations ?? [];

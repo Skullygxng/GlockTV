@@ -1,6 +1,7 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MediaCard } from '../src/components/MediaCard';
+import type { PartyPlayer, PartyPlayerFactory } from '../src/components/YouTubePartyPlayer';
 import type { MediaItem } from '../src/lib/media';
 
 const item: MediaItem = {
@@ -20,8 +21,20 @@ const item: MediaItem = {
   backdropPath: '/backdrop.jpg',
 };
 
+function makePreviewPlayer() {
+  const player: PartyPlayer = {
+    play: vi.fn(), pause: vi.fn(), seek: vi.fn(), mute: vi.fn(), unmute: vi.fn(), getCurrentTime: vi.fn(() => 0), destroy: vi.fn(),
+  };
+  const factory: PartyPlayerFactory = vi.fn((_element, _videoId, onReady) => {
+    onReady(player);
+    return player;
+  });
+  return { player, factory };
+}
+
 describe('autoplay trailer preview', () => {
   it('renders the active TMDB YouTube trailer as a muted looping autoplay preview', () => {
+    const { player, factory } = makePreviewPlayer();
     render(
       <MediaCard
         item={item}
@@ -34,14 +47,47 @@ describe('autoplay trailer preview', () => {
         onTrailer={vi.fn()}
         onLike={vi.fn()}
         onSkip={vi.fn()}
+        trailerPlayerFactory={factory}
       />,
     );
 
-    const preview = screen.getByTitle('Joker autoplay trailer');
-    expect(preview).toHaveAttribute('src', expect.stringContaining('autoplay=1'));
-    expect(preview).toHaveAttribute('src', expect.stringContaining('mute=1'));
-    expect(preview).toHaveAttribute('src', expect.stringContaining('loop=1'));
-    expect(preview).toHaveAttribute('src', expect.stringContaining('playlist=official-trailer-key'));
+    expect(screen.getByTitle('Joker autoplay trailer')).toBeInTheDocument();
+    expect(factory).toHaveBeenCalledWith(
+      expect.any(HTMLDivElement),
+      'official-trailer-key',
+      expect.any(Function),
+      expect.any(Function),
+      { autoplay: true, controls: false, loop: true, disableKeyboard: true },
+    );
+    expect(player.mute).toHaveBeenCalledOnce();
+    expect(player.play).toHaveBeenCalledOnce();
+  });
+
+  it('uses the preview speaker to turn sound on without opening the trailer modal', () => {
+    const onTrailer = vi.fn();
+    const { player, factory } = makePreviewPlayer();
+    render(
+      <MediaCard
+        item={item}
+        match={93}
+        saved={false}
+        trailerKey="official-trailer-key"
+        onToggleList={vi.fn()}
+        onWatch={vi.fn()}
+        onDetails={vi.fn()}
+        onTrailer={onTrailer}
+        onLike={vi.fn()}
+        onSkip={vi.fn()}
+        trailerPlayerFactory={factory}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play Joker trailer with sound' }));
+
+    expect(onTrailer).not.toHaveBeenCalled();
+    expect(player.unmute).toHaveBeenCalledOnce();
+    expect(player.play).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: 'Mute Joker trailer' })).toBeInTheDocument();
   });
 });
 

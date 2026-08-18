@@ -17,7 +17,15 @@ export type PartyPlayerFactory = (
   videoId: string,
   onReady: (player: PartyPlayer) => void,
   onStateChange: (state: PlaybackState, position: number) => void,
+  options?: YouTubePlayerOptions,
 ) => PartyPlayer;
+
+export interface YouTubePlayerOptions {
+  autoplay?: boolean;
+  controls?: boolean;
+  loop?: boolean;
+  disableKeyboard?: boolean;
+}
 
 interface RawYouTubePlayer {
   playVideo(): void;
@@ -75,7 +83,7 @@ function loadYouTubeApi() {
   return youtubeApiPromise;
 }
 
-export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onReady, onStateChange) => {
+export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onReady, onStateChange, options = {}) => {
   let raw: RawYouTubePlayer | null = null;
   let destroyed = false;
   const controller: PartyPlayer = {
@@ -93,11 +101,13 @@ export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onRead
     raw = new YT.Player(element, {
       videoId,
       playerVars: {
-        autoplay: 0,
-        controls: 1,
+        autoplay: options.autoplay ? 1 : 0,
+        controls: options.controls === false ? 0 : 1,
         playsinline: 1,
         rel: 0,
         origin: window.location.origin,
+        ...(options.loop ? { loop: 1, playlist: videoId } : {}),
+        ...(options.disableKeyboard ? { disablekb: 1 } : {}),
       },
       events: {
         onReady: () => {

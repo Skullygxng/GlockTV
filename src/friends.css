@@ -343,6 +343,168 @@
   background: #5d1825;
 }
 
+.invite-ready {
+  margin: 0 0 9px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #bdb5c5;
+  font-size: 9px;
+}
+
+.party-chat {
+  position: relative;
+}
+
+.party-chat > header .party-audience-button {
+  min-width: 42px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: #968e9e;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.party-chat > header .party-audience-button:hover,
+.party-chat > header .party-audience-button:focus-visible,
+.party-chat > header .party-audience-button[aria-expanded='true'] {
+  border-color: #55366c;
+  background: #17101d;
+  color: #f2e9f8;
+  outline: none;
+}
+
+.party-roster {
+  position: absolute;
+  z-index: 12;
+  top: 42px;
+  right: 10px;
+  width: min(292px, calc(100% - 20px));
+  max-height: min(380px, calc(100% - 68px));
+  overflow: hidden;
+  border: 1px solid #3b2a47;
+  border-radius: 12px;
+  background: rgba(12, 9, 15, .98);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .72);
+  backdrop-filter: blur(20px);
+}
+
+.party-roster > header {
+  min-height: 59px;
+  padding: 11px 12px 10px 14px;
+  border-bottom: 1px solid #29212f;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.party-roster > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.party-roster > header small {
+  color: #a43be9;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+}
+
+.party-roster > header strong {
+  color: #f5f1f7;
+  font-size: 11px;
+}
+
+.party-roster > header button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #342d39;
+  border-radius: 50%;
+  background: #151218;
+  color: #aaa2af;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.party-roster > header button svg {
+  width: 13px;
+}
+
+.party-roster ul {
+  max-height: 310px;
+  overflow: auto;
+  margin: 0;
+  padding: 7px;
+  list-style: none;
+}
+
+.party-roster li {
+  min-height: 47px;
+  padding: 6px 7px;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.party-roster li:hover {
+  background: #17121c;
+}
+
+.party-roster li > span {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #6c1cc8, #ce4dff);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.party-roster li > div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.party-roster li > div strong {
+  overflow: hidden;
+  color: #e9e4ec;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.party-roster li > div small {
+  color: #716b76;
+  font-size: 7px;
+}
+
+.party-roster li > em {
+  padding: 3px 6px;
+  border: 1px solid #5f2783;
+  border-radius: 999px;
+  color: #c75bff;
+  font-size: 7px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
 @media (max-width: 700px) {
   .party-title-actions { align-items: flex-end; }
   .party-title-actions > button { font-size: 0; width: 34px; padding: 0; }

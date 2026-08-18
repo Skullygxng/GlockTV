@@ -144,7 +144,7 @@ describe('Friends watch parties', () => {
     expect(screen.getByRole('button', { name: 'Stay in room' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Confirm leave room' }));
-    expect(partyService.leaveRoom).not.toHaveBeenCalled();
+    await waitFor(() => expect(partyService.leaveRoom).toHaveBeenCalledWith('room-1', 'user-1'));
     const resume = await screen.findByRole('button', { name: 'Resume hosting Heat' });
     fireEvent.click(resume);
 
@@ -171,15 +171,42 @@ describe('Friends watch parties', () => {
     expect(await screen.findByText('Ready?')).toBeInTheDocument();
   });
 
-  it('rejoins a linked room automatically when the browser already knows the nickname', async () => {
+  it('waits for an explicit join click when opening an invite link', async () => {
     const partyService = makePartyService();
     sessionStorage.setItem('glocktv-nickname', 'Returning guest');
     window.history.replaceState({}, '', '/?room=heat95');
 
     render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
 
+    await screen.findByRole('button', { name: 'Join invite' });
+    expect(partyService.joinRoom).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Your nickname'), { target: { value: 'R' } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(partyService.joinRoom).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Your nickname'), { target: { value: 'Returning guest' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join invite' }));
+
     await waitFor(() => expect(partyService.joinRoom).toHaveBeenCalledWith('HEAT95', 'Returning guest'));
     expect(await screen.findByRole('region', { name: 'Watch party HEAT95' })).toBeInTheDocument();
+  });
+
+  it('opens a named roster from the audience count', async () => {
+    const partyService = makePartyService();
+    partyService.getMembers.mockResolvedValue([
+      { userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z' },
+      { userId: 'user-2', nickname: 'Date Night', joinedAt: '2026-08-11T00:01:00.000Z' },
+    ]);
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Show people in this room' }));
+    const roster = screen.getByRole('dialog', { name: 'People in this room' });
+    expect(within(roster).getByText('Skully')).toBeInTheDocument();
+    expect(within(roster).getByText('Date Night')).toBeInTheDocument();
+    expect(within(roster).getByText('Host')).toBeInTheDocument();
   });
 
   it('polls room state as a fallback when realtime delivery is delayed', async () => {

@@ -55,8 +55,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [searching, setSearching] = useState(false);
   const [recentRoom, setRecentRoom] = useState<RecentRoom | null>(readRecentRoom);
   const [leaveConfirm, setLeaveConfirm] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(false);
   const messageEnd = useRef<HTMLDivElement>(null);
-  const autoJoinAttempted = useRef('');
 
   useEffect(() => {
     if (!service?.listPublicRooms) return;
@@ -74,7 +74,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     if (!service) return;
     const [nextMembers, nextMessages] = await Promise.all([service.getMembers(nextRoom.id), service.getMessages(nextRoom.id)]);
     setRoom(nextRoom); setUserId(nextUserId); setMembers(nextMembers); setMessages(nextMessages);
-    setLeaveConfirm(false);
+    setLeaveConfirm(false); setRosterOpen(false);
     if (!nextRoom.isOfficial) {
       const nextRecentRoom = { code: nextRoom.code, titleName: nextRoom.titleName, wasHost: nextRoom.hostId === nextUserId };
       setRecentRoom(nextRecentRoom);
@@ -146,13 +146,6 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     finally { setBusy(false); }
   };
 
-  useEffect(() => {
-    const code = initialRoomCode.trim().toUpperCase();
-    if (!service || !code || !nickname.trim() || room || autoJoinAttempted.current === code) return;
-    autoJoinAttempted.current = code;
-    void joinCode(code);
-  }, [initialRoomCode, nickname, room, service]);
-
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
     if (!service || !room || !message.trim()) return;
@@ -208,9 +201,9 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   };
 
   const confirmLeaveRoom = async () => {
-    if (service && room && room.hostId !== userId) await service.leaveRoom(room.id, userId).catch(() => undefined);
+    if (service && room) await service.leaveRoom(room.id, userId).catch(() => undefined);
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
-    setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false);
+    setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false); setRosterOpen(false);
     if (service?.listPublicRooms) service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   };
 
@@ -240,7 +233,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
             <div><small>From your Discover feed</small><strong>{selectedTitle?.title ?? 'Choose a title first'}</strong><span>{selectedTitle ? (selectedTitle.mediaType === 'movie' ? 'Full movie ready' : 'Season 1 · Episode 1 ready') : 'Return to Discover and pick what to watch'}</span></div>
             <button type="button" onClick={() => void createParty()} disabled={busy || !service || !nickname.trim() || !selectedTitle}><Sparkles /> Create private room</button>
           </div>
-          <div className="room-code-row"><input aria-label="Room code" maxLength={6} value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} placeholder="ENTER CODE" /><button type="button" onClick={() => void joinCode(roomCode)} disabled={busy || !service || !nickname.trim() || roomCode.length !== 6}><DoorOpen /> Join</button></div>
+          {initialRoomCode && <p className="invite-ready"><span className="live-dot" /> Invite ready · finish your nickname, then join.</p>}
+          <div className="room-code-row"><input aria-label="Room code" maxLength={6} value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} placeholder="ENTER CODE" /><button type="button" aria-label={initialRoomCode ? 'Join invite' : 'Join'} onClick={() => void joinCode(roomCode)} disabled={busy || !service || !nickname.trim() || roomCode.length !== 6}><DoorOpen /> {initialRoomCode ? 'Join invite' : 'Join'}</button></div>
         </section>
         {!service && <p className="friends-error">Friends is not connected yet.</p>}{error && <p className="friends-error" role="alert">{error}</p>}
       </div>
@@ -261,7 +255,11 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         {error && <p className="friends-error" role="alert">{error}</p>}
       </section>
       <aside className="party-chat" aria-label="Audience chat">
-        <header><div><MessageCircle /><strong>Audience chat</strong></div><span><Users /> {members.length}</span></header>
+        <header><div><MessageCircle /><strong>Audience chat</strong></div><button className="party-audience-button" type="button" aria-label={rosterOpen ? 'Hide people in this room' : 'Show people in this room'} aria-expanded={rosterOpen} onClick={() => setRosterOpen((open) => !open)}><Users /> {members.length}</button></header>
+        {rosterOpen && <section className="party-roster" role="dialog" aria-label="People in this room">
+          <header><div><small>Watching now</small><strong>{members.length} {members.length === 1 ? 'person' : 'people'}</strong></div><button type="button" aria-label="Close people list" onClick={() => setRosterOpen(false)}><X /></button></header>
+          <ul>{members.map((member) => <li key={member.userId}><span>{member.nickname.slice(0, 1).toUpperCase()}</span><div><strong>{member.nickname}</strong>{member.userId === userId && <small>You</small>}</div>{member.userId === room.hostId && <em>Host</em>}</li>)}</ul>
+        </section>}
         <div className="party-members" aria-label="People in this room">{members.map((member) => <span key={member.userId} title={member.nickname}>{member.nickname.slice(0, 1).toUpperCase()}</span>)}</div>
         <div className="party-messages" aria-live="polite">{!messages.length && <div className="party-chat__empty"><MessageCircle /><strong>The room is quiet</strong><span>Say hello to everyone watching.</span></div>}{messages.map((item) => <article key={item.id} className={item.userId === userId ? 'mine' : ''}><header><strong>{item.nickname}</strong><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></header><p>{item.body}</p></article>)}<div ref={messageEnd} /></div>
         <form className="party-compose" onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message the room…" /><button type="submit" aria-label="Send message" disabled={!message.trim()}><Send /></button></form>

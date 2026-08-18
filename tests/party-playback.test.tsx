@@ -155,6 +155,36 @@ describe('full-title party playback', () => {
     expect(onHostCommand).toHaveBeenCalledWith('playing', 0);
   });
 
+  it('starts a replacement title at zero instead of reusing the previous movie time', () => {
+    const onHostCommand = vi.fn();
+    const { rerender } = render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={cineSrcConfig} isHost onHostCommand={onHostCommand} />);
+    const oldPlayer = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: oldPlayer.contentWindow,
+      data: { type: 'cinesrc:timeupdate', currentTime: 3725 },
+    }));
+
+    rerender(<PartyPlaybackPlayer room={{
+      ...room,
+      titleId: 550,
+      titleName: 'Fight Club',
+      playbackState: 'paused',
+      playbackPosition: 0,
+      playbackUpdatedAt: '2026-08-18T00:00:00.000Z',
+    }} config={cineSrcConfig} isHost onHostCommand={onHostCommand} />);
+    const newPlayer = screen.getByTitle('Fight Club full movie') as HTMLIFrameElement;
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st',
+      source: newPlayer.contentWindow,
+      data: { type: 'cinesrc:play', currentTime: 0 },
+    }));
+
+    expect(onHostCommand).toHaveBeenLastCalledWith('playing', 0);
+  });
+
   it('re-anchors an already-playing room to the host provider after refresh', () => {
     const onHostCommand = vi.fn();
     render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing', playbackPosition: 120, playbackUpdatedAt: new Date(Date.now() - 10_000).toISOString() }} config={cineSrcConfig} isHost onHostCommand={onHostCommand} />);

@@ -109,6 +109,12 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   const startAt = commandMode === 'none' ? roomPosition(room) : undefined;
   const playbackUrl = useMemo(() => buildPartyPlaybackUrl(room, config, serverId, startAt), [config, room.episodeNumber, room.mediaType, room.playbackPosition, room.playbackUpdatedAt, room.seasonNumber, room.titleId, serverId]);
   const shouldMountPlayer = isHost || room.isOfficial || room.playbackState === 'playing' || (!isHost && guestActivated && commandMode === 'cinesrc');
+
+  useEffect(() => {
+    lastPlayerTime.current = 0;
+    lastHealthReport.current = { at: 0, status: '', offset: Number.NaN };
+  }, [room.episodeNumber, room.mediaType, room.seasonNumber, room.titleId]);
+
   const send = (command: string, values: Record<string, unknown> = {}) => {
     const receiver = iframe.current?.contentWindow;
     if (commandMode === 'cinesrc') {

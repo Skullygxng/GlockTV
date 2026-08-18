@@ -461,6 +461,11 @@
   background: #17121c;
 }
 
+.party-roster li.is-muted > span {
+  filter: grayscale(.7);
+  opacity: .62;
+}
+
 .party-roster li > span {
   width: 30px;
   height: 30px;
@@ -503,6 +508,85 @@
   font-weight: 800;
   letter-spacing: .08em;
   text-transform: uppercase;
+}
+
+.party-roster__actions,
+.party-roster__confirm {
+  display: flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+}
+
+.party-roster__actions button,
+.party-roster__confirm button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid #3a3041;
+  border-radius: 7px;
+  background: #17131b;
+  color: #a99eae;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.party-roster__actions button:hover,
+.party-roster__actions button:focus-visible {
+  border-color: #713c91;
+  color: #e1b2ff;
+  outline: none;
+}
+
+.party-roster__actions button:last-child:hover,
+.party-roster__actions button:last-child:focus-visible,
+.party-roster__confirm button:last-child {
+  border-color: #71313d;
+  color: #ff8797;
+}
+
+.party-roster__actions svg {
+  width: 13px;
+}
+
+.party-roster__confirm small {
+  color: #b8afb9 !important;
+  font-size: 8px !important;
+}
+
+.party-roster__confirm button {
+  width: auto;
+  min-width: 28px;
+  padding: 0 6px;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.party-compose--muted {
+  position: relative;
+}
+
+.party-compose--muted input {
+  color: transparent;
+  opacity: .55;
+}
+
+.party-compose--muted > span {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #a69eaa;
+  font-size: 9px;
+  pointer-events: none;
+}
+
+.party-compose--muted > span svg {
+  width: 13px;
+  color: #a747db;
 }
 
 @media (max-width: 700px) {

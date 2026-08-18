@@ -66,7 +66,7 @@ function makePartyService() {
     createRoom: vi.fn().mockResolvedValue(room),
     joinRoom: vi.fn().mockResolvedValue(room),
     getRoom: vi.fn().mockResolvedValue(room),
-    getMembers: vi.fn().mockResolvedValue([{ userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z' }]),
+    getMembers: vi.fn().mockResolvedValue([{ userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z', isMuted: false }]),
     listPublicRooms: vi.fn().mockResolvedValue([publicRoom]),
     getMessages: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn().mockResolvedValue({ id: 'message-1', roomId: 'room-1', userId: 'user-1', nickname: 'Skully', body: 'Ready?', createdAt: '2026-08-11T00:00:00.000Z' }),
@@ -82,6 +82,9 @@ function makePartyService() {
     })),
     subscribe: vi.fn().mockReturnValue(() => undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
+    setMemberMuted: vi.fn().mockResolvedValue(undefined),
+    removeMember: vi.fn().mockResolvedValue(undefined),
+    getMembershipStatus: vi.fn().mockResolvedValue('active'),
     updateEpisode: vi.fn().mockImplementation(async (_roomId: string, seasonNumber: number, episodeNumber: number) => ({ ...room, seasonNumber, episodeNumber })),
   };
 }
@@ -193,8 +196,8 @@ describe('Friends watch parties', () => {
   it('opens a named roster from the audience count', async () => {
     const partyService = makePartyService();
     partyService.getMembers.mockResolvedValue([
-      { userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z' },
-      { userId: 'user-2', nickname: 'Date Night', joinedAt: '2026-08-11T00:01:00.000Z' },
+      { userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z', isMuted: false },
+      { userId: 'user-2', nickname: 'Date Night', joinedAt: '2026-08-11T00:01:00.000Z', isMuted: false },
     ]);
     render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
     await screen.findByRole('heading', { name: 'Heat' });
@@ -207,6 +210,71 @@ describe('Friends watch parties', () => {
     expect(within(roster).getByText('Skully')).toBeInTheDocument();
     expect(within(roster).getByText('Date Night')).toBeInTheDocument();
     expect(within(roster).getByText('Host')).toBeInTheDocument();
+  });
+
+  it('lets the host mute and remove a guest from the roster', async () => {
+    const partyService = makePartyService();
+    partyService.getMembers.mockResolvedValue([
+      { userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z', isMuted: false },
+      { userId: 'user-2', nickname: 'Date Night', joinedAt: '2026-08-11T00:01:00.000Z', isMuted: false },
+    ]);
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Show people in this room' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mute Date Night' }));
+    await waitFor(() => expect(partyService.setMemberMuted).toHaveBeenCalledWith('room-1', 'user-2', true));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Date Night' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm remove Date Night' }));
+    await waitFor(() => expect(partyService.removeMember).toHaveBeenCalledWith('room-1', 'user-2'));
+  });
+
+  it('disables chat for a guest muted by the host', async () => {
+    const partyService = makePartyService();
+    partyService.ensureUser.mockResolvedValue({ id: 'user-2' });
+    partyService.getMembers.mockResolvedValue([
+      { userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z', isMuted: false },
+      { userId: 'user-2', nickname: 'Guest', joinedAt: '2026-08-11T00:01:00.000Z', isMuted: true },
+    ]);
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
+    fireEvent.change(screen.getByLabelText('Room code'), { target: { value: 'heat95' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+
+    expect(await screen.findByRole('textbox', { name: 'Message the room' })).toBeDisabled();
+    expect(screen.getByText('Muted by host')).toBeInTheDocument();
+  });
+
+  it('returns a removed guest to the lobby', async () => {
+    const partyService = makePartyService();
+    partyService.ensureUser.mockResolvedValue({ id: 'user-2' });
+    let onMembersChanged: (() => void) | undefined;
+    partyService.subscribe.mockImplementation((_roomId, handlers) => {
+      onMembersChanged = handlers.onMembersChanged;
+      return () => undefined;
+    });
+    partyService.getMembers.mockResolvedValue([
+      { userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z', isMuted: false },
+      { userId: 'user-2', nickname: 'Guest', joinedAt: '2026-08-11T00:01:00.000Z', isMuted: false },
+    ]);
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
+    fireEvent.change(screen.getByLabelText('Room code'), { target: { value: 'heat95' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+    await screen.findByRole('region', { name: 'Watch party HEAT95' });
+
+    partyService.getMembers.mockResolvedValue([]);
+    onMembersChanged?.();
+
+    expect(await screen.findByRole('heading', { name: /Movie night/i })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('The host removed you from this room.');
   });
 
   it('polls room state as a fallback when realtime delivery is delayed', async () => {

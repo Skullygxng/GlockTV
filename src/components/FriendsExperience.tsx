@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Copy, DoorOpen, LoaderCircle, LockKeyhole, MessageCircle, Play, Radio, Search, Send, Sparkles, Users, X } from 'lucide-react';
+import { Copy, DoorOpen, LoaderCircle, LockKeyhole, MessageCircle, Play, Radio, Search, Send, Sparkles, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import type { TmdbClient } from '../lib/tmdb';
 import type { PartyMember, PartyMessage, PartyRoom, PlaybackState, PublicPartyRoom, WatchPartyService } from '../lib/watchParty';
@@ -56,6 +56,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [recentRoom, setRecentRoom] = useState<RecentRoom | null>(readRecentRoom);
   const [leaveConfirm, setLeaveConfirm] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
+  const [removeConfirmId, setRemoveConfirmId] = useState('');
+  const [moderatingMemberId, setModeratingMemberId] = useState('');
   const messageEnd = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -63,7 +65,23 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   }, [service]);
 
-  const refreshMembers = useCallback(async (roomId: string) => { if (service) setMembers(await service.getMembers(roomId)); }, [service]);
+  const exitRemovedRoom = useCallback((code: string) => {
+    const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
+    const savedRoom = readRecentRoom();
+    if (savedRoom?.code === code) { localStorage.removeItem(recentRoomKey); setRecentRoom(null); }
+    setRoom(null); setMembers([]); setMessages([]); setRosterOpen(false); setRemoveConfirmId('');
+    setError('The host removed you from this room.');
+  }, []);
+
+  const refreshMembers = useCallback(async (roomId: string) => {
+    if (!service) return;
+    const nextMembers = await service.getMembers(roomId);
+    if (room?.id === roomId && userId && !room.isOfficial && !nextMembers.some((member) => member.userId === userId)) {
+      exitRemovedRoom(room.code);
+      return;
+    }
+    setMembers(nextMembers);
+  }, [exitRemovedRoom, room?.code, room?.id, room?.isOfficial, service, userId]);
   const refreshSnapshot = useCallback(async (roomId: string) => {
     if (!service) return;
     const [nextRoom, nextMembers, nextMessages] = await Promise.all([service.getRoom(roomId), service.getMembers(roomId), service.getMessages(roomId)]);
@@ -99,6 +117,10 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     let active = true;
     const pollRoom = async () => {
       try {
+        if (!room.isOfficial) {
+          const membership = await service.getMembershipStatus(roomId);
+          if (membership === 'removed') { if (active) exitRemovedRoom(room.code); return; }
+        }
         const nextRoom = await service.getRoom(roomId);
         if (active) setRoom(nextRoom);
       } catch {
@@ -113,7 +135,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
       window.clearInterval(roomTimer);
       window.clearInterval(snapshotTimer);
     };
-  }, [refreshSnapshot, room?.id, service]);
+  }, [exitRemovedRoom, refreshSnapshot, room?.code, room?.id, room?.isOfficial, service]);
 
   useEffect(() => { messageEnd.current?.scrollIntoView?.({ behavior: 'smooth' }); }, [messages.length]);
 
@@ -148,13 +170,34 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
 
   const sendMessage = async (event: FormEvent) => {
     event.preventDefault();
-    if (!service || !room || !message.trim()) return;
+    if (!service || !room || !message.trim() || members.find((member) => member.userId === userId)?.isMuted) return;
     const body = message.trim(); setMessage('');
     try {
       const sent = await service.sendMessage(room.id, nickname.trim(), body);
       setMessages((previous) => upsertMessage(previous, sent));
     }
-    catch { setMessage(body); setError('Message failed to send.'); }
+    catch (reason) { setMessage(body); setError(reason instanceof Error ? reason.message : 'Message failed to send.'); }
+  };
+
+  const setMemberMuted = async (member: PartyMember) => {
+    if (!service || !room || room.hostId !== userId || member.userId === userId) return;
+    setModeratingMemberId(member.userId); setError('');
+    try {
+      await service.setMemberMuted(room.id, member.userId, !member.isMuted);
+      setMembers((current) => current.map((item) => item.userId === member.userId ? { ...item, isMuted: !member.isMuted } : item));
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'That member could not be muted.'); }
+    finally { setModeratingMemberId(''); }
+  };
+
+  const removeMember = async (member: PartyMember) => {
+    if (!service || !room || room.hostId !== userId || member.userId === userId) return;
+    setModeratingMemberId(member.userId); setError('');
+    try {
+      await service.removeMember(room.id, member.userId);
+      setMembers((current) => current.filter((item) => item.userId !== member.userId));
+      setRemoveConfirmId('');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'That member could not be removed.'); }
+    finally { setModeratingMemberId(''); }
   };
 
   const updatePlayback = async (state: PlaybackState, position: number) => {
@@ -203,7 +246,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const confirmLeaveRoom = async () => {
     if (service && room) await service.leaveRoom(room.id, userId).catch(() => undefined);
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
-    setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false); setRosterOpen(false);
+    setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false); setRosterOpen(false); setRemoveConfirmId('');
     if (service?.listPublicRooms) service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   };
 
@@ -242,6 +285,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   }
 
   const isHost = room.hostId === userId;
+  const currentMember = members.find((member) => member.userId === userId);
+  const chatMuted = currentMember?.isMuted === true;
   return <motion.section className="watch-party watch-party--cinematic" aria-label={`Watch party ${room.code}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
     <header className="watch-party__header">
       <div><span className="live-dot" /> {room.isPublic ? 'Public lounge' : 'Private room'} <strong>{room.code}</strong>{isHost && <em>Host</em>}</div>
@@ -258,11 +303,11 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         <header><div><MessageCircle /><strong>Audience chat</strong></div><button className="party-audience-button" type="button" aria-label={rosterOpen ? 'Hide people in this room' : 'Show people in this room'} aria-expanded={rosterOpen} onClick={() => setRosterOpen((open) => !open)}><Users /> {members.length}</button></header>
         {rosterOpen && <section className="party-roster" role="dialog" aria-label="People in this room">
           <header><div><small>Watching now</small><strong>{members.length} {members.length === 1 ? 'person' : 'people'}</strong></div><button type="button" aria-label="Close people list" onClick={() => setRosterOpen(false)}><X /></button></header>
-          <ul>{members.map((member) => <li key={member.userId}><span>{member.nickname.slice(0, 1).toUpperCase()}</span><div><strong>{member.nickname}</strong>{member.userId === userId && <small>You</small>}</div>{member.userId === room.hostId && <em>Host</em>}</li>)}</ul>
+          <ul>{members.map((member) => <li key={member.userId} className={member.isMuted ? 'is-muted' : ''}><span>{member.nickname.slice(0, 1).toUpperCase()}</span><div><strong>{member.nickname}</strong>{member.userId === userId && <small>You</small>}{member.isMuted && <small>Muted</small>}</div>{member.userId === room.hostId ? <em>Host</em> : isHost && (removeConfirmId === member.userId ? <div className="party-roster__confirm"><small>Remove?</small><button type="button" aria-label={`Cancel remove ${member.nickname}`} onClick={() => setRemoveConfirmId('')}>No</button><button type="button" aria-label={`Confirm remove ${member.nickname}`} onClick={() => void removeMember(member)} disabled={moderatingMemberId === member.userId}>Yes</button></div> : <div className="party-roster__actions"><button type="button" aria-label={`${member.isMuted ? 'Unmute' : 'Mute'} ${member.nickname}`} title={member.isMuted ? 'Unmute chat' : 'Mute chat'} onClick={() => void setMemberMuted(member)} disabled={moderatingMemberId === member.userId}>{member.isMuted ? <Volume2 /> : <VolumeX />}</button><button type="button" aria-label={`Remove ${member.nickname}`} title="Remove from room" onClick={() => setRemoveConfirmId(member.userId)}><UserMinus /></button></div>)}</li>)}</ul>
         </section>}
         <div className="party-members" aria-label="People in this room">{members.map((member) => <span key={member.userId} title={member.nickname}>{member.nickname.slice(0, 1).toUpperCase()}</span>)}</div>
         <div className="party-messages" aria-live="polite">{!messages.length && <div className="party-chat__empty"><MessageCircle /><strong>The room is quiet</strong><span>Say hello to everyone watching.</span></div>}{messages.map((item) => <article key={item.id} className={item.userId === userId ? 'mine' : ''}><header><strong>{item.nickname}</strong><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time></header><p>{item.body}</p></article>)}<div ref={messageEnd} /></div>
-        <form className="party-compose" onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Message the room…" /><button type="submit" aria-label="Send message" disabled={!message.trim()}><Send /></button></form>
+        <form className={`party-compose${chatMuted ? ' party-compose--muted' : ''}`} onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder={chatMuted ? 'Chat muted by host' : 'Message the room…'} disabled={chatMuted} /><button type="submit" aria-label="Send message" disabled={chatMuted || !message.trim()}><Send /></button>{chatMuted && <span><VolumeX /> Muted by host</span>}</form>
       </aside>
     </div>
     {pickerOpen && <div className="party-picker-backdrop"><section className="party-picker" role="dialog" aria-modal="true" aria-label="Change watch party title"><header><div><span>Host controls</span><h2>Choose the full title</h2></div><button type="button" aria-label="Close title picker" onClick={() => setPickerOpen(false)}><X /></button></header><form onSubmit={(event) => void searchTitles(event)}><Search /><input autoFocus aria-label="Search watch party titles" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies and TV shows" /><button type="submit" aria-label="Search titles" disabled={searching || !query.trim()}>{searching ? <LoaderCircle className="spin" /> : 'Search'}</button></form><div className="party-picker__results">{results.map((item) => <button type="button" key={`${item.mediaType}-${item.id}`} aria-label={`Choose ${item.title}`} onClick={() => void chooseTitle(item)} disabled={searching}>{imageUrl(item.posterPath, 'w185') ? <img src={imageUrl(item.posterPath, 'w185')!} alt="" /> : <span className="party-picker__poster"><Play /></span>}<span><strong>{item.title}</strong><small>{item.year} · {item.mediaType === 'movie' ? 'Movie' : 'TV show'}</small></span></button>)}</div></section></div>}

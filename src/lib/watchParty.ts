@@ -26,6 +26,7 @@ export interface PartyMember {
   userId: string;
   nickname: string;
   joinedAt: string;
+  isMuted: boolean;
 }
 
 export interface PartyMessage {
@@ -71,6 +72,9 @@ export interface WatchPartyService {
   subscribe(roomId: string, handlers: PartySubscriptionHandlers): () => void;
   updateEpisode(roomId: string, seasonNumber: number, episodeNumber: number): Promise<PartyRoom>;
   leaveRoom(roomId: string, userId: string): Promise<void>;
+  setMemberMuted(roomId: string, userId: string, muted: boolean): Promise<void>;
+  removeMember(roomId: string, userId: string): Promise<void>;
+  getMembershipStatus(roomId: string): Promise<'active' | 'muted' | 'removed'>;
 }
 
 interface RoomRow {
@@ -91,7 +95,7 @@ interface RoomRow {
   is_public: boolean;
   is_official: boolean;
 }
-interface MemberRow { user_id: string; nickname: string; joined_at: string }
+interface MemberRow { user_id: string; nickname: string; joined_at: string; is_muted: boolean }
 interface MessageRow { id: string; room_id: string; user_id: string; nickname: string; body: string; created_at: string }
 interface PublicRoomRow extends RoomRow { audience_count: number }
 
@@ -113,7 +117,7 @@ const mapRoom = (row: RoomRow): PartyRoom => ({
   isOfficial: row.is_official ?? false,
 });
 
-const mapMember = (row: MemberRow): PartyMember => ({ userId: row.user_id, nickname: row.nickname, joinedAt: row.joined_at });
+const mapMember = (row: MemberRow): PartyMember => ({ userId: row.user_id, nickname: row.nickname, joinedAt: row.joined_at, isMuted: row.is_muted ?? false });
 const mapMessage = (row: MessageRow): PartyMessage => ({ id: row.id, roomId: row.room_id, userId: row.user_id, nickname: row.nickname, body: row.body, createdAt: row.created_at });
 const mapPublicRoom = (row: PublicRoomRow): PublicPartyRoom => ({ ...mapRoom(row), audienceCount: Number(row.audience_count ?? 0) });
 
@@ -163,7 +167,7 @@ class SupabaseWatchPartyService implements WatchPartyService {
 
 
   async getMembers(roomId: string) {
-    const { data, error } = await this.client.from('room_members').select('user_id,nickname,joined_at').eq('room_id', roomId).order('joined_at');
+    const { data, error } = await this.client.from('room_members').select('user_id,nickname,joined_at,is_muted').eq('room_id', roomId).order('joined_at');
     if (error) throw new Error(error.message);
     return (data as MemberRow[]).map(mapMember);
   }
@@ -175,8 +179,8 @@ class SupabaseWatchPartyService implements WatchPartyService {
   }
 
   async sendMessage(roomId: string, nickname: string, body: string) {
-    const user = await this.ensureUser();
-    const { data, error } = await this.client.from('chat_messages').insert({ room_id: roomId, user_id: user.id, nickname, body: body.trim() }).select('id,room_id,user_id,nickname,body,created_at').single();
+    await this.ensureUser();
+    const { data, error } = await this.client.rpc('send_watch_room_message', { p_room_id: roomId, p_body: body.trim() }).single();
     if (error || !data) throw new Error(error?.message ?? 'Message failed to send.');
     return mapMessage(data as MessageRow);
   }
@@ -221,6 +225,30 @@ class SupabaseWatchPartyService implements WatchPartyService {
   async leaveRoom(roomId: string) {
     const { error } = await this.client.rpc('leave_watch_room', { p_room_id: roomId });
     if (error) throw new Error(error.message);
+  }
+
+  async setMemberMuted(roomId: string, userId: string, muted: boolean) {
+    const { error } = await this.client.rpc('moderate_watch_room_member', {
+      p_room_id: roomId,
+      p_target_user_id: userId,
+      p_action: muted ? 'mute' : 'unmute',
+    });
+    if (error) throw new Error(error.message);
+  }
+
+  async removeMember(roomId: string, userId: string) {
+    const { error } = await this.client.rpc('moderate_watch_room_member', {
+      p_room_id: roomId,
+      p_target_user_id: userId,
+      p_action: 'kick',
+    });
+    if (error) throw new Error(error.message);
+  }
+
+  async getMembershipStatus(roomId: string) {
+    const { data, error } = await this.client.rpc('watch_room_membership_status', { p_room_id: roomId });
+    if (error) throw new Error(error.message);
+    return data as 'active' | 'muted' | 'removed';
   }
 }
 

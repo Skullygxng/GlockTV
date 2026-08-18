@@ -73,17 +73,13 @@ describe('authorized playback modal', () => {
     expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://video.example/embed/movie/533535');
   });
 
-  it('fullscreens the GlockTV playback wrapper from a visible control', async () => {
+  it('uses the provider as the only fullscreen control', async () => {
     render(<App client={clientFor(movie) as never} playbackConfig={config} />);
     await screen.findByRole('heading', { name: movie.title });
     fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
-    const frame = screen.getByTestId('playback-frame');
-    const requestFullscreen = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(frame, 'requestFullscreen', { configurable: true, value: requestFullscreen });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }));
-
-    expect(requestFullscreen).toHaveBeenCalledOnce();
+    expect(screen.queryByRole('button', { name: 'Enter fullscreen' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Exit fullscreen' })).not.toBeInTheDocument();
   });
 
   it('presents image-led season and episode choices without raw number fields', async () => {
@@ -110,20 +106,6 @@ describe('authorized playback modal', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open server list' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Backup stream/i }));
     expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://backup.example/movie/533535');
-  });
-
-  it('keeps a viewport fullscreen fallback when native fullscreen is rejected', async () => {
-    render(<App client={clientFor(movie) as never} playbackConfig={config} />);
-    await screen.findByRole('heading', { name: movie.title });
-    fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
-    const frame = screen.getByTestId('playback-frame');
-    Object.defineProperty(frame, 'requestFullscreen', { configurable: true, value: vi.fn().mockRejectedValue(new Error('denied')) });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Enter fullscreen' }));
-
-    await screen.findByRole('button', { name: 'Exit fullscreen' });
-    expect(frame).toHaveClass('is-expanded');
-    expect(document.body).toHaveClass('playback-fullscreen-open');
   });
 
   it('restores a saved movie position and provider after a page refresh', async () => {

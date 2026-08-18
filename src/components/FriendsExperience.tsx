@@ -18,6 +18,25 @@ interface FriendsExperienceProps {
 
 const upsertMessage = (messages: PartyMessage[], message: PartyMessage) => messages.some((item) => item.id === message.id) ? messages : [...messages, message];
 
+interface RecentRoom {
+  code: string;
+  titleName: string;
+  wasHost: boolean;
+}
+
+const recentRoomKey = 'glocktv:recent-room:v1';
+
+function readRecentRoom(): RecentRoom | null {
+  try {
+    const value = JSON.parse(localStorage.getItem(recentRoomKey) ?? 'null') as Partial<RecentRoom> | null;
+    return value && typeof value.code === 'string' && typeof value.titleName === 'string'
+      ? { code: value.code, titleName: value.titleName, wasHost: value.wasHost === true }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 export function FriendsExperience({ client, service, selectedTitle, initialRoomCode = '', partyConfig }: FriendsExperienceProps) {
   const [nickname, setNickname] = useState(() => sessionStorage.getItem('glocktv-nickname') ?? '');
   const [roomCode, setRoomCode] = useState(initialRoomCode.toUpperCase());
@@ -34,6 +53,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<MediaItem[]>([]);
   const [searching, setSearching] = useState(false);
+  const [recentRoom, setRecentRoom] = useState<RecentRoom | null>(readRecentRoom);
+  const [leaveConfirm, setLeaveConfirm] = useState(false);
   const messageEnd = useRef<HTMLDivElement>(null);
   const autoJoinAttempted = useRef('');
 
@@ -53,6 +74,12 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     if (!service) return;
     const [nextMembers, nextMessages] = await Promise.all([service.getMembers(nextRoom.id), service.getMessages(nextRoom.id)]);
     setRoom(nextRoom); setUserId(nextUserId); setMembers(nextMembers); setMessages(nextMessages);
+    setLeaveConfirm(false);
+    if (!nextRoom.isOfficial) {
+      const nextRecentRoom = { code: nextRoom.code, titleName: nextRoom.titleName, wasHost: nextRoom.hostId === nextUserId };
+      setRecentRoom(nextRecentRoom);
+      localStorage.setItem(recentRoomKey, JSON.stringify(nextRecentRoom));
+    }
     const url = new URL(window.location.href); url.searchParams.set('room', nextRoom.code); window.history.replaceState({}, '', url);
   }, [service]);
 
@@ -160,7 +187,10 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         titleId: context.details.id, mediaType: context.details.mediaType, titleName: context.details.title,
         backdropPath: context.details.backdropPath, durationSeconds: context.details.runtime ? context.details.runtime * 60 : null,
       });
-      setRoom(nextRoom); setPickerOpen(false); setQuery(''); setResults([]);
+      setRoom(nextRoom);
+      const nextRecentRoom = { code: nextRoom.code, titleName: nextRoom.titleName, wasHost: nextRoom.hostId === userId };
+      setRecentRoom(nextRecentRoom); localStorage.setItem(recentRoomKey, JSON.stringify(nextRecentRoom));
+      setPickerOpen(false); setQuery(''); setResults([]);
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'The room title could not be changed.'); }
     finally { setSearching(false); }
   };
@@ -177,10 +207,10 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     await navigator.clipboard?.writeText(url.toString()); setCopied(true); window.setTimeout(() => setCopied(false), 1400);
   };
 
-  const leaveRoom = async () => {
-    if (service && room) await service.leaveRoom(room.id, userId).catch(() => undefined);
+  const confirmLeaveRoom = async () => {
+    if (service && room && room.hostId !== userId) await service.leaveRoom(room.id, userId).catch(() => undefined);
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
-    setRoom(null); setMembers([]); setMessages([]); setError('');
+    setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false);
     if (service?.listPublicRooms) service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   };
 
@@ -193,6 +223,10 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
       </div>
       <div className="friends-entry">
         <label>Your nickname<input aria-label="Your nickname" maxLength={24} value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="How people see you" /></label>
+        {recentRoom && <section className="resume-room-card" aria-label="Recent watch party">
+          <div><small>{recentRoom.wasHost ? 'Your private room' : 'Recent room'}</small><strong>{recentRoom.titleName}</strong><span>Room {recentRoom.code} · pick up where you left off</span></div>
+          <button type="button" aria-label={`${recentRoom.wasHost ? 'Resume hosting' : 'Rejoin'} ${recentRoom.titleName}`} onClick={() => void joinCode(recentRoom.code)} disabled={busy || !service || !nickname.trim()}><Play fill="currentColor" /> {recentRoom.wasHost ? 'Resume hosting' : 'Rejoin room'}</button>
+        </section>}
         <section className="public-rooms" aria-label="Public rooms">
           <header><div><Radio /><span>Public now</span></div><small>Open to everyone</small></header>
           {publicRooms.length ? publicRooms.map((publicRoom) => <article key={publicRoom.id} className="public-room-card" style={imageUrl(publicRoom.backdropPath, 'w780') ? { '--public-backdrop': `url(${imageUrl(publicRoom.backdropPath, 'w780')})` } as React.CSSProperties : undefined}>
@@ -217,7 +251,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   return <motion.section className="watch-party watch-party--cinematic" aria-label={`Watch party ${room.code}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
     <header className="watch-party__header">
       <div><span className="live-dot" /> {room.isPublic ? 'Public lounge' : 'Private room'} <strong>{room.code}</strong>{isHost && <em>Host</em>}</div>
-      <div className="watch-party__header-actions"><button type="button" onClick={() => void copyInvite()}><Copy /> {copied ? 'Copied' : 'Copy invite'}</button><button type="button" onClick={() => void leaveRoom()}><DoorOpen /> Leave</button></div>
+      <div className="watch-party__header-actions"><button type="button" onClick={() => void copyInvite()}><Copy /> {copied ? 'Copied' : 'Copy invite'}</button>{leaveConfirm ? <div className="leave-room-confirm"><button type="button" aria-label="Stay in room" onClick={() => setLeaveConfirm(false)}>Stay</button><button type="button" aria-label="Confirm leave room" onClick={() => void confirmLeaveRoom()}><DoorOpen /> {isHost ? 'Exit to lobby' : 'Leave room'}</button></div> : <button type="button" onClick={() => setLeaveConfirm(true)}><DoorOpen /> Leave</button>}</div>
     </header>
     <div className="watch-party__layout">
       <section className="party-screen">

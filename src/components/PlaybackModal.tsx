@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Check, ChevronDown, Film, LoaderCircle, Maximize, Minimize, RotateCw, ShieldCheck, X } from 'lucide-react';
+import { Check, ChevronDown, Film, LoaderCircle, RotateCw, ShieldCheck, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import { buildPlaybackUrl, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
 import { parsePlaybackProgressEvent, readPlaybackProgress, savePlaybackProgress } from '../lib/playbackProgress';
@@ -26,10 +26,7 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   const [serverOpen, setServerOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
   const [playerState, setPlayerState] = useState<'loading' | 'loaded' | 'slow'>('loading');
-  const [fullscreen, setFullscreen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const [context, setContext] = useState<TitleContext | null>(null);
-  const playerFrame = useRef<HTMLDivElement>(null);
   const iframe = useRef<HTMLIFrameElement>(null);
   const progressPosition = useRef(initialProgress?.position ?? 0);
   const progressDuration = useRef(initialProgress?.duration);
@@ -80,44 +77,11 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      if (expanded || document.fullscreenElement) setExpanded(false);
-      else onClose();
+      if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [expanded, onClose]);
-
-  useEffect(() => {
-    const updateFullscreen = () => {
-      const active = document.fullscreenElement === playerFrame.current;
-      setFullscreen(active);
-      if (!document.fullscreenElement) setExpanded(false);
-    };
-    document.addEventListener('fullscreenchange', updateFullscreen);
-    return () => document.removeEventListener('fullscreenchange', updateFullscreen);
-  }, []);
-
-  useEffect(() => {
-    document.body.classList.toggle('playback-fullscreen-open', expanded);
-    return () => document.body.classList.remove('playback-fullscreen-open');
-  }, [expanded]);
-
-  const toggleFullscreen = async () => {
-    if (expanded || document.fullscreenElement) {
-      setExpanded(false);
-      if (document.fullscreenElement) await document.exitFullscreen?.();
-      return;
-    }
-    setExpanded(true);
-    const target = playerFrame.current as (HTMLDivElement & { webkitRequestFullscreen?: () => void }) | null;
-    try {
-      if (target?.requestFullscreen) await target.requestFullscreen();
-      else target?.webkitRequestFullscreen?.();
-    } catch {
-      // CSS viewport fullscreen remains active when a browser rejects the native API.
-    }
-  };
+  }, [onClose]);
 
   const retry = () => setPlayerRevision((revision) => revision + 1);
   const selectServer = (nextId: string) => {
@@ -147,13 +111,12 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
           <button type="button" aria-label="Close player" onClick={onClose}><X /></button>
         </div>
       </header>
-      {playbackUrl ? <div className={`playback-frame ${expanded ? 'is-expanded' : ''}`} data-testid="playback-frame" ref={playerFrame}>
+      {playbackUrl ? <div className="playback-frame">
         <iframe ref={iframe} key={`${playbackUrl}-${playerRevision}`} title={`${item.title} playback`} src={playbackUrl}
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
           referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setPlayerState('loaded')} />
         {playerState !== 'loaded' && <div className={`playback-status playback-status--${playerState}`}><LoaderCircle className="spin" /><span>{playerState === 'slow' ? 'Still loading. Try another server.' : `Connecting to ${activeServer?.label ?? 'server'}…`}</span>{playerState === 'slow' && <button type="button" onClick={nextServer}>Next server</button>}</div>}
-        <button type="button" className="playback-fullscreen" aria-label={fullscreen || expanded ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={() => void toggleFullscreen()}>{fullscreen || expanded ? <Minimize /> : <Maximize />}</button>
       </div> : <div className="playback-unconfigured"><Film /><strong>Playback source not connected</strong><p>Add your authorized {item.mediaType === 'movie' ? 'movie' : 'TV'} embed URL template to the GlockTV environment configuration.</p></div>}
       <footer className="playback-modal__footer">
         <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><h2>{item.title}</h2><strong>{item.year} · {item.genres.slice(0, 2).join(' · ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>

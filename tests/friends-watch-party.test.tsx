@@ -90,6 +90,7 @@ describe('Friends watch parties', () => {
   beforeEach(() => {
     window.history.replaceState({}, '', '/');
     sessionStorage.clear();
+    localStorage.clear();
   });
 
   it('replaces Channels with a focused Friends lobby', async () => {
@@ -127,6 +128,28 @@ describe('Friends watch parties', () => {
     expect(screen.getByTitle('Heat full movie')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Play room' })).not.toBeInTheDocument();
     expect(screen.getByText(/Use the player controls/i)).toBeInTheDocument();
+  });
+
+  it('prevents an accidental exit and lets the host return to the same room', async () => {
+    const partyService = makePartyService();
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
+    await screen.findByRole('region', { name: 'Watch party HEAT95' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+    expect(screen.getByRole('region', { name: 'Watch party HEAT95' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stay in room' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm leave room' }));
+    expect(partyService.leaveRoom).not.toHaveBeenCalled();
+    const resume = await screen.findByRole('button', { name: 'Resume hosting Heat' });
+    fireEvent.click(resume);
+
+    await waitFor(() => expect(partyService.joinRoom).toHaveBeenCalledWith('HEAT95', 'Skully'));
+    expect(await screen.findByRole('region', { name: 'Watch party HEAT95' })).toBeInTheDocument();
   });
 
   it('joins a room code and sends a live message', async () => {
@@ -207,6 +230,10 @@ describe('Friends watch parties', () => {
       durationSeconds: 10200,
     }));
     expect(await screen.findByRole('heading', { name: 'The Matrix' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm leave room' }));
+    expect(await screen.findByRole('button', { name: 'Resume hosting The Matrix' })).toBeInTheDocument();
   });
 
   it('explains that the public lounge is synchronized by an automated GlockTV host', async () => {

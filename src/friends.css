@@ -261,6 +261,88 @@
   font-size: 9px;
 }
 
+.resume-room-card {
+  min-height: 92px;
+  padding: 14px 16px;
+  border: 1px solid rgba(166, 61, 246, .42);
+  border-radius: 11px;
+  background: linear-gradient(105deg, rgba(113, 24, 180, .2), rgba(15, 11, 20, .92));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.resume-room-card > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.resume-room-card small {
+  color: #b454ff;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.resume-room-card strong {
+  overflow: hidden;
+  color: #fff;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-room-card span {
+  color: #8e8795;
+  font-size: 9px;
+}
+
+.resume-room-card > button,
+.leave-room-confirm button {
+  min-height: 36px;
+  border: 1px solid #8430bd;
+  border-radius: 8px;
+  background: #7518d4;
+  padding: 0 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.resume-room-card > button svg,
+.leave-room-confirm button svg {
+  width: 14px;
+}
+
+.resume-room-card > button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.leave-room-confirm {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.leave-room-confirm button:first-child {
+  border-color: #39333f;
+  background: #121015;
+  color: #c6becb;
+}
+
+.leave-room-confirm button:last-child {
+  border-color: #8c3544;
+  background: #5d1825;
+}
+
 @media (max-width: 700px) {
   .party-title-actions { align-items: flex-end; }
   .party-title-actions > button { font-size: 0; width: 34px; padding: 0; }
@@ -270,4 +352,7 @@
   .party-picker-backdrop { padding: 0; align-items: end; }
   .party-picker { max-height: 88svh; border-radius: 14px 14px 0 0; }
   .party-picker__results { grid-template-columns: 1fr; }
+  .resume-room-card { align-items: stretch; flex-direction: column; }
+  .resume-room-card > button { width: 100%; }
+  .leave-room-confirm button { min-width: 38px; padding: 0 9px; }
 }

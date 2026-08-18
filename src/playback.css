@@ -105,35 +105,6 @@
 .playback-status svg { width: 14px; color: #a83bff; }
 .playback-status button { border: 0; border-radius: 999px; background: #7f1ce7; padding: 6px 9px; color: #fff; font-size: 8px; font-weight: 700; }
 
-.playback-fullscreen {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  z-index: 3;
-  width: 40px;
-  height: 40px;
-  border: 1px solid rgba(255, 255, 255, .25);
-  border-radius: 50%;
-  background: rgba(5, 5, 8, .72);
-  color: #fff;
-  backdrop-filter: blur(12px);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-}
-
-.playback-fullscreen svg { width: 18px; }
-
-.playback-frame:fullscreen {
-  width: 100vw;
-  height: 100vh;
-  aspect-ratio: auto;
-  background: #000;
-}
-
-.playback-frame.is-expanded { position: fixed; inset: 0; z-index: 10000; width: 100vw; height: 100dvh; aspect-ratio: auto; background: #000; }
-.playback-fullscreen-open { overflow: hidden !important; }
-
 .playback-unconfigured {
   min-height: min(58vh, 620px);
   display: grid;

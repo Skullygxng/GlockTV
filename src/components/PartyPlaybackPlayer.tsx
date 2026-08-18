@@ -106,13 +106,14 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   const serverId = !isHost && serverOverride ? serverOverride : roomServerId;
   const activeServer = servers.find((server) => server.id === serverId) ?? servers[0];
   const commandMode = config.servers?.length ? activeServer?.commandMode ?? 'none' : 'vidzen';
-  const startAt = commandMode === 'none' ? roomPosition(room) : undefined;
+  const startAt = commandMode === 'vidzen' ? undefined : roomPosition(room);
   const playbackUrl = useMemo(() => buildPartyPlaybackUrl(room, config, serverId, startAt), [config, room.episodeNumber, room.mediaType, room.playbackPosition, room.playbackUpdatedAt, room.seasonNumber, room.titleId, serverId]);
   const shouldMountPlayer = isHost || room.isOfficial || room.playbackState === 'playing' || (!isHost && guestActivated && commandMode === 'cinesrc');
 
   useEffect(() => {
     lastPlayerTime.current = 0;
     lastHealthReport.current = { at: 0, status: '', offset: Number.NaN };
+    setLoaded(false);
   }, [room.episodeNumber, room.mediaType, room.seasonNumber, room.titleId]);
 
   const send = (command: string, values: Record<string, unknown> = {}) => {

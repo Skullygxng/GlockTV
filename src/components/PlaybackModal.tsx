@@ -96,6 +96,17 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
     const index = Math.max(0, servers.findIndex((server) => server.id === serverId));
     selectServer(servers[(index + 1) % servers.length].id);
   };
+  const selectEpisode = (nextSeason: number, nextEpisode: number) => {
+    const saved = readPlaybackProgress(item, nextSeason, nextEpisode);
+    const savedServer = servers.find((server) => server.id === saved?.serverId)?.id;
+    setSeason(nextSeason);
+    setEpisode(nextEpisode);
+    setServerId(savedServer ?? servers[0]?.id ?? '');
+    setResumeAt(saved?.position ?? 0);
+    progressPosition.current = saved?.position ?? 0;
+    progressDuration.current = saved?.duration;
+    setPlayerRevision((revision) => revision + 1);
+  };
   const recommendations = context?.recommendations ?? [];
 
   return <motion.div className="overlay playback-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
@@ -122,7 +133,7 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
         <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><h2>{item.title}</h2><strong>{item.year} · {item.genres.slice(0, 2).join(' · ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>
         <small><ShieldCheck /> Pop-up windows are blocked. Ads drawn inside a third-party player cannot be removed by GlockTV.</small>
       </footer>
-      {item.mediaType === 'tv' && <EpisodeBrowser client={client} seriesId={item.id} activeSeason={season} activeEpisode={episode} onSelect={(nextSeason, nextEpisode) => { setSeason(nextSeason); setEpisode(nextEpisode); setPlayerRevision((revision) => revision + 1); }} />}
+      {item.mediaType === 'tv' && <EpisodeBrowser client={client} seriesId={item.id} activeSeason={season} activeEpisode={episode} onSelect={selectEpisode} />}
       {!!recommendations.length && <section className="playback-recommendations" aria-label="More like this"><header><span>Keep watching</span><h3>More like this</h3></header><div>{recommendations.slice(0, 6).map((recommendation) => <button type="button" key={`${recommendation.mediaType}-${recommendation.id}`} onClick={() => onSelect?.(recommendation)}>{imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500') ? <img src={imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500')!} alt="" /> : <span className="playback-recommendations__fallback"><Film /></span>}<strong>{recommendation.title}</strong><small>{recommendation.year} · ★ {recommendation.rating.toFixed(1)}</small></button>)}</div></section>}
     </motion.section>
   </motion.div>;

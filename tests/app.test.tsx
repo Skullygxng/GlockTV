@@ -62,4 +62,24 @@ describe('GlockTV app', () => {
     await waitFor(() => expect(screen.getByText('Your List')).toBeInTheDocument());
     expect(screen.getByRole('heading', { name: 'Heat' })).toBeInTheDocument();
   });
+
+  it('lets mobile viewers search titles from the discovery controls', async () => {
+    const exactMatch = { ...item, id: 1399, mediaType: 'tv' as const, title: 'Game of Thrones' };
+    vi.mocked(fakeClient.search).mockResolvedValueOnce([
+      { ...item, id: 94997, mediaType: 'tv' as const, title: 'House of the Dragon' },
+      exactMatch,
+    ]);
+    render(<App client={fakeClient} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search titles' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search movies and TV shows' }), {
+      target: { value: 'Game of Thrones' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run search' }));
+
+    await waitFor(() => expect(fakeClient.search).toHaveBeenCalledWith('Game of Thrones'));
+    expect(screen.queryByRole('searchbox', { name: 'Search movies and TV shows' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Game of Thrones' })).toBeInTheDocument();
+  });
 });

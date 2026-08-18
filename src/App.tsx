@@ -75,6 +75,7 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [session, dispatch] = useReducer(sessionReducer, undefined, loadSession);
 
   const contextCache = useRef(new Map<string, TitleContext>());
@@ -227,9 +228,15 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
 
   const search = async (event: FormEvent) => {
     event.preventDefault();
-    if (!query.trim()) return;
+    const term = query.trim();
+    if (!term) return;
     setLoading(true); setView('discover'); setActiveIndex(0);
-    try { setItems(await api.search(query)); setError(''); }
+    try {
+      const results = await api.search(term);
+      const exactTitle = term.toLocaleLowerCase();
+      setItems([...results].sort((left, right) => Number(right.title.toLocaleLowerCase() === exactTitle) - Number(left.title.toLocaleLowerCase() === exactTitle)));
+      setError(''); setMobileSearchOpen(false);
+    }
     catch { setError('Search is unavailable right now.'); }
     finally { setLoading(false); }
   };
@@ -273,9 +280,17 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
 
       <main className={view === 'friends' ? 'friends-stage' : 'feed-stage'} onWheel={view === 'friends' ? undefined : handleWheel} onTouchStart={view === 'friends' ? undefined : handleTouchStart} onTouchEnd={view === 'friends' ? undefined : handleTouchEnd}>
         {view === 'friends' ? <Suspense fallback={<div className="state-panel"><LoaderCircle className="spin" /><strong>Opening Friends</strong><span>Getting the room ready.</span></div>}><FriendsRoute client={api} service={partyService} selectedTitle={current ?? null} trailerKey={previewTrailerKey} initialRoomCode={initialRoomCode} partyPlaybackConfig={partyPlaybackConfig} /></Suspense> : <>
-        <div className="mobile-tabs">
-          {(['both', 'movies', 'tv'] as const).map((type) => <button key={type} className={filters.contentType === type ? 'active' : ''} onClick={() => { const next = { ...filters, contentType: type }; setDraftFilters(next); setFilters(next); void api.discover(next).then(setItems); }}>{type === 'both' ? 'All' : type === 'tv' ? 'TV Shows' : 'Movies'}</button>)}
-          <button aria-label="Open mobile filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><Filter /></button>
+        <div className={`mobile-tabs ${mobileSearchOpen ? 'mobile-tabs--search' : ''}`}>
+          {mobileSearchOpen ? <form className="mobile-searchbar" role="search" onSubmit={search}>
+            <Search aria-hidden="true" />
+            <input autoFocus type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search titles..." aria-label="Search movies and TV shows" />
+            <button type="submit" aria-label="Run search"><Search /></button>
+            <button type="button" aria-label="Close search" onClick={() => setMobileSearchOpen(false)}><X /></button>
+          </form> : <>
+            {(['both', 'movies', 'tv'] as const).map((type) => <button key={type} className={filters.contentType === type ? 'active' : ''} onClick={() => { const next = { ...filters, contentType: type }; setDraftFilters(next); setFilters(next); void api.discover(next).then(setItems); }}>{type === 'both' ? 'All' : type === 'tv' ? 'TV Shows' : 'Movies'}</button>)}
+            <button aria-label="Search titles" onClick={() => setMobileSearchOpen(true)}><Search /></button>
+            <button aria-label="Open mobile filters" onClick={() => { setDraftFilters(filters); setFiltersOpen(true); }}><Filter /></button>
+          </>}
         </div>
         {view === 'list' && <div className="view-title"><span>Saved for this session</span><h2>Your List</h2></div>}
         {error && <div className="notice" role="alert">{error}</div>}

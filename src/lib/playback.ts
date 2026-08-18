@@ -54,7 +54,8 @@ export function buildPlaybackUrl(
   try {
     const url = new URL(resolved);
     if (url.protocol !== 'https:') return null;
-    if (Number.isFinite(selection.startAt) && (selection.startAt ?? 0) > 0) {
+    const hasExplicitCineSrcStart = server?.commandMode === 'cinesrc' && selection.startAt === 0;
+    if (Number.isFinite(selection.startAt) && ((selection.startAt ?? 0) > 0 || hasExplicitCineSrcStart)) {
       url.searchParams.set(server?.startTimeParam ?? 'startAt', String(Math.floor(selection.startAt!)));
     }
     return url.toString();

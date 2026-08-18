@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
@@ -138,5 +138,32 @@ describe('authorized playback modal', () => {
 
     const saved = JSON.parse(window.localStorage.getItem('glocktv:playback-progress:v1') ?? '{}');
     expect(saved['movie:533535']).toMatchObject({ position: 187, duration: 7680, serverId: 'cinesrc' });
+  });
+
+  it('never carries the previous episode timestamp into a newly selected episode', async () => {
+    window.localStorage.setItem('glocktv:playback-progress:v1', JSON.stringify({
+      'tv:1396:s1:e1': { position: 321, duration: 3480, serverId: 'cinesrc', updatedAt: '2026-08-18T12:00:00.000Z' },
+    }));
+    render(<App client={clientFor(series) as never} playbackConfig={cineSrcConfig} />);
+    await screen.findByRole('heading', { name: series.title });
+    fireEvent.click(screen.getByRole('button', { name: 'Watch episode' }));
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', expect.stringContaining('t=321'));
+
+    const observedEpisodeUrls: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLIFrameElement && node.src.includes('s=1') && node.src.includes('e=2')) observedEpisodeUrls.push(node.src);
+        }
+      }
+    });
+    observer.observe(screen.getByRole('dialog', { name: 'TV player' }), { childList: true, subtree: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Play episode 2 Cat's in the Bag/i }));
+    await waitFor(() => expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', expect.stringContaining('e=2')));
+    observer.disconnect();
+
+    expect(observedEpisodeUrls).not.toEqual(expect.arrayContaining([expect.stringContaining('t=321')]));
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', expect.stringContaining('t=0'));
   });
 });

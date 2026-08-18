@@ -41,6 +41,22 @@ describe('full-title party playback', () => {
     expect(buildPartyPlaybackUrl({ ...room, mediaType: 'tv', titleId: 1396, seasonNumber: 3, episodeNumber: 7 }, config)).toBe('https://party.example/tv/1396/3/7');
   });
 
+  it('pins a newly selected CineSrc episode to the reset room clock', () => {
+    const nextEpisode = {
+      ...room,
+      mediaType: 'tv' as const,
+      titleId: 1396,
+      seasonNumber: 1,
+      episodeNumber: 2,
+      playbackState: 'paused' as const,
+      playbackPosition: 0,
+      playbackUpdatedAt: '2026-08-18T12:00:00.000Z',
+      serverId: 'cinesrc',
+    };
+
+    expect(buildPartyPlaybackUrl(nextEpisode, cineSrcConfig, 'cinesrc', 0)).toContain('t=0');
+  });
+
   it('parses documented player events defensively', () => {
     expect(parsePartyPlayerEvent(JSON.stringify({ type: 'PLAYER_EVENT', data: { event: 'pause', currentTime: 55 } }))).toEqual({ event: 'pause', currentTime: 55 });
     expect(parsePartyPlayerEvent({ type: 'not-a-player', data: {} })).toBeNull();

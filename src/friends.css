@@ -356,6 +356,67 @@
   position: relative;
 }
 
+.party-messages-shell {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.party-messages-shell > .party-messages {
+  height: 100%;
+}
+
+@media (min-width: 701px) {
+  .watch-party--cinematic .party-chat {
+    height: 720px;
+    align-self: start;
+    overflow: hidden;
+  }
+}
+
+.party-chat-latest {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 1px solid #55326c;
+  border-radius: 999px;
+  background: rgba(19, 14, 24, .96);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .4), 0 0 0 1px rgba(168, 57, 240, .06) inset;
+  color: #f5eff8;
+  display: grid;
+  grid-template-columns: 6px auto 13px;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+
+.party-chat-latest:hover,
+.party-chat-latest:focus-visible {
+  border-color: #9d43d5;
+  background: rgba(28, 18, 35, .98);
+  outline: none;
+}
+
+.party-chat-latest strong {
+  color: #ca67ff;
+  font-size: 7px;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+
+.party-chat-latest > svg {
+  width: 12px;
+  color: #ba4ef6;
+}
+
+.party-chat-latest__pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #b53eff;
+  box-shadow: 0 0 10px rgba(181, 62, 255, .8);
+}
+
 .party-chat > header .party-audience-button {
   min-width: 42px;
   height: 30px;

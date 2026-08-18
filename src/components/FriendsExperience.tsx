@@ -1,6 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Ban, Copy, Crown, DoorOpen, Flag, LoaderCircle, LockKeyhole, Mail, MessageCircle, Play, Radio, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, UserCheck, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
+import { Ban, ChevronDown, Copy, Crown, DoorOpen, Flag, LoaderCircle, LockKeyhole, Mail, MessageCircle, Play, Radio, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, UserCheck, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import type { TmdbClient } from '../lib/tmdb';
 import type { BannedPartyMember, PartyAccount, PartyMember, PartyMessage, PartyPresence, PartyRoom, PlaybackState, PublicPartyRoom, WatchPartyService } from '../lib/watchParty';
@@ -56,6 +56,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [members, setMembers] = useState<PartyMember[]>([]);
   const [messages, setMessages] = useState<PartyMessage[]>([]);
   const [message, setMessage] = useState('');
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
@@ -79,7 +80,9 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [account, setAccount] = useState<PartyAccount | null>(null);
   const [accountEmail, setAccountEmail] = useState('');
   const [accountStatus, setAccountStatus] = useState('');
-  const messageEnd = useRef<HTMLDivElement>(null);
+  const messageList = useRef<HTMLDivElement>(null);
+  const chatAtBottom = useRef(true);
+  const previousMessageCount = useRef(0);
   const presence = useRef<PartyPresence>({ syncStatus: 'connecting', syncOffsetSeconds: null, serverId: null });
   const activeRoomId = useRef('');
 
@@ -126,6 +129,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     const [nextMembers, nextMessages, nextBlocked] = await Promise.all([
       service.getMembers(nextRoom.id), service.getMessages(nextRoom.id), service.getBlockedUsers?.() ?? Promise.resolve([]),
     ]);
+    chatAtBottom.current = true; previousMessageCount.current = 0; setUnreadMessages(0);
     setRoom(nextRoom); setUserId(nextUserId); setMembers(nextMembers); setBlockedUsers(nextBlocked);
     setMessages(nextMessages.filter((item) => !nextBlocked.includes(item.userId)));
     setLeaveConfirm(false); setRosterOpen(false);
@@ -191,7 +195,34 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     };
   }, [exitRemovedRoom, refreshSnapshot, room?.code, room?.id, room?.isOfficial, service]);
 
-  useEffect(() => { messageEnd.current?.scrollIntoView?.({ behavior: 'smooth' }); }, [messages.length]);
+  useEffect(() => {
+    const addedMessages = Math.max(0, messages.length - previousMessageCount.current);
+    previousMessageCount.current = messages.length;
+    if (!messages.length) { setUnreadMessages(0); return; }
+    const latestMessage = messages[messages.length - 1];
+    if (chatAtBottom.current || latestMessage.userId === userId) {
+      setUnreadMessages(0);
+      const list = messageList.current;
+      if (list) list.scrollTop = list.scrollHeight;
+    } else if (addedMessages) {
+      setUnreadMessages((count) => count + addedMessages);
+    }
+  }, [messages.length, userId]);
+
+  const handleChatScroll = () => {
+    const list = messageList.current;
+    if (!list) return;
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight <= 48;
+    chatAtBottom.current = atBottom;
+    if (atBottom) setUnreadMessages(0);
+  };
+
+  const jumpToLatestMessage = () => {
+    chatAtBottom.current = true;
+    setUnreadMessages(0);
+    const list = messageList.current;
+    if (list) list.scrollTop = list.scrollHeight;
+  };
 
   const rememberNickname = () => sessionStorage.setItem('glocktv-nickname', nickname.trim());
 
@@ -444,6 +475,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const isHost = room.hostId === userId;
   const currentMember = members.find((member) => member.userId === userId);
   const chatMuted = currentMember?.isMuted === true;
+  const visibleMessages = messages.filter((item) => !blockedUsers.includes(item.userId));
+  const latestVisibleMessage = visibleMessages[visibleMessages.length - 1];
   return <motion.section className="watch-party watch-party--cinematic" aria-label={`Watch party ${room.code}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
     <header className="watch-party__header">
       <div><span className="live-dot" /> {room.isPublic ? 'Public lounge' : 'Private room'} <strong>{room.code}</strong>{isHost && <em>Host</em>}</div>
@@ -461,7 +494,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         {resyncNotice && <p className="party-notice" role="status">{resyncNotice}</p>}{error && <p className="friends-error" role="alert">{error}</p>}
       </section>
       <aside className="party-chat" aria-label="Audience chat">
-        <header><div><MessageCircle /><strong>Audience chat</strong></div><button className="party-audience-button" type="button" aria-label={rosterOpen ? 'Hide people in this room' : 'Show people in this room'} aria-expanded={rosterOpen} onClick={() => setRosterOpen((open) => !open)}><Users /> {members.length}</button></header>
+        <header><div><MessageCircle /><strong>Audience chat</strong></div>{unreadMessages > 0 && latestVisibleMessage && <button className="party-chat-latest" type="button" aria-label="Jump to latest message" title={`${latestVisibleMessage.nickname}: ${latestVisibleMessage.body}`} onClick={jumpToLatestMessage}><span className="party-chat-latest__pulse" /><strong>{unreadMessages} new</strong><ChevronDown /></button>}<button className="party-audience-button" type="button" aria-label={rosterOpen ? 'Hide people in this room' : 'Show people in this room'} aria-expanded={rosterOpen} onClick={() => setRosterOpen((open) => !open)}><Users /> {members.length}</button></header>
         {controlsOpen && isHost && <section className="party-controls" role="dialog" aria-label="Room control panel">
           <header><div><Settings /><strong>Room controls</strong></div><button type="button" aria-label="Close room controls" onClick={() => setControlsOpen(false)}><X /></button></header>
           <button type="button" aria-label={room.isLocked ? 'Unlock new joins' : 'Lock new joins'} onClick={() => void changeRoomControls(!room.isLocked, room.slowModeSeconds ?? 0)}>{room.isLocked ? <LockKeyhole /> : <ShieldCheck />}<span><strong>{room.isLocked ? 'Room locked' : 'Lock new joins'}</strong><small>{room.isLocked ? 'Only existing members can return' : 'Stop anyone new from entering'}</small></span></button>
@@ -489,7 +522,9 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
           </li>)}</ul>
         </section>}
         <div className="party-members" aria-label="People in this room">{members.map((member) => <span key={member.userId} title={member.nickname}>{member.nickname.slice(0, 1).toUpperCase()}</span>)}</div>
-        <div className="party-messages" aria-live="polite">{!messages.filter((item) => !blockedUsers.includes(item.userId)).length && <div className="party-chat__empty"><MessageCircle /><strong>The room is quiet</strong><span>Say hello to everyone watching.</span></div>}{messages.filter((item) => !blockedUsers.includes(item.userId)).map((item) => <article key={item.id} className={item.userId === userId ? 'mine' : ''}><header><strong>{item.nickname}</strong><span><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>{item.userId !== userId && <button type="button" aria-label={`Report message from ${item.nickname}`} title="Report privately" onClick={() => void reportMessage(item)}><Flag /></button>}</span></header><p>{item.body}</p></article>)}<div ref={messageEnd} /></div>
+        <div className="party-messages-shell">
+          <div ref={messageList} className="party-messages" role="log" aria-label="Chat messages" aria-live="polite" onScroll={handleChatScroll}>{!visibleMessages.length && <div className="party-chat__empty"><MessageCircle /><strong>The room is quiet</strong><span>Say hello to everyone watching.</span></div>}{visibleMessages.map((item) => <article key={item.id} className={item.userId === userId ? 'mine' : ''}><header><strong>{item.nickname}</strong><span><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>{item.userId !== userId && <button type="button" aria-label={`Report message from ${item.nickname}`} title="Report privately" onClick={() => void reportMessage(item)}><Flag /></button>}</span></header><p>{item.body}</p></article>)}</div>
+        </div>
         <form className={`party-compose${chatMuted ? ' party-compose--muted' : ''}`} onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder={chatMuted ? 'Chat muted by host' : room.slowModeSeconds ? `Slow mode · ${room.slowModeSeconds}s` : 'Message the room…'} disabled={chatMuted} /><button type="submit" aria-label="Send message" disabled={chatMuted || !message.trim()}><Send /></button>{chatMuted && <span><VolumeX /> Muted by host</span>}{room.isOfficial && !chatMuted && <span><ShieldCheck /> Public chat blocks spam and links</span>}</form>
       </aside>
     </div>

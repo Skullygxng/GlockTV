@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
@@ -187,6 +187,42 @@ describe('Friends watch parties', () => {
 
     await waitFor(() => expect(partyService.sendMessage).toHaveBeenCalledWith('room-1', 'Guest', 'Ready?'));
     expect(await screen.findByText('Ready?')).toBeInTheDocument();
+  });
+
+  it('notifies readers about new chat and jumps back to the latest message', async () => {
+    const partyService = makePartyService();
+    let onMessage: ((message: { id: string; roomId: string; userId: string; nickname: string; body: string; createdAt: string }) => void) | undefined;
+    partyService.subscribe.mockImplementation((_roomId, handlers) => {
+      onMessage = handlers.onMessage;
+      return () => undefined;
+    });
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
+
+    const chat = await screen.findByRole('log', { name: 'Chat messages' });
+    await waitFor(() => expect(partyService.subscribe).toHaveBeenCalledWith('room-1', expect.any(Object)));
+    Object.defineProperties(chat, {
+      scrollHeight: { configurable: true, value: 900 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 120, writable: true },
+    });
+    fireEvent.scroll(chat);
+    act(() => onMessage?.({
+      id: 'message-2', roomId: 'room-1', userId: 'user-2', nickname: 'Date Night', body: 'Pick the next movie?', createdAt: '2026-08-11T00:02:00.000Z',
+    }));
+
+    const jump = await screen.findByRole('button', { name: 'Jump to latest message' });
+    expect(jump).toHaveTextContent('1 new');
+    expect(jump).toHaveAttribute('title', 'Date Night: Pick the next movie?');
+    expect(screen.getByText('Pick the next movie?')).toBeInTheDocument();
+
+    fireEvent.click(jump);
+
+    expect(chat.scrollTop).toBe(900);
+    expect(screen.queryByRole('button', { name: 'Jump to latest message' })).not.toBeInTheDocument();
   });
 
   it('waits for an explicit join click when opening an invite link', async () => {

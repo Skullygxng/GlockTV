@@ -6,7 +6,7 @@ import type { PartyRoom } from '../src/lib/watchParty';
 const room: PartyRoom = {
   id: 'room-1', code: 'HEAT95', hostId: 'host-1', titleId: 1, mediaType: 'movie',
   titleName: 'Heat', trailerKey: 'heat-trailer', playbackState: 'paused', playbackPosition: 42,
-  playbackUpdatedAt: new Date().toISOString(),
+  playbackUpdatedAt: new Date().toISOString(), serverId: 'cinesrc', isLocked: false, slowModeSeconds: 0,
 };
 
 function makePlayer() {

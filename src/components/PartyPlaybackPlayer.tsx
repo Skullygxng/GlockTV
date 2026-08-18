@@ -82,15 +82,28 @@ function roomPosition(room: PartyRoom) {
   return room.isOfficial && room.durationSeconds ? position % room.durationSeconds : position;
 }
 
-export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { room: PartyRoom; config: PartyPlaybackConfig; isHost: boolean; onHostCommand: (state: PlaybackState, position: number) => void }) {
+interface PartyPlaybackPlayerProps {
+  room: PartyRoom;
+  config: PartyPlaybackConfig;
+  isHost: boolean;
+  onHostCommand: (state: PlaybackState, position: number) => void;
+  onHostServerChange?: (serverId: string) => void;
+  onSyncHealth?: (health: { status: 'connecting' | 'synced' | 'drifting' | 'limited'; offsetSeconds: number | null; serverId: string }) => void;
+  resyncToken?: number;
+}
+
+export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHostServerChange, onSyncHealth, resyncToken = 0 }: PartyPlaybackPlayerProps) {
   const iframe = useRef<HTMLIFrameElement>(null);
   const lastPlayerTime = useRef(0);
+  const lastHealthReport = useRef({ at: 0, status: '', offset: Number.NaN });
   const [loaded, setLoaded] = useState(false);
   const [guestActivated, setGuestActivated] = useState(false);
   const [guestUnlocked, setGuestUnlocked] = useState(false);
   const servers = useMemo(() => getPlaybackServers(config), [config]);
-  const [serverId, setServerId] = useState(() => servers[0]?.id ?? '');
+  const [serverOverride, setServerOverride] = useState('');
   const [serverOpen, setServerOpen] = useState(false);
+  const roomServerId = servers.some((server) => server.id === room.serverId) ? room.serverId : servers[0]?.id ?? '';
+  const serverId = !isHost && serverOverride ? serverOverride : roomServerId;
   const activeServer = servers.find((server) => server.id === serverId) ?? servers[0];
   const commandMode = config.servers?.length ? activeServer?.commandMode ?? 'none' : 'vidzen';
   const startAt = commandMode === 'none' ? roomPosition(room) : undefined;
@@ -127,6 +140,21 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
     send(room.playbackState === 'playing' ? 'play' : 'pause');
   };
 
+  const reportSyncHealth = (currentTime: number) => {
+    if (!onSyncHealth) return;
+    if (commandMode === 'none') {
+      onSyncHealth({ status: 'limited', offsetSeconds: null, serverId });
+      return;
+    }
+    const offsetSeconds = currentTime - roomPosition(room);
+    const status = Math.abs(offsetSeconds) <= 2 ? 'synced' : 'drifting';
+    const now = Date.now();
+    const previous = lastHealthReport.current;
+    if (previous.status === status && Math.abs(previous.offset - offsetSeconds) < 1 && now - previous.at < 5000) return;
+    lastHealthReport.current = { at: now, status, offset: offsetSeconds };
+    onSyncHealth({ status, offsetSeconds, serverId });
+  };
+
   useEffect(() => {
     if (!shouldMountPlayer) setLoaded(false);
   }, [shouldMountPlayer]);
@@ -139,6 +167,10 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
   }, [commandMode, loaded, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
 
   useEffect(() => {
+    if (resyncToken > 0) syncPlayer();
+  }, [resyncToken]);
+
+  useEffect(() => {
     const onMessage = (event: MessageEvent) => {
       if (event.source !== iframe.current?.contentWindow) return;
       if (commandMode === 'cinesrc' && event.origin !== 'https://cinesrc.st') return;
@@ -146,6 +178,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
       if (!playerEvent) return;
       if (playerEvent.event === 'ready') { syncPlayer(); return; }
       if (playerEvent.currentTime > 0) lastPlayerTime.current = playerEvent.currentTime;
+      if (playerEvent.event === 'timeupdate') reportSyncHealth(playerEvent.currentTime);
       if (!isHost) {
         if (!guestActivated || playerEvent.event === 'timeupdate') return;
         const effectiveTime = playerEvent.currentTime || lastPlayerTime.current;
@@ -168,7 +201,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [commandMode, guestActivated, isHost, onHostCommand, room.playbackPosition, room.playbackState, room.playbackUpdatedAt]);
+  }, [commandMode, guestActivated, isHost, onHostCommand, onSyncHealth, room.playbackPosition, room.playbackState, room.playbackUpdatedAt, serverId]);
 
   useEffect(() => {
     if (!guestUnlocked) return;
@@ -186,6 +219,16 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
     send('mute', { muted: false });
     send('volume', { level: 1 });
     syncPlayer();
+    onSyncHealth?.({ status: commandMode === 'none' ? 'limited' : 'connecting', offsetSeconds: null, serverId });
+  };
+
+  const chooseServer = (nextServerId: string) => {
+    if (isHost) onHostServerChange?.(nextServerId);
+    else setServerOverride(nextServerId === roomServerId ? '' : nextServerId);
+    setServerOpen(false);
+    setLoaded(false);
+    setGuestActivated(false);
+    setGuestUnlocked(false);
   };
 
   if (!playbackUrl) return <div className="party-player-missing"><strong>Friends playback is not connected</strong><span>Add the authorized party embed templates to the environment.</span></div>;
@@ -202,8 +245,8 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand }: { r
         : <button type="button" aria-label="Join playback" onClick={activateGuest}><strong>Join playback</strong><small>One tap unlocks video and sound in this browser</small></button>}
     </div>}
     <div className="party-server-picker">
-      <button type="button" aria-label="Open room server list" aria-expanded={serverOpen} onClick={() => setServerOpen((open) => !open)}><Server /><span>{activeServer?.label ?? 'Server'}</span><ChevronDown /></button>
-      {serverOpen && <div role="menu">{servers.map((server) => <button type="button" role="menuitem" key={server.id} className={server.id === serverId ? 'active' : ''} onClick={() => { setServerId(server.id); setServerOpen(false); setLoaded(false); setGuestActivated(false); setGuestUnlocked(false); }}><span><strong>{server.label}</strong><small>{server.description}</small></span>{server.id === serverId && <Check />}</button>)}</div>}
+      <button type="button" aria-label="Open room server list" aria-expanded={serverOpen} onClick={() => setServerOpen((open) => !open)}><Server /><span>{activeServer?.label ?? 'Server'}{serverOverride && <small>Personal fallback</small>}</span><ChevronDown /></button>
+      {serverOpen && <div role="menu">{!isHost && serverOverride && <button type="button" onClick={() => chooseServer(roomServerId)} aria-label="Use room server"><span><strong>Use room server</strong><small>Follow the host's provider choice</small></span></button>}{servers.map((server) => <button type="button" role="menuitem" key={server.id} className={server.id === serverId ? 'active' : ''} onClick={() => chooseServer(server.id)}><span><strong>{server.label}</strong><small>{isHost ? 'Sets the provider for the room' : server.id === roomServerId ? 'Room choice' : server.description}</small></span>{server.id === serverId && <Check />}</button>)}</div>}
     </div>
   </div>;
 }

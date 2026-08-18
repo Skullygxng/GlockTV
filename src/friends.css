@@ -589,7 +589,65 @@
   color: #a747db;
 }
 
+.friends-identity-row { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px }
+.friends-identity-row>label { display:grid;gap:8px;color:#8d8692;font-size:8px;font-weight:800;letter-spacing:.13em;text-transform:uppercase }
+.friends-identity-row>button,.friends-account button { min-height:44px;border:1px solid #3a3041;border-radius:8px;background:#141117;color:#d8d0dd;padding:0 12px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:9px;font-weight:750;cursor:pointer }
+.friends-identity-row>button:hover,.friends-account button:hover { border-color:#7b36a7;color:#fff }
+.friends-identity-row svg,.friends-account svg { width:14px }
+.friends-account { padding:15px;border:1px solid #42304f;border-radius:12px;background:linear-gradient(135deg,rgba(123,31,195,.11),transparent 55%),#0d0b10;display:grid;gap:10px }
+.friends-account>header { display:flex;align-items:center;justify-content:space-between }
+.friends-account>header>div { display:flex;align-items:center;gap:7px;color:#bf5bff;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:.1em }
+.friends-account>header>button { min-height:30px;width:30px;padding:0;border-radius:50% }
+.friends-account>strong { color:#f7f2fa;font-size:13px }
+.friends-account>p { margin:0;color:#8f8795;font-size:9px;line-height:1.55 }
+.friends-account>div:last-of-type { display:flex;flex-wrap:wrap;gap:8px }
+.friends-account>div:last-of-type button:first-child { border-color:#8737b9;background:#6815a7;color:#fff }
+.friends-account>small { color:#c16afa;font-size:8px }
+
+.party-controls { position:absolute;z-index:14;top:42px;right:10px;width:min(320px,calc(100% - 20px));max-height:min(520px,calc(100% - 65px));overflow:auto;padding:8px;border:1px solid #493355;border-radius:13px;background:rgba(12,9,15,.98);box-shadow:0 24px 75px rgba(0,0,0,.76);backdrop-filter:blur(20px) }
+.party-controls>header { min-height:48px;padding:0 5px 7px 8px;border-bottom:1px solid #29212f;display:flex;align-items:center;justify-content:space-between }
+.party-controls>header>div { display:flex;align-items:center;gap:8px }
+.party-controls>header svg { width:14px;color:#b744ff }
+.party-controls>header strong { font-size:11px }
+.party-controls>header button { width:30px;height:30px;padding:0;border:1px solid #342d39;border-radius:50%;background:#151218;color:#aaa2af;display:grid;place-items:center }
+.party-controls>button { width:100%;min-height:58px;margin-top:7px;padding:10px;border:1px solid #302936;border-radius:9px;background:#121016;color:#b34aff;display:flex;align-items:center;gap:10px;text-align:left }
+.party-controls>button>svg { width:16px }
+.party-controls>button>span { display:grid;gap:3px }
+.party-controls>button strong { color:#ede7f0;font-size:10px }
+.party-controls>button small { color:#77707d;font-size:8px }
+.party-controls>label { margin:7px 0;padding:10px;border:1px solid #302936;border-radius:9px;display:flex;align-items:center;justify-content:space-between;gap:12px;color:#b8b0bd;font-size:9px }
+.party-controls select { min-height:32px;border:1px solid #473553;border-radius:7px;background:#17131b;color:#fff;padding:0 9px }
+.party-controls__confirm { padding:10px;border:1px solid #643039;border-radius:9px;display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:7px;color:#d6cdd8;font-size:9px }
+.party-controls__confirm button,.party-controls__bans button { min-height:28px;border:1px solid #44374b;border-radius:6px;background:#19151d;color:#cabfd0;padding:0 8px;font-size:8px }
+.party-controls__confirm button:last-child { border-color:#74303c;color:#ff8e9c }
+.party-controls__bans { margin-top:8px;padding:10px;border-top:1px solid #29212f;display:grid;gap:8px }
+.party-controls__bans>small { color:#8d3fc0;font-size:7px;font-weight:800;letter-spacing:.12em;text-transform:uppercase }
+.party-controls__bans>div { display:flex;align-items:center;justify-content:space-between;gap:8px }
+.party-controls__bans>div>span { display:grid;gap:2px }
+.party-controls__bans strong { font-size:9px }
+.party-controls__bans span small,.party-controls__bans p { margin:0;color:#716b76;font-size:8px }
+
+.party-roster { width:min(330px,calc(100% - 20px)) }
+.party-roster li { grid-template-columns:32px minmax(0,1fr) auto;align-items:center }
+.party-roster__identity { align-items:flex-start!important;flex-direction:column;gap:2px!important }
+.party-roster__badges { justify-content:flex-end;flex-wrap:wrap }
+.party-roster__badges em { padding:3px 6px;border:1px solid #5f2783;border-radius:999px;color:#c75bff;font-size:7px;font-style:normal;font-weight:800;letter-spacing:.06em;text-transform:uppercase }
+.party-roster__actions,.party-roster__confirm { grid-column:2 / 4;justify-content:flex-end;width:100% }
+
+.party-notice { margin:12px 0 0;padding:9px 11px;border:1px solid #4d3160;border-radius:8px;background:rgba(119,30,181,.1);color:#d2c8d7;font-size:9px }
+.party-messages article header>span { display:inline-flex;align-items:center;gap:6px }
+.party-messages article header button { width:22px;height:22px;padding:0;border:0;border-radius:5px;background:transparent;color:#645d69;display:grid;place-items:center }
+.party-messages article header button:hover { background:#1b151f;color:#c257ff }
+.party-messages article header button svg { width:11px }
+.party-compose { position:relative }
+.party-compose>span { position:absolute;left:13px;bottom:-15px;display:flex;align-items:center;gap:5px;color:#6f6875;font-size:7px }
+.party-compose>span svg { width:10px;color:#8e36c3 }
+
 @media (max-width: 700px) {
+  .friends-identity-row { grid-template-columns:1fr }
+  .friends-account>div:last-of-type { display:grid }
+  .watch-party__header-actions>button:first-child { font-size:0;min-width:28px }
+  .party-controls { position:fixed;inset:auto 10px 70px;width:auto;max-height:70svh }
   .party-title-actions { align-items: flex-end; }
   .party-title-actions > button { font-size: 0; width: 34px; padding: 0; }
   .guest-sync-gate { padding: 10px 16px; flex-direction: column; align-items: stretch; }

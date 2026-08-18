@@ -32,6 +32,7 @@ const room: PartyRoom = {
   id: 'room-1', code: 'HEAT95', hostId: 'host-1', titleId: 1, mediaType: 'movie', titleName: 'Heat',
   playbackState: 'paused', playbackPosition: 42, playbackUpdatedAt: '2026-08-11T00:00:00.000Z',
   seasonNumber: 1, episodeNumber: 1, backdropPath: '/heat.jpg', durationSeconds: 10200, isPublic: false, isOfficial: false,
+  serverId: 'sync', isLocked: false, slowModeSeconds: 0,
 };
 
 describe('full-title party playback', () => {
@@ -212,6 +213,40 @@ describe('full-title party playback', () => {
 
     expect(screen.getByTitle('Heat full movie')).toHaveAttribute('src', expect.stringContaining('https://www.vidcore.org/embed/movie/1'));
     expect(screen.queryByRole('button', { name: 'Play room' })).not.toBeInTheDocument();
+  });
+
+  it('makes the host server choice room-wide while preserving a guest-only fallback', () => {
+    const onHostServerChange = vi.fn();
+    const { rerender } = render(<PartyPlaybackPlayer room={room} config={multiServerConfig} isHost onHostCommand={vi.fn()} onHostServerChange={onHostServerChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open room server list' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Glock Auto/i }));
+    expect(onHostServerChange).toHaveBeenCalledWith('auto');
+
+    rerender(<PartyPlaybackPlayer room={{ ...room, hostId: 'another-host' }} config={multiServerConfig} isHost={false} onHostCommand={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open room server list' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Glock Auto/i }));
+    expect(screen.getByText('Personal fallback')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open room server list' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Use room server' }));
+    expect(screen.queryByText('Personal fallback')).not.toBeInTheDocument();
+  });
+
+  it('reports measured drift and obeys an explicit resync request', () => {
+    const onSyncHealth = vi.fn();
+    const { rerender } = render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing', playbackPosition: 40, playbackUpdatedAt: new Date().toISOString() }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} onSyncHealth={onSyncHealth} resyncToken={0} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Join playback' }));
+    const iframe = screen.getByTitle('Heat full movie') as HTMLIFrameElement;
+    const postMessage = vi.spyOn(iframe.contentWindow!, 'postMessage');
+
+    fireEvent(window, new MessageEvent('message', {
+      origin: 'https://cinesrc.st', source: iframe.contentWindow,
+      data: { type: 'cinesrc:timeupdate', currentTime: 31 },
+    }));
+    expect(onSyncHealth).toHaveBeenCalledWith(expect.objectContaining({ status: 'drifting', offsetSeconds: expect.any(Number), serverId: 'cinesrc' }));
+
+    const callsBeforeResync = postMessage.mock.calls.length;
+    rerender(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing', playbackPosition: 40, playbackUpdatedAt: new Date().toISOString() }} config={cineSrcConfig} isHost={false} onHostCommand={vi.fn()} onSyncHealth={onSyncHealth} resyncToken={1} />);
+    expect(postMessage.mock.calls.length).toBeGreaterThan(callsBeforeResync);
   });
 
   it('keeps the automated public lounge locally clickable for the browser play gesture', () => {

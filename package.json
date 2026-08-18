@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:live:friends": "node scripts/verify-watch-party-live.mjs",
     "test:watch": "vitest",
     "typecheck": "tsc -b --pretty false"
   },

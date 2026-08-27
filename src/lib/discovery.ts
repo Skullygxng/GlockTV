@@ -33,11 +33,11 @@ function dateRange(era: ReleaseEra): { start?: string; end?: string } {
   return { start: `${start}-01-01`, end: `${end}-12-31` };
 }
 
-function paramsFor(filters: DiscoveryFilters, mediaType: MediaType): Record<string, string> {
+function paramsFor(filters: DiscoveryFilters, mediaType: MediaType, page = 1): Record<string, string> {
   const params: Record<string, string> = {
     language: 'en-US',
     include_adult: 'false',
-    page: '1',
+    page: String(Math.max(1, page)),
     sort_by: filters.sort === 'rating'
       ? 'vote_average.desc'
       : filters.sort === 'newest'
@@ -60,9 +60,9 @@ function paramsFor(filters: DiscoveryFilters, mediaType: MediaType): Record<stri
   return params;
 }
 
-export function buildDiscoveryQueries(filters: DiscoveryFilters): DiscoveryQuery[] {
+export function buildDiscoveryQueries(filters: DiscoveryFilters, page = 1): DiscoveryQuery[] {
   const mediaTypes: MediaType[] = filters.contentType === 'both'
     ? ['movie', 'tv']
     : [filters.contentType === 'movies' ? 'movie' : 'tv'];
-  return mediaTypes.map((mediaType) => ({ mediaType, params: paramsFor(filters, mediaType) }));
+  return mediaTypes.map((mediaType) => ({ mediaType, params: paramsFor(filters, mediaType, page) }));
 }

@@ -103,7 +103,22 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
 
   const contextCache = useRef(new Map<string, TitleContext>());
   const contextRequests = useRef(new Map<string, Promise<TitleContext>>());
-  const touchStartY = useRef<number | null>(null);
+  const previewCache =
+  useRef(
+    new Map<string, PreviewContext>(),
+  );
+
+const previewRequests =
+  useRef(
+    new Map<
+      string,
+      Promise<PreviewContext>
+    >(),
+  );
+
+const feedRequestVersion =
+  useRef(0);
+const touchStartY = useRef<number | null>(null);
   const wheelLockedUntil = useRef(0);
 
   const loadTitleContext = useCallback((item: Pick<MediaItem, 'id' | 'mediaType'>) => {

@@ -1,1 +1,9 @@
-PLACEHOLDER_CSS
+.party-video {
+  position: relative;
+}
+
+.party-video__embed,
+.party-video__embed iframe {
+  width: 100%;
+  height: 100%;
+}

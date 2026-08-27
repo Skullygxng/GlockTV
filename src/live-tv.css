@@ -387,18 +387,15 @@ body.live-tv-open .notice{display:none!important}
   }
   .live-tv-hero{
     flex:0 0 auto;
-    padding:10px 14px 8px;
+    padding:8px 12px;
     margin:0;
     align-items:center;
   }
-  .live-tv-hero h1{font-size:28px;margin:2px 0 0}
-  .live-tv-hero p{display:none}
+  .live-tv-hero h1{font-size:22px;margin:0}
+  .live-tv-hero p,
+  .live-tv-hero>div:first-child>span{display:none}
   .live-tv-source{display:none}
-  .live-tv-stage--watching .live-tv-hero h1{font-size:18px}
-  .live-tv-close{
-    width:32px;
-    height:32px;
-  }
+  .live-tv-close{width:32px;height:32px}
   .live-tv-layout{
     flex:1 1 auto;
     min-height:0;
@@ -409,8 +406,6 @@ body.live-tv-open .notice{display:none!important}
   }
   .live-tv-content{
     flex:0 0 auto;
-    position:sticky;
-    top:0;
     z-index:6;
     background:#050507;
   }
@@ -419,8 +414,17 @@ body.live-tv-open .notice{display:none!important}
     border-radius:0;
     box-shadow:none;
   }
-  .live-player__meta{padding:8px 13px}
-  .live-player__meta h2{font-size:18px}
+  .live-player--idle .live-player__video{
+    aspect-ratio:auto;
+    min-height:72px;
+  }
+  .live-player--idle .live-player__idle-message{
+    padding:12px;
+    gap:4px;
+  }
+  .live-player--idle .live-player__idle-message svg{width:18px}
+  .live-player__meta{padding:8px 12px}
+  .live-player__meta h2{font-size:16px;margin:0 0 2px}
   .live-tv-disclaimer{display:none}
   .live-tv-browser{
     flex:1 1 auto;
@@ -433,16 +437,19 @@ body.live-tv-open .notice{display:none!important}
     flex-direction:column;
   }
   .live-tv-search{
-    position:static;
-    margin:10px 12px 6px;
+    flex:0 0 auto;
+    margin:8px 12px 4px;
+    height:36px;
   }
+  .live-tv-categories{flex:0 0 auto}
+  .live-tv-count{flex:0 0 auto}
   .live-tv-list{
     flex:1 1 auto;
     min-height:0;
     overflow:auto;
     -webkit-overflow-scrolling:touch;
   }
-  .live-tv-channel{min-height:64px}
+  .live-tv-channel{min-height:58px}
   .live-tv-state{min-height:calc(100svh - 62px - env(safe-area-inset-bottom, 0px))}
   .bottom-nav .live-tv-nav-button span{display:block}
 }

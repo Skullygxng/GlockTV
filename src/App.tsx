@@ -91,7 +91,8 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [vibeOpen, setVibeOpen] = useState(false);
   const [context, setContext] = useState<TitleContext | null>(null);
-  const [previewContext, setPreviewContext] = useState<TitleContext | null>(null);
+  const [previewContext, setPreviewContext] =
+  useState<PreviewContext | null>(null);
   const [modalMode, setModalMode] = useState<'details' | 'trailer' | 'channel' | null>(null);
   const [playbackItem, setPlaybackItem] = useState<MediaItem | null>(null);
   const [loading, setLoading] = useState(true);

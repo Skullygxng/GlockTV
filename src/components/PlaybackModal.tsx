@@ -16,35 +16,94 @@ interface PlaybackModalProps {
   onSelect?: (item: MediaItem) => void;
 }
 
+type PlayerState = 'loading' | 'loaded' | 'slow';
+
 export function PlaybackModal({ item, config, client, onClose, onSelect }: PlaybackModalProps) {
   const servers = useMemo(() => getPlaybackServers(config), [config]);
+  const compatibleServers = useMemo(() => servers.filter((server) => (
+    item.mediaType === 'movie'
+      ? Boolean(server.movieUrlTemplate?.trim())
+      : Boolean(server.tvUrlTemplate?.trim())
+  )), [item.mediaType, servers]);
   const initialProgress = useMemo(() => readPlaybackProgress(item), [item.id, item.mediaType]);
-  const initialSavedServer = servers.find((server) => server.id === initialProgress?.serverId);
+  const initialSavedServer = compatibleServers.find((server) => server.id === initialProgress?.serverId);
   const canResumeInitialProgress = canResumePlaybackServer(initialSavedServer, item.mediaType);
   const [season, setSeason] = useState(1);
   const [episode, setEpisode] = useState(1);
-  const [serverId, setServerId] = useState(() => canResumeInitialProgress ? initialSavedServer!.id : getDefaultPlaybackServerId(servers, item.mediaType));
+  const [serverId, setServerId] = useState(() => canResumeInitialProgress
+    ? initialSavedServer!.id
+    : getDefaultPlaybackServerId(compatibleServers, item.mediaType));
   const [resumeAt, setResumeAt] = useState(() => canResumeInitialProgress ? initialProgress?.position ?? 0 : 0);
   const [serverOpen, setServerOpen] = useState(false);
   const [playerRevision, setPlayerRevision] = useState(0);
-  const [playerState, setPlayerState] = useState<'loading' | 'loaded' | 'slow'>('loading');
+  const [playerState, setPlayerState] = useState<PlayerState>('loading');
   const [context, setContext] = useState<TitleContext | null>(null);
   const iframe = useRef<HTMLIFrameElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const frameLoaded = useRef(false);
   const progressPosition = useRef(canResumeInitialProgress ? initialProgress?.position ?? 0 : 0);
   const progressDuration = useRef(canResumeInitialProgress ? initialProgress?.duration : undefined);
   const playbackUrl = buildPlaybackUrl(item, config, { season, episode, startAt: resumeAt }, serverId);
-  const activeServer = servers.find((server) => server.id === serverId) ?? servers[0];
+  const activeServer = compatibleServers.find((server) => server.id === serverId) ?? compatibleServers[0];
   const playerName = item.mediaType === 'movie' ? 'Movie player' : 'TV player';
 
-  useEffect(() => {
-    const saved = readPlaybackProgress(item, season, episode);
-    const savedServer = servers.find((server) => server.id === saved?.serverId);
+  const retry = () => setPlayerRevision((revision) => revision + 1);
+
+  const selectServer = (nextId: string) => {
+    const nextServer = compatibleServers.find((server) => server.id === nextId);
+    if (!nextServer) return;
+
+    const canResumeNext = canResumePlaybackServer(nextServer, item.mediaType);
+    savePlaybackProgress(item, {
+      position: progressPosition.current,
+      duration: progressDuration.current,
+      serverId: nextId,
+    }, season, episode);
+
+    setResumeAt(canResumeNext ? progressPosition.current : 0);
+    setServerId(nextId);
+    setServerOpen(false);
+    setPlayerRevision((revision) => revision + 1);
+  };
+
+  const nextServer = () => {
+    if (compatibleServers.length < 2) {
+      retry();
+      return;
+    }
+    const index = Math.max(0, compatibleServers.findIndex((server) => server.id === serverId));
+    selectServer(compatibleServers[(index + 1) % compatibleServers.length].id);
+  };
+
+  const selectEpisode = (nextSeason: number, nextEpisode: number) => {
+    const saved = readPlaybackProgress(item, nextSeason, nextEpisode);
+    const savedServer = compatibleServers.find((server) => server.id === saved?.serverId);
     const canResumeSaved = canResumePlaybackServer(savedServer, item.mediaType);
-    setServerId(canResumeSaved ? savedServer!.id : getDefaultPlaybackServerId(servers, item.mediaType));
+    setSeason(nextSeason);
+    setEpisode(nextEpisode);
+    setServerId(canResumeSaved ? savedServer!.id : getDefaultPlaybackServerId(compatibleServers, item.mediaType));
     setResumeAt(canResumeSaved ? saved?.position ?? 0 : 0);
     progressPosition.current = canResumeSaved ? saved?.position ?? 0 : 0;
     progressDuration.current = canResumeSaved ? saved?.duration : undefined;
-  }, [episode, item.id, item.mediaType, season, servers]);
+    setPlayerRevision((revision) => revision + 1);
+  };
+
+  useEffect(() => {
+    const saved = readPlaybackProgress(item, season, episode);
+    const savedServer = compatibleServers.find((server) => server.id === saved?.serverId);
+    const canResumeSaved = canResumePlaybackServer(savedServer, item.mediaType);
+    setServerId(canResumeSaved ? savedServer!.id : getDefaultPlaybackServerId(compatibleServers, item.mediaType));
+    setResumeAt(canResumeSaved ? saved?.position ?? 0 : 0);
+    progressPosition.current = canResumeSaved ? saved?.position ?? 0 : 0;
+    progressDuration.current = canResumeSaved ? saved?.duration : undefined;
+  }, [compatibleServers, episode, item.id, item.mediaType, season]);
+
+  useEffect(() => {
+    if (!compatibleServers.length) return;
+    if (compatibleServers.some((server) => server.id === serverId)) return;
+    setServerId(getDefaultPlaybackServerId(compatibleServers, item.mediaType));
+    setResumeAt(0);
+  }, [compatibleServers, item.mediaType, serverId]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -68,77 +127,106 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   useEffect(() => {
     let cancelled = false;
     setContext(null);
-    client.getTitleContext(item).then((result) => { if (!cancelled) setContext(result); }).catch(() => undefined);
+    client.getTitleContext(item)
+      .then((result) => { if (!cancelled) setContext(result); })
+      .catch(() => undefined);
     return () => { cancelled = true; };
   }, [client, item.id, item.mediaType]);
 
   useEffect(() => {
+    if (!playbackUrl) return;
+
+    frameLoaded.current = false;
     setPlayerState('loading');
-    const timer = window.setTimeout(() => setPlayerState((state) => state === 'loading' ? 'slow' : state), 9000);
-    return () => window.clearTimeout(timer);
+
+    const slowTimer = window.setTimeout(() => {
+      if (!frameLoaded.current) setPlayerState('slow');
+    }, 9000);
+
+    const fallbackTimer = window.setTimeout(() => {
+      if (!frameLoaded.current && compatibleServers.length > 1) nextServer();
+    }, 15000);
+
+    return () => {
+      window.clearTimeout(slowTimer);
+      window.clearTimeout(fallbackTimer);
+    };
   }, [playbackUrl, playerRevision]);
 
   useEffect(() => {
+    const root = document.documentElement;
+    const body = document.body;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    root.classList.add('playback-open');
+    body.classList.add('playback-open');
+    closeButton.current?.focus();
+
+    return () => {
+      root.classList.remove('playback-open');
+      body.classList.remove('playback-open');
+      previousFocus?.focus();
+    };
+  }, []);
+
+  useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      if (event.key !== 'Escape') return;
+      if (serverOpen) {
+        setServerOpen(false);
+        return;
+      }
+      onClose();
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [onClose]);
+  }, [onClose, serverOpen]);
 
-  const retry = () => setPlayerRevision((revision) => revision + 1);
-  const selectServer = (nextId: string) => {
-    savePlaybackProgress(item, { position: progressPosition.current, duration: progressDuration.current, serverId: nextId }, season, episode);
-    setResumeAt(progressPosition.current);
-    setServerId(nextId);
-    setServerOpen(false);
-    setPlayerRevision((revision) => revision + 1);
-  };
-  const nextServer = () => {
-    if (servers.length < 2) { retry(); return; }
-    const index = Math.max(0, servers.findIndex((server) => server.id === serverId));
-    selectServer(servers[(index + 1) % servers.length].id);
-  };
-  const selectEpisode = (nextSeason: number, nextEpisode: number) => {
-    const saved = readPlaybackProgress(item, nextSeason, nextEpisode);
-    const savedServer = servers.find((server) => server.id === saved?.serverId);
-    const canResumeSaved = canResumePlaybackServer(savedServer, item.mediaType);
-    setSeason(nextSeason);
-    setEpisode(nextEpisode);
-    setServerId(canResumeSaved ? savedServer!.id : getDefaultPlaybackServerId(servers, item.mediaType));
-    setResumeAt(canResumeSaved ? saved?.position ?? 0 : 0);
-    progressPosition.current = canResumeSaved ? saved?.position ?? 0 : 0;
-    progressDuration.current = canResumeSaved ? saved?.duration : undefined;
-    setPlayerRevision((revision) => revision + 1);
-  };
   const recommendations = context?.recommendations ?? [];
 
   return <motion.div className="overlay playback-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
     <motion.section className="playback-modal" role="dialog" aria-label={playerName} aria-modal="true" initial={{ y: 26, scale: .985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .99 }}>
       <header className="playback-modal__header">
-        <div className="playback-brand"><span>GlockTV player</span><small>{item.mediaType === 'movie' ? 'Feature' : `S${season} · E${episode}`} · {item.title}</small></div>
+        <div className="playback-brand"><span>GlockTV player</span><small>{item.mediaType === 'movie' ? 'Feature' : `S${season} Â· E${episode}`} Â· {item.title}</small></div>
         <div className="playback-modal__actions">
-          {servers.length > 0 && <div className="server-picker">
+          {compatibleServers.length > 0 && <div className="server-picker">
             <button type="button" className="server-picker__trigger" aria-label="Open server list" aria-expanded={serverOpen} onClick={() => setServerOpen((open) => !open)}><ShieldCheck /><span><small>Server</small>{activeServer?.label}</span><ChevronDown /></button>
-            {serverOpen && <div className="server-picker__menu" role="menu">{servers.map((server) => <button type="button" role="menuitem" key={server.id} className={server.id === serverId ? 'active' : ''} onClick={() => selectServer(server.id)}><span><strong>{server.label}</strong><small>{server.description}</small></span>{server.id === serverId && <Check />}</button>)}</div>}
+            {serverOpen && <div className="server-picker__menu" role="menu">{compatibleServers.map((server) => <button type="button" role="menuitem" key={server.id} className={server.id === serverId ? 'active' : ''} onClick={() => selectServer(server.id)}><span><strong>{server.label}</strong><small>{server.description}</small></span>{server.id === serverId && <Check />}</button>)}</div>}
           </div>}
           <button type="button" className="playback-retry" aria-label="Retry player" onClick={retry}><RotateCw /><span>Retry</span></button>
-          <button type="button" aria-label="Close player" onClick={onClose}><X /></button>
+          <button ref={closeButton} type="button" aria-label="Close player" onClick={onClose}><X /></button>
         </div>
       </header>
-      {playbackUrl ? <div className="playback-frame">
-        <iframe ref={iframe} key={`${playbackUrl}-${playerRevision}`} title={`${item.title} playback`} src={playbackUrl}
-          allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen
+      {playbackUrl ? <div className="playback-frame" aria-busy={playerState !== 'loaded'}>
+        <iframe
+          ref={iframe}
+          key={`${playbackUrl}-${playerRevision}`}
+          title={`${item.title} playback`}
+          src={playbackUrl}
+          allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+          allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
-          referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setPlayerState('loaded')} />
-        {playerState !== 'loaded' && <div className={`playback-status playback-status--${playerState}`}><LoaderCircle className="spin" /><span>{playerState === 'slow' ? 'Still loading. Try another server.' : `Connecting to ${activeServer?.label ?? 'server'}…`}</span>{playerState === 'slow' && <button type="button" onClick={nextServer}>Next server</button>}</div>}
+          referrerPolicy="strict-origin-when-cross-origin"
+          onLoad={() => {
+            frameLoaded.current = true;
+            setPlayerState('loaded');
+          }}
+          onError={() => setPlayerState('slow')}
+        />
+        {playerState !== 'loaded' && <div className={`playback-status playback-status--${playerState}`} role="status">
+          <LoaderCircle className="spin" />
+          <span>{playerState === 'slow' ? 'This server is taking too long.' : `Connecting to ${activeServer?.label ?? 'server'}â¦`}</span>
+          {playerState === 'slow' && <div className="playback-status__actions">
+            <button type="button" onClick={retry}>Retry</button>
+            {compatibleServers.length > 1 && <button type="button" onClick={nextServer}>Next server</button>}
+          </div>}
+        </div>}
       </div> : <div className="playback-unconfigured"><Film /><strong>Playback source not connected</strong><p>Add your authorized {item.mediaType === 'movie' ? 'movie' : 'TV'} embed URL template to the GlockTV environment configuration.</p></div>}
       <footer className="playback-modal__footer">
-        <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><h2>{item.title}</h2><strong>{item.year} · {item.genres.slice(0, 2).join(' · ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>
+        <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><h2>{item.title}</h2><strong>{item.year} Â· {item.genres.slice(0, 2).join(' Â· ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>
         <small><ShieldCheck /> Pop-up windows are blocked. Ads drawn inside a third-party player cannot be removed by GlockTV.</small>
       </footer>
       {item.mediaType === 'tv' && <EpisodeBrowser client={client} seriesId={item.id} activeSeason={season} activeEpisode={episode} onSelect={selectEpisode} />}
-      {!!recommendations.length && <section className="playback-recommendations" aria-label="More like this"><header><span>Keep watching</span><h3>More like this</h3></header><div>{recommendations.slice(0, 6).map((recommendation) => <button type="button" key={`${recommendation.mediaType}-${recommendation.id}`} onClick={() => onSelect?.(recommendation)}>{imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500') ? <img src={imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500')!} alt="" /> : <span className="playback-recommendations__fallback"><Film /></span>}<strong>{recommendation.title}</strong><small>{recommendation.year} · ★ {recommendation.rating.toFixed(1)}</small></button>)}</div></section>}
+      {!!recommendations.length && <section className="playback-recommendations" aria-label="More like this"><header><span>Keep watching</span><h3>More like this</h3></header><div>{recommendations.slice(0, 6).map((recommendation) => <button type="button" key={`${recommendation.mediaType}-${recommendation.id}`} onClick={() => onSelect?.(recommendation)}>{imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500') ? <img loading="lazy" decoding="async" src={imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500')!} alt="" /> : <span className="playback-recommendations__fallback"><Film /></span>}<strong>{recommendation.title}</strong><small>{recommendation.year} Â· â {recommendation.rating.toFixed(1)}</small></button>)}</div></section>}
     </motion.section>
   </motion.div>;
 }

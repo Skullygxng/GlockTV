@@ -85,18 +85,48 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const previousMessageCount = useRef(0);
   const presence = useRef<PartyPresence>({ syncStatus: 'connecting', syncOffsetSeconds: null, serverId: null });
   const activeRoomId = useRef('');
+  const messageMutationVersion = useRef(0);
+  const snapshotVersion = useRef(0);
 
   useEffect(() => {
-    if (!service?.listPublicRooms) return;
-    service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
+    if (!service) return;
     service.getAccount?.().then((nextAccount) => {
       setAccount(nextAccount);
       if (nextAccount?.email) setAccountEmail(nextAccount.email);
     }).catch(() => undefined);
   }, [service]);
 
+  useEffect(() => {
+    if (!service?.listPublicRooms || room) return;
+
+    let active = true;
+    const refreshPublicRooms = async () => {
+      try {
+        const nextRooms = await service.listPublicRooms();
+        if (active) setPublicRooms(nextRooms);
+      } catch {
+        // Public room discovery is non-critical and retries on the next refresh.
+      }
+    };
+
+    void refreshPublicRooms();
+    const timer = window.setInterval(() => { void refreshPublicRooms(); }, 60_000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void refreshPublicRooms();
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [room, service]);
+
   const exitRemovedRoom = useCallback((code: string) => {
     activeRoomId.current = '';
+    snapshotVersion.current += 1;
+    messageMutationVersion.current += 1;
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
     const savedRoom = readRecentRoom();
     if (savedRoom?.code === code) { localStorage.removeItem(recentRoomKey); setRecentRoom(null); }
@@ -107,28 +137,67 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const refreshMembers = useCallback(async (roomId: string) => {
     if (!service) return;
     const nextMembers = await service.getMembers(roomId);
+    if (activeRoomId.current !== roomId) return;
+
     if (room?.id === roomId && userId && !room.isOfficial && !nextMembers.some((member) => member.userId === userId)) {
       exitRemovedRoom(room.code);
       return;
     }
+
     setMembers(nextMembers);
   }, [exitRemovedRoom, room?.code, room?.id, room?.isOfficial, service, userId]);
+
   const refreshSnapshot = useCallback(async (roomId: string) => {
     if (!service) return;
+
+    const requestVersion = ++snapshotVersion.current;
+    const messageVersionAtStart = messageMutationVersion.current;
+
     const [nextRoom, nextMembers, nextMessages, nextBlocked] = await Promise.all([
-      service.getRoom(roomId), service.getMembers(roomId), service.getMessages(roomId), service.getBlockedUsers?.() ?? Promise.resolve([]),
+      service.getRoom(roomId),
+      service.getMembers(roomId),
+      service.getMessages(roomId),
+      service.getBlockedUsers?.() ?? Promise.resolve([]),
     ]);
-    if (activeRoomId.current !== roomId) return;
-    setRoom(nextRoom); setMembers(nextMembers); setBlockedUsers(nextBlocked);
-    setMessages((previous) => nextMessages.filter((item) => !nextBlocked.includes(item.userId)).reduce(upsertMessage, previous));
-  }, [service]);
+
+    if (
+      activeRoomId.current !== roomId
+      || requestVersion !== snapshotVersion.current
+    ) {
+      return;
+    }
+
+    if (
+      userId
+      && !nextRoom.isOfficial
+      && !nextMembers.some((member) => member.userId === userId)
+    ) {
+      exitRemovedRoom(nextRoom.code);
+      return;
+    }
+
+    setRoom(nextRoom);
+    setMembers(nextMembers);
+    setBlockedUsers(nextBlocked);
+
+    if (messageMutationVersion.current === messageVersionAtStart) {
+      setMessages(nextMessages.filter((item) => !nextBlocked.includes(item.userId)));
+    }
+  }, [exitRemovedRoom, service, userId]);
 
   const enterRoom = useCallback(async (nextRoom: PartyRoom, nextUserId: string) => {
     if (!service) return;
+
     activeRoomId.current = nextRoom.id;
+    snapshotVersion.current += 1;
+    messageMutationVersion.current += 1;
+
     const [nextMembers, nextMessages, nextBlocked] = await Promise.all([
       service.getMembers(nextRoom.id), service.getMessages(nextRoom.id), service.getBlockedUsers?.() ?? Promise.resolve([]),
     ]);
+
+    if (activeRoomId.current !== nextRoom.id) return;
+
     chatAtBottom.current = true; previousMessageCount.current = 0; setUnreadMessages(0);
     setRoom(nextRoom); setUserId(nextUserId); setMembers(nextMembers); setBlockedUsers(nextBlocked);
     setMessages(nextMessages.filter((item) => !nextBlocked.includes(item.userId)));
@@ -143,10 +212,19 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
 
   useEffect(() => {
     if (!service || !room) return;
+
     return service.subscribe(room.id, {
-      onRoom: (nextRoom) => { if (activeRoomId.current === nextRoom.id) setRoom(nextRoom); },
-      onMessage: (next) => { if (!blockedUsers.includes(next.userId)) setMessages((previous) => upsertMessage(previous, next)); },
+      onRoom: (nextRoom) => {
+        if (activeRoomId.current === nextRoom.id) setRoom(nextRoom);
+      },
+      onMessage: (next) => {
+        messageMutationVersion.current += 1;
+        if (!blockedUsers.includes(next.userId)) {
+          setMessages((previous) => upsertMessage(previous, next));
+        }
+      },
       onMembersChanged: () => { void refreshMembers(room.id); },
+      onChatCleared: () => { void refreshSnapshot(room.id); },
       onReady: () => { void refreshSnapshot(room.id); },
     });
   }, [blockedUsers, refreshMembers, refreshSnapshot, room?.id, service]);
@@ -159,7 +237,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         const nextRoom = await service.heartbeatRoom(room.id, presence.current);
         if (active && activeRoomId.current === room.id) setRoom(nextRoom);
       } catch {
-        // The membership poll handles removal and the next heartbeat handles transient network loss.
+        // Realtime and the recovery snapshot handle transient network loss/removal.
       }
     };
     void heartbeat();
@@ -171,27 +249,57 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
 
   useEffect(() => {
     if (!service || !room) return;
+
     const roomId = room.id;
     let active = true;
-    const pollRoom = async () => {
+
+    const checkRoomState = async () => {
       try {
         if (!room.isOfficial) {
           const membership = await service.getMembershipStatus(roomId);
-          if (membership === 'removed') { if (active) exitRemovedRoom(room.code); return; }
+          if (membership === 'removed') {
+            if (active) exitRemovedRoom(room.code);
+            return;
+          }
         }
+
         const nextRoom = await service.getRoom(roomId);
         if (active && activeRoomId.current === roomId) setRoom(nextRoom);
       } catch {
-        // Realtime remains primary; the next poll can recover from a transient request failure.
+        // Realtime remains primary; the recovery pass handles transient failures.
       }
     };
-    void pollRoom();
-    const roomTimer = window.setInterval(() => { void pollRoom(); }, 2000);
-    const snapshotTimer = window.setInterval(() => { void refreshSnapshot(roomId); }, 6000);
+
+    const recover = async () => {
+      try {
+        if (!room.isOfficial) {
+          const membership = await service.getMembershipStatus(roomId);
+          if (membership === 'removed') {
+            if (active) exitRemovedRoom(room.code);
+            return;
+          }
+        }
+
+        if (active) await refreshSnapshot(roomId);
+      } catch {
+        // A later heartbeat/recovery pass can repair a transient network failure.
+      }
+    };
+
+    // One lightweight entry check preserves resilience if Realtime is slow to connect.
+    void checkRoomState();
+
+    const recoveryTimer = window.setInterval(() => { void recover(); }, 45_000);
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void recover();
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+
     return () => {
       active = false;
-      window.clearInterval(roomTimer);
-      window.clearInterval(snapshotTimer);
+      window.clearInterval(recoveryTimer);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [exitRemovedRoom, refreshSnapshot, room?.code, room?.id, room?.isOfficial, service]);
 
@@ -259,6 +367,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     const body = message.trim(); setMessage('');
     try {
       const sent = await service.sendMessage(room.id, nickname.trim(), body);
+      messageMutationVersion.current += 1;
       setMessages((previous) => upsertMessage(previous, sent));
     }
     catch (reason) { setMessage(body); setError(reason instanceof Error ? reason.message : 'Message failed to send.'); }
@@ -322,7 +431,12 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
 
   const clearRoomChat = async () => {
     if (!service || !room || room.hostId !== userId) return;
-    try { await service.clearChat(room.id); setMessages([]); setClearChatConfirm(false); }
+    try {
+      await service.clearChat(room.id);
+      messageMutationVersion.current += 1;
+      setMessages([]);
+      setClearChatConfirm(false);
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Room chat could not be cleared.'); }
   };
 
@@ -361,6 +475,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const requestResync = () => {
     setResyncToken((value) => value + 1);
     setResyncNotice(room?.hostId === userId ? 'Room resync sent to everyone.' : 'Resync requested from the room clock.');
+    if (room) void refreshSnapshot(room.id);
     if (room?.hostId === userId) void updatePlayback(room.playbackState, room.playbackPosition);
     window.setTimeout(() => setResyncNotice(''), 2400);
   };
@@ -425,13 +540,15 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const confirmLeaveRoom = async () => {
     if (service && room) await service.leaveRoom(room.id, userId).catch(() => undefined);
     activeRoomId.current = '';
+    snapshotVersion.current += 1;
+    messageMutationVersion.current += 1;
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
     setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false); setRosterOpen(false); setControlsOpen(false); setRemoveConfirmId(''); setTransferConfirmId('');
     if (service?.listPublicRooms) service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   };
 
   if (!room) {
-    const heroImage = imageUrl(selectedTitle?.backdropPath ?? null, 'original');
+    const heroImage = imageUrl(selectedTitle?.backdropPath ?? null, 'w1280');
     return <motion.section className="friends-lobby friends-lobby--cinematic" aria-label="Friends watch party" initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={heroImage ? { '--room-backdrop': `url(${heroImage})` } as React.CSSProperties : undefined}>
       <div className="friends-hero">
         <span><Users /> Friends</span><h1>Movie night,<br />together.</h1>
@@ -448,23 +565,23 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
           {accountStatus && <small>{accountStatus}</small>}
         </section>}
         {recentRoom && <section className="resume-room-card" aria-label="Recent watch party">
-          <div><small>{recentRoom.wasHost ? 'Your private room' : 'Recent room'}</small><strong>{recentRoom.titleName}</strong><span>Room {recentRoom.code} · pick up where you left off</span></div>
+          <div><small>{recentRoom.wasHost ? 'Your private room' : 'Recent room'}</small><strong>{recentRoom.titleName}</strong><span>Room {recentRoom.code} Â· pick up where you left off</span></div>
           <button type="button" aria-label={`${recentRoom.wasHost ? 'Resume hosting' : 'Rejoin'} ${recentRoom.titleName}`} onClick={() => void joinCode(recentRoom.code)} disabled={busy || !service || !nickname.trim()}><Play fill="currentColor" /> {recentRoom.wasHost ? 'Resume hosting' : 'Rejoin room'}</button>
         </section>}
         <section className="public-rooms" aria-label="Public rooms">
           <header><div><Radio /><span>Public now</span></div><small>Open to everyone</small></header>
           {publicRooms.length ? publicRooms.map((publicRoom) => <article key={publicRoom.id} className="public-room-card" style={imageUrl(publicRoom.backdropPath, 'w780') ? { '--public-backdrop': `url(${imageUrl(publicRoom.backdropPath, 'w780')})` } as React.CSSProperties : undefined}>
-            <div><span><i /> GlockTV Lounge</span><strong>{publicRoom.titleName}</strong><small>{publicRoom.mediaType === 'tv' ? `Season ${publicRoom.seasonNumber} · Episode ${publicRoom.episodeNumber}` : 'Full movie'} · {Math.max(1, publicRoom.audienceCount)} watching</small></div>
+            <div><span><i /> GlockTV Lounge</span><strong>{publicRoom.titleName}</strong><small>{publicRoom.mediaType === 'tv' ? `Season ${publicRoom.seasonNumber} Â· Episode ${publicRoom.episodeNumber}` : 'Full movie'} Â· {Math.max(1, publicRoom.audienceCount)} watching</small></div>
             <button type="button" onClick={() => void joinCode(publicRoom.code)} disabled={busy || !nickname.trim()}><Play fill="currentColor" /> Join room</button>
-          </article>) : <div className="public-room-card public-room-card--loading"><LoaderCircle className="spin" /><span>Finding the public lounge…</span></div>}
+          </article>) : <div className="public-room-card public-room-card--loading"><LoaderCircle className="spin" /><span>Finding the public loungeâ¦</span></div>}
         </section>
         <section className="private-room-entry">
           <header><div><LockKeyhole /><span>Private room</span></div><small>Invite-only</small></header>
           <div className="private-room-entry__actions">
-            <div><small>From your Discover feed</small><strong>{selectedTitle?.title ?? 'Choose a title first'}</strong><span>{selectedTitle ? (selectedTitle.mediaType === 'movie' ? 'Full movie ready' : 'Season 1 · Episode 1 ready') : 'Return to Discover and pick what to watch'}</span></div>
+            <div><small>From your Discover feed</small><strong>{selectedTitle?.title ?? 'Choose a title first'}</strong><span>{selectedTitle ? (selectedTitle.mediaType === 'movie' ? 'Full movie ready' : 'Season 1 Â· Episode 1 ready') : 'Return to Discover and pick what to watch'}</span></div>
             <button type="button" onClick={() => void createParty()} disabled={busy || !service || !nickname.trim() || !selectedTitle}><Sparkles /> Create private room</button>
           </div>
-          {initialRoomCode && <p className="invite-ready"><span className="live-dot" /> Invite ready · finish your nickname, then join.</p>}
+          {initialRoomCode && <p className="invite-ready"><span className="live-dot" /> Invite ready Â· finish your nickname, then join.</p>}
           <div className="room-code-row"><input aria-label="Room code" maxLength={6} value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))} placeholder="ENTER CODE" /><button type="button" aria-label={initialRoomCode ? 'Join invite' : 'Join'} onClick={() => void joinCode(roomCode)} disabled={busy || !service || !nickname.trim() || roomCode.length !== 6}><DoorOpen /> {initialRoomCode ? 'Join invite' : 'Join'}</button></div>
         </section>
         {!service && <p className="friends-error">Friends is not connected yet.</p>}{error && <p className="friends-error" role="alert">{error}</p>}
@@ -489,7 +606,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     <div className="watch-party__layout">
       <section className="party-screen">
         <PartyPlaybackPlayer room={room} config={partyConfig} isHost={isHost} onHostCommand={(state, position) => void updatePlayback(state, position)} onHostServerChange={(serverId) => void changeRoomServer(serverId)} onSyncHealth={updateSyncHealth} resyncToken={resyncToken} />
-        <div className="party-title-row"><div><span>{room.mediaType === 'tv' ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : 'Now watching'}</span><h1>{room.titleName}</h1>{room.isOfficial && <p className="official-room-note"><Radio /> Automated GlockTV host keeps the public lounge on one shared timeline.</p>}</div><div className="party-title-actions">{isHost && <button type="button" onClick={() => setPickerOpen(true)}><Search /> Change title</button>}<button type="button" aria-label={isHost ? 'Resync everyone' : 'Resync me'} onClick={requestResync}><RefreshCw /> {isHost ? 'Resync everyone' : 'Resync me'}</button><div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · room clock</div></div></div>
+        <div className="party-title-row"><div><span>{room.mediaType === 'tv' ? `Season ${room.seasonNumber} Â· Episode ${room.episodeNumber}` : 'Now watching'}</span><h1>{room.titleName}</h1>{room.isOfficial && <p className="official-room-note"><Radio /> Automated GlockTV host keeps the public lounge on one shared timeline.</p>}</div><div className="party-title-actions">{isHost && <button type="button" onClick={() => setPickerOpen(true)}><Search /> Change title</button>}<button type="button" aria-label={isHost ? 'Resync everyone' : 'Resync me'} onClick={requestResync}><RefreshCw /> {isHost ? 'Resync everyone' : 'Resync me'}</button><div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} Â· room clock</div></div></div>
         {room.mediaType === 'tv' && <EpisodeBrowser compact client={client} seriesId={room.titleId} activeSeason={room.seasonNumber ?? 1} activeEpisode={room.episodeNumber ?? 1} canSelect={isHost} onSelect={(season, episode) => void chooseEpisode(season, episode)} />}
         {resyncNotice && <p className="party-notice" role="status">{resyncNotice}</p>}{error && <p className="friends-error" role="alert">{error}</p>}
       </section>
@@ -506,7 +623,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
           <header><div><small>Watching now</small><strong>{members.length} {members.length === 1 ? 'person' : 'people'}</strong></div><button type="button" aria-label="Close people list" onClick={() => setRosterOpen(false)}><X /></button></header>
           <ul>{members.map((member) => <li key={member.userId} className={member.isMuted ? 'is-muted' : ''}>
             <span>{member.nickname.slice(0, 1).toUpperCase()}</span>
-            <div className="party-roster__identity"><strong>{member.nickname}</strong><small>{member.userId === userId ? 'You · ' : ''}{syncLabel(member)}</small>{member.isMuted && <small>Muted</small>}</div>
+            <div className="party-roster__identity"><strong>{member.nickname}</strong><small>{member.userId === userId ? 'You Â· ' : ''}{syncLabel(member)}</small>{member.isMuted && <small>Muted</small>}</div>
             <div className="party-roster__badges">{member.userId === room.hostId && <em>Host</em>}{member.isCohost && <em>Co-host</em>}</div>
             {member.userId !== userId && <div className="party-roster__actions">
               <button type="button" aria-label={`${blockedUsers.includes(member.userId) ? 'Unblock' : 'Block'} ${member.nickname}`} title="Personal block" onClick={() => void blockMember(member)}>{blockedUsers.includes(member.userId) ? <UserCheck /> : <Ban />}</button>
@@ -525,9 +642,9 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         <div className="party-messages-shell">
           <div ref={messageList} className="party-messages" role="log" aria-label="Chat messages" aria-live="polite" onScroll={handleChatScroll}>{!visibleMessages.length && <div className="party-chat__empty"><MessageCircle /><strong>The room is quiet</strong><span>Say hello to everyone watching.</span></div>}{visibleMessages.map((item) => <article key={item.id} className={item.userId === userId ? 'mine' : ''}><header><strong>{item.nickname}</strong><span><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</time>{item.userId !== userId && <button type="button" aria-label={`Report message from ${item.nickname}`} title="Report privately" onClick={() => void reportMessage(item)}><Flag /></button>}</span></header><p>{item.body}</p></article>)}</div>
         </div>
-        <form className={`party-compose${chatMuted ? ' party-compose--muted' : ''}`} onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder={chatMuted ? 'Chat muted by host' : room.slowModeSeconds ? `Slow mode · ${room.slowModeSeconds}s` : 'Message the room…'} disabled={chatMuted} /><button type="submit" aria-label="Send message" disabled={chatMuted || !message.trim()}><Send /></button>{chatMuted && <span><VolumeX /> Muted by host</span>}{room.isOfficial && !chatMuted && <span><ShieldCheck /> Public chat blocks spam and links</span>}</form>
+        <form className={`party-compose${chatMuted ? ' party-compose--muted' : ''}`} onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder={chatMuted ? 'Chat muted by host' : room.slowModeSeconds ? `Slow mode Â· ${room.slowModeSeconds}s` : 'Message the roomâ¦'} disabled={chatMuted} /><button type="submit" aria-label="Send message" disabled={chatMuted || !message.trim()}><Send /></button>{chatMuted && <span><VolumeX /> Muted by host</span>}{room.isOfficial && !chatMuted && <span><ShieldCheck /> Public chat blocks spam and links</span>}</form>
       </aside>
     </div>
-    {pickerOpen && <div className="party-picker-backdrop"><section className="party-picker" role="dialog" aria-modal="true" aria-label="Change watch party title"><header><div><span>Host controls</span><h2>Choose the full title</h2></div><button type="button" aria-label="Close title picker" onClick={() => setPickerOpen(false)}><X /></button></header><form onSubmit={(event) => void searchTitles(event)}><Search /><input autoFocus aria-label="Search watch party titles" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies and TV shows" /><button type="submit" aria-label="Search titles" disabled={searching || !query.trim()}>{searching ? <LoaderCircle className="spin" /> : 'Search'}</button></form><div className="party-picker__results">{results.map((item) => <button type="button" key={`${item.mediaType}-${item.id}`} aria-label={`Choose ${item.title}`} onClick={() => void chooseTitle(item)} disabled={searching}>{imageUrl(item.posterPath, 'w185') ? <img src={imageUrl(item.posterPath, 'w185')!} alt="" /> : <span className="party-picker__poster"><Play /></span>}<span><strong>{item.title}</strong><small>{item.year} · {item.mediaType === 'movie' ? 'Movie' : 'TV show'}</small></span></button>)}</div></section></div>}
+    {pickerOpen && <div className="party-picker-backdrop"><section className="party-picker" role="dialog" aria-modal="true" aria-label="Change watch party title"><header><div><span>Host controls</span><h2>Choose the full title</h2></div><button type="button" aria-label="Close title picker" onClick={() => setPickerOpen(false)}><X /></button></header><form onSubmit={(event) => void searchTitles(event)}><Search /><input autoFocus aria-label="Search watch party titles" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies and TV shows" /><button type="submit" aria-label="Search titles" disabled={searching || !query.trim()}>{searching ? <LoaderCircle className="spin" /> : 'Search'}</button></form><div className="party-picker__results">{results.map((item) => <button type="button" key={`${item.mediaType}-${item.id}`} aria-label={`Choose ${item.title}`} onClick={() => void chooseTitle(item)} disabled={searching}>{imageUrl(item.posterPath, 'w185') ? <img src={imageUrl(item.posterPath, 'w185')!} alt="" /> : <span className="party-picker__poster"><Play /></span>}<span><strong>{item.title}</strong><small>{item.year} Â· {item.mediaType === 'movie' ? 'Movie' : 'TV show'}</small></span></button>)}</div></section></div>}
   </motion.section>;
 }

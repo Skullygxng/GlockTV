@@ -199,8 +199,8 @@ export function LiveTvRoute({
                 <div className="live-player__video live-player__video--idle">
                   <div className="live-player__idle-message">
                     <Tv />
-                    <strong>Choose a channel</strong>
-                    <span>Pick one from the lineup to start watching.</span>
+                    <strong>Choose a channel to start watching live TV</strong>
+                    <span>Select any channel from the lineup below.</span>
                   </div>
                 </div>
               </div>

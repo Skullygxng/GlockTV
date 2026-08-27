@@ -50,9 +50,21 @@ const vibes = [
 
 function loadSession() {
   try {
-    const saved = sessionStorage.getItem('glocktv-session');
-    return saved ? { ...initialSessionState, ...JSON.parse(saved) } : initialSessionState;
-  } catch { return initialSessionState; }
+    const saved =
+      sessionStorage.getItem(
+        'glocktv-session',
+      );
+
+    if (!saved) {
+      return initialSessionState;
+    }
+
+    return sanitizeSessionState(
+      JSON.parse(saved),
+    );
+  } catch {
+    return initialSessionState;
+  }
 }
 
 function Logo() {

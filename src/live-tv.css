@@ -10,6 +10,7 @@ body.live-tv-open .notice{display:none!important}
   background:radial-gradient(circle at 35% 0,rgba(117,20,233,.16),transparent 34%),#050507;
   color:#f6f3ff;
   overflow:auto;
+  overflow-x:hidden;
   padding:26px;
   -webkit-text-size-adjust:100%;
   text-size-adjust:100%;
@@ -385,17 +386,25 @@ body.live-tv-open .notice{display:none!important}
 @media(max-width:700px){
   .live-tv-stage{
     z-index:35;
-    inset:0 0 calc(62px + env(safe-area-inset-bottom, 0px));
+    top:0;
+    right:0;
+    left:0;
+    bottom:calc(62px + env(safe-area-inset-bottom, 0px));
     padding:0;
+    padding-top:env(safe-area-inset-top, 0px);
+    padding-left:max(12px, env(safe-area-inset-left, 0px));
+    padding-right:max(12px, env(safe-area-inset-right, 0px));
     background:#050507;
     overflow:hidden;
     display:flex;
     flex-direction:column;
     touch-action:manipulation;
+    box-sizing:border-box;
   }
   .live-tv-hero{
     flex:0 0 auto;
-    padding:8px 12px;
+    width:100%;
+    padding:10px 4px 8px;
     margin:0;
     align-items:center;
   }
@@ -403,13 +412,15 @@ body.live-tv-open .notice{display:none!important}
   .live-tv-hero p,
   .live-tv-hero>div:first-child>span{display:none}
   .live-tv-source{display:none}
-  .live-tv-close{width:32px;height:32px}
+  .live-tv-close{width:32px;height:32px;flex:0 0 auto}
   .live-tv-layout{
     flex:1 1 auto;
+    min-width:0;
     min-height:0;
+    width:100%;
     display:flex;
     flex-direction:column;
-    gap:0;
+    gap:8px;
     overflow:hidden;
   }
   .live-tv-stage:not(.live-tv-stage--watching) .live-tv-content{
@@ -417,12 +428,14 @@ body.live-tv-open .notice{display:none!important}
   }
   .live-tv-content{
     flex:0 0 auto;
+    min-width:0;
     z-index:6;
-    background:#050507;
+    background:transparent;
+    padding:0 0 2px;
   }
   .live-player{
-    border-width:1px 0;
-    border-radius:0;
+    border:1px solid #30243a;
+    border-radius:14px;
     box-shadow:none;
   }
   .live-tv-stage--watching .live-player__video{
@@ -433,31 +446,46 @@ body.live-tv-open .notice{display:none!important}
   .live-tv-disclaimer{display:none}
   .live-tv-browser{
     flex:1 1 auto;
+    min-width:0;
     min-height:0;
-    border:0;
-    border-top:1px solid #25212b;
-    border-radius:0;
+    width:100%;
+    border:1px solid #25212b;
+    border-radius:14px;
     overflow:hidden;
     display:flex;
     flex-direction:column;
+    margin-bottom:8px;
   }
   .live-tv-search{
     flex:0 0 auto;
-    margin:8px 12px 4px;
+    margin:10px 10px 6px;
     height:44px;
   }
   .live-tv-search input{
     font-size:16px;
   }
-  .live-tv-categories{flex:0 0 auto}
-  .live-tv-count{flex:0 0 auto}
+  .live-tv-categories{
+    flex:0 0 auto;
+    padding:4px 10px 10px;
+  }
+  .live-tv-count{
+    flex:0 0 auto;
+    padding:8px 12px;
+  }
   .live-tv-list{
     flex:1 1 auto;
     min-height:0;
     overflow:auto;
     -webkit-overflow-scrolling:touch;
+    padding-bottom:8px;
   }
   .live-tv-channel{min-height:58px}
-  .live-tv-state{min-height:calc(100svh - 62px - env(safe-area-inset-bottom, 0px))}
+  .live-tv-state{
+    min-height:0;
+    flex:1;
+    margin:8px;
+    border:1px solid #25212b;
+    border-radius:14px;
+  }
   .bottom-nav .live-tv-nav-button span{display:block}
 }

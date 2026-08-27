@@ -31,19 +31,38 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           checks = {
-            'src/App.tsx': 20000,
-            'src/components/FriendsExperience.tsx': 20000,
-            'src/friends.css': 8000,
-            'tests/friends-watch-party.test.tsx': 3000,
+            'src/App.tsx': {
+              'minimum': 30000,
+              'sentinels': ['FriendsRoute', 'MediaCard', 'PlaybackModal', 'loadDiscovery', 'openContext', 'export function App'],
+            },
+            'src/components/FriendsExperience.tsx': {
+              'minimum': 36000,
+              'sentinels': ['createRoom', 'joinRoom', 'sendMessage', 'subscribe', 'clearChat', 'PartyPlaybackPlayer', 'export function FriendsExperience'],
+            },
+            'src/friends.css': {
+              'minimum': 8000,
+              'sentinels': ['.watch-party', '.friends-lobby'],
+            },
+            'tests/friends-watch-party.test.tsx': {
+              'minimum': 25000,
+              'sentinels': ['Create private room', 'Join invite', 'Stay in room', 'Resume hosting', 'Jump to latest message', 'Room controls', 'Message the room'],
+            },
           }
-          for path, minimum in checks.items():
-              size = Path(path).stat().st_size
-              text = Path(path).read_text(encoding='utf-8', errors='replace')
-              if size < minimum:
-                  raise SystemExit(f'{path} is {size} bytes; expected at least {minimum}')
-              if 'PLACEHOLDER_' in text:
+
+          for path, spec in checks.items():
+              file = Path(path)
+              size = file.stat().st_size
+              text = file.read_text(encoding='utf-8', errors='replace')
+              if size < spec['minimum']:
+                  raise SystemExit(f'{path} is {size} bytes; expected at least {spec["minimum"]}')
+              if 'PLACEHOLDER_' in text or text.strip() in {'PLACEHOLDER_APP', 'PLACEHOLDER_FRIENDS', 'PLACEHOLDER_CSS', 'PLACEHOLDER_TEST'}:
                   raise SystemExit(f'{path} still contains a placeholder overwrite')
+              missing = [token for token in spec['sentinels'] if token not in text]
+              if missing:
+                  raise SystemExit(f'{path} is missing production sentinels: {', '.join(missing)}')
+              print(f'{path}: {size} bytes, sentinels ok')
           print('integrity ok')
           PY
 

@@ -43,7 +43,7 @@ jobs:
             },
             'src/friends.css': {
               'minimum': 8000,
-              'sentinels': ['.watch-party', '.friends-lobby'],
+              'sentinels': ['.watch-party', '.resume-room-card', '.party-chat', '.party-roster'],
             },
             'tests/friends-watch-party.test.tsx': {
               'minimum': 10000,

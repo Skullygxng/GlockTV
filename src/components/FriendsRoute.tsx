@@ -1,7 +1,7 @@
 import type { MediaItem } from '../lib/media';
 import type { TmdbClient } from '../lib/tmdb';
 import { createWatchPartyService, type WatchPartyService } from '../lib/watchParty';
-import { FriendsView } from './FriendsView';
+import { FriendsExperience } from './FriendsExperience';
 import { getPartyPlaybackConfig, type PartyPlaybackConfig } from './PartyPlaybackPlayer';
 
 interface FriendsRouteProps {
@@ -24,18 +24,18 @@ export function FriendsRoute({
   service: providedService,
   selectedTitle,
   client,
-  trailerKey,
   initialRoomCode,
+  partyPlaybackConfig,
 }: FriendsRouteProps) {
   const service = providedService === undefined ? getDefaultService() : providedService;
-  void getPartyPlaybackConfig;
+  const partyConfig = partyPlaybackConfig ?? getPartyPlaybackConfig();
   return (
-    <FriendsView
+    <FriendsExperience
       service={service}
       selectedTitle={selectedTitle}
       client={client}
-      trailerKey={trailerKey}
       initialRoomCode={initialRoomCode}
+      partyConfig={partyConfig}
     />
   );
 }

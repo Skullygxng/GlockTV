@@ -104,3 +104,20 @@ export function loungeBallot(pool: MediaItem[], currentTitleId?: number, limit =
   }
   return [...unique.values()];
 }
+
+export function isOfficialLounge(room?: { isOfficial?: boolean; isPublic?: boolean } | null) {
+  return Boolean(room?.isOfficial && room?.isPublic);
+}
+
+export function visibleRoomChat(
+  messages: PartyMessage[],
+  room?: { isOfficial?: boolean; isPublic?: boolean; playbackUpdatedAt?: string } | null,
+  options: { now?: number; ttlMs?: number } = {},
+) {
+  if (!isOfficialLounge(room)) return messages;
+  return visiblePartyMessages(messages, {
+    titleChangedAt: room?.playbackUpdatedAt,
+    now: options.now,
+    ttlMs: options.ttlMs ?? LOUNGE_CHAT_TTL_MS,
+  });
+}

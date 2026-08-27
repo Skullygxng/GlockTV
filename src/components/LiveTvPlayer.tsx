@@ -204,6 +204,14 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
     setStreamIndex(next);
   };
 
+  const startFromTap = () => {
+    const element = video.current;
+    if (!element) return;
+    void element.play().then(() => setState('live')).catch(() => {
+      setState('tap-play');
+    });
+  };
+
   const showOverlay = state === 'loading' || state === 'trying-source' || state === 'error';
   const showTapHint = state === 'tap-play';
   const title = channel.displayName || channel.name;
@@ -211,7 +219,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
   return (
     <section className="live-player" aria-label={`${title} live player`}>
       <div className="live-player__video">
-        <video ref={video} controls playsInline preload="metadata" />
+        <video ref={video} playsInline preload="metadata" />
         {showOverlay && (
           <div className={`live-player__status live-player__status--${state === 'error' ? 'error' : 'loading'}`} role="status">
             {state === 'error' ? <AlertTriangle /> : <LoaderCircle className="spin" />}
@@ -231,11 +239,11 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
           </div>
         )}
         {showTapHint && (
-          <div className="live-player__status live-player__status--tap-play" role="status">
+          <button type="button" className="live-player__status live-player__status--tap-play" onClick={startFromTap}>
             <Play />
             <strong>{message}</strong>
-            <span className="live-player__tap-hint">Use the video controls to start playback</span>
-          </div>
+            <span className="live-player__tap-hint">Tap to start playback</span>
+          </button>
         )}
       </div>
       <div className="live-player__meta">

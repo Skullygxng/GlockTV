@@ -11,6 +11,8 @@ body.live-tv-open .notice{display:none!important}
   color:#f6f3ff;
   overflow:auto;
   padding:26px;
+  -webkit-text-size-adjust:100%;
+  text-size-adjust:100%;
 }
 
 .live-tv-hero{
@@ -229,7 +231,7 @@ body.live-tv-open .notice{display:none!important}
   outline:0;
   background:transparent;
   color:#fff;
-  font-size:10px;
+  font-size:16px;
 }
 .live-tv-categories{
   display:flex;
@@ -438,7 +440,10 @@ body.live-tv-open .notice{display:none!important}
   .live-tv-search{
     flex:0 0 auto;
     margin:8px 12px 4px;
-    height:36px;
+    height:44px;
+  }
+  .live-tv-search input{
+    font-size:16px;
   }
   .live-tv-categories{flex:0 0 auto}
   .live-tv-count{flex:0 0 auto}

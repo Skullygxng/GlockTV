@@ -8,6 +8,7 @@ import {
 import { MediaCard } from './components/MediaCard';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
+import { composeDiscoverFeed } from './lib/feed';
 import { imageUrl, scoreMatch, type MediaItem } from './lib/media';
 import { getPlaybackConfig, type PlaybackConfig } from './lib/playback';
 import {
@@ -124,8 +125,9 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   const previewCache = useRef(new Map<string, PreviewContext>());
   const previewRequests = useRef(new Map<string, Promise<PreviewContext>>());
   const feedRequestVersion = useRef(0);
-  const touchStartY = useRef<number | null>(null);
-  const wheelLockedUntil = useRef(0);
+const modalContextVersion = useRef(0);
+const touchStartY = useRef<number | null>(null);
+const wheelLockedUntil = useRef(0);
 
   const loadTitleContext = useCallback((item: Pick<MediaItem, 'id' | 'mediaType'>) => {
     const key = mediaKey(item);
@@ -196,7 +198,11 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
     void api.getTrending()
       .then((results) => {
         if (cancelled || requestVersion !== feedRequestVersion.current) return;
-        setItems(results);
+        setItems(composeDiscoverFeed(results, {
+  likedGenreIds: session.likedGenreIds,
+  skippedGenreIds: session.skippedGenreIds,
+  selectedGenreIds: filters.genreIds,
+}));
         setError('');
       })
       .catch(() => {
@@ -342,19 +348,27 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   };
 
   const openContext = async (
-    item: MediaItem,
-    mode: 'details' | 'trailer' | 'channel',
-  ) => {
-    setModalMode(mode);
-    setContext(null);
+  item: MediaItem,
+  mode: 'details' | 'trailer' | 'channel',
+) => {
+  const requestVersion = ++modalContextVersion.current;
 
-    try {
-      setContext(await loadTitleContext(item));
-    } catch {
-      setError('Title details are temporarily unavailable.');
-      setModalMode(null);
-    }
-  };
+  setModalMode(mode);
+  setContext(null);
+
+  try {
+    const nextContext = await loadTitleContext(item);
+
+    if (requestVersion !== modalContextVersion.current) return;
+
+    setContext(nextContext);
+  } catch {
+    if (requestVersion !== modalContextVersion.current) return;
+
+    setError('Title details are temporarily unavailable.');
+    setModalMode(null);
+  }
+};
 
   const loadDiscovery = useCallback(async (
     nextFilters: DiscoveryFilters,
@@ -373,7 +387,11 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
 
       if (requestVersion !== feedRequestVersion.current) return;
 
-      setItems(results);
+      setItems(composeDiscoverFeed(results, {
+  likedGenreIds: session.likedGenreIds,
+  skippedGenreIds: session.skippedGenreIds,
+  selectedGenreIds: nextFilters.genreIds,
+}));
       setError('');
     } catch {
       if (requestVersion === feedRequestVersion.current) {
@@ -384,7 +402,11 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
         setLoading(false);
       }
     }
-  }, [api]);
+  }, [
+  api,
+  session.likedGenreIds,
+  session.skippedGenreIds,
+]);
 
   const applyFilters = () => {
     setFiltersOpen(false);

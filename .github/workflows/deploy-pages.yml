@@ -46,8 +46,8 @@ jobs:
               'sentinels': ['.watch-party', '.friends-lobby'],
             },
             'tests/friends-watch-party.test.tsx': {
-              'minimum': 25000,
-              'sentinels': ['Create private room', 'Join invite', 'Stay in room', 'Resume hosting', 'Jump to latest message', 'Room controls', 'Message the room'],
+              'minimum': 10000,
+              'sentinels': ['Create private room', 'Join invite', 'Stay in room', 'Resume hosting', 'Jump to latest message', 'Message the room'],
             },
           }
 
@@ -63,6 +63,17 @@ jobs:
               if missing:
                   raise SystemExit(f'{path} is missing production sentinels: {', '.join(missing)}')
               print(f'{path}: {size} bytes, sentinels ok')
+
+          suite = sorted(Path('tests').glob('friends-watch-party*.test.tsx'))
+          suite_text = '\n'.join(path.read_text(encoding='utf-8', errors='replace') for path in suite)
+          suite_size = sum(path.stat().st_size for path in suite)
+          if suite_size < 25000:
+              raise SystemExit(f'Friends test suite is {suite_size} bytes; expected at least 25000')
+          suite_sentinels = ['Room controls', 'Make Date Night co-host', 'Change title', 'Automated GlockTV host', 'Resync me']
+          missing_suite = [token for token in suite_sentinels if token not in suite_text]
+          if missing_suite:
+              raise SystemExit(f'Friends test suite is missing coverage: {', '.join(missing_suite)}')
+          print(f'friends suite: {suite_size} bytes across {len(suite)} files')
           print('integrity ok')
           PY
 

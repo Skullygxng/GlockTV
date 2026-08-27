@@ -427,19 +427,73 @@ describe('Friends watch parties', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('The host removed you from this room.');
   });
 
-  it('polls room state as a fallback when realtime delivery is delayed', async () => {
-    const partyService = makePartyService();
-    partyService.getRoom.mockResolvedValueOnce({ ...room, playbackState: 'playing' });
-    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
-    await screen.findByRole('heading', { name: 'Heat' });
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
-    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
-    fireEvent.change(screen.getByLabelText('Room code'), { target: { value: 'heat95' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+  it('checks room state on entry when realtime delivery is delayed', async () => {
+  const partyService = makePartyService();
 
-    await waitFor(() => expect(partyService.getRoom).toHaveBeenCalledWith('room-1'));
-    expect(await screen.findByText(/Playing · room clock/i)).toBeInTheDocument();
+  render(
+    <App
+      client={tmdbClient}
+      partyService={partyService as never}
+      partyPlaybackConfig={partyPlaybackConfig}
+    />,
+  );
+
+  await screen.findByRole('heading', {
+    name: 'Heat',
   });
+
+  fireEvent.click(
+    within(
+      screen.getByRole('navigation', {
+        name: 'Primary navigation',
+      }),
+    ).getByRole('button', {
+      name: 'Friends',
+    }),
+  );
+
+  fireEvent.change(
+    await screen.findByLabelText(
+      'Your nickname',
+    ),
+    {
+      target: {
+        value: 'Guest',
+      },
+    },
+  );
+
+  fireEvent.change(
+    screen.getByLabelText('Room code'),
+    {
+      target: {
+        value: 'heat95',
+      },
+    },
+  );
+
+  fireEvent.click(
+    screen.getByRole('button', {
+      name: 'Join',
+    }),
+  );
+
+  await waitFor(() =>
+    expect(
+      partyService.getRoom,
+    ).toHaveBeenCalledWith('room-1'),
+  );
+
+  expect(
+    partyService.getMembershipStatus,
+  ).toHaveBeenCalledWith('room-1');
+
+  expect(
+    await screen.findByRole('region', {
+      name: 'Watch party HEAT95',
+    }),
+  ).toBeInTheDocument();
+});
 
   it('lets the host search for a different title and changes it for the room', async () => {
     const partyService = makePartyService();

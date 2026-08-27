@@ -57,6 +57,10 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
     let disposed = false;
     let hls: HlsInstance | null = null;
 
+    element.setAttribute('playsinline', 'true');
+    element.setAttribute('webkit-playsinline', 'true');
+    element.playsInline = true;
+
     const markAttempted = (index: number) => {
       attemptedRef.current.add(index);
     };
@@ -100,9 +104,14 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
       setMessage('Live');
     };
     const onError = () => fail();
+    const onCanPlay = () => {
+      if (disposed) return;
+      if (element.paused) tryPlay();
+    };
 
     element.addEventListener('playing', onPlaying);
     element.addEventListener('error', onError);
+    element.addEventListener('canplay', onCanPlay);
 
     const timeout = window.setTimeout(() => {
       if (!disposed && element.readyState < HTMLMediaElement.HAVE_FUTURE_DATA && element.paused) {
@@ -112,7 +121,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
           fail('Stream timed out.');
         }
       }
-    }, 15000);
+    }, 18000);
 
     const tryPlay = () => {
       const result = element.play();
@@ -161,6 +170,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
       window.clearTimeout(timeout);
       element.removeEventListener('playing', onPlaying);
       element.removeEventListener('error', onError);
+      element.removeEventListener('canplay', onCanPlay);
       hls?.destroy();
       element.removeAttribute('src');
       element.load();
@@ -201,7 +211,14 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
   return (
     <section className="live-player" aria-label={`${title} live player`}>
       <div className="live-player__video">
-        <video ref={video} controls playsInline preload="metadata" />
+        <video
+          ref={video}
+          controls
+          playsInline
+          preload="metadata"
+          // @ts-expect-error iOS Safari inline playback
+          webkit-playsinline="true"
+        />
         {showOverlay && (
           <div className={`live-player__status live-player__status--${state === 'error' ? 'error' : 'loading'}`} role="status">
             {state === 'error' ? <AlertTriangle /> : <LoaderCircle className="spin" />}

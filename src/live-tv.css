@@ -391,6 +391,7 @@ body.live-tv-open .notice{display:none!important}
     overflow:hidden;
     display:flex;
     flex-direction:column;
+    touch-action:manipulation;
   }
   .live-tv-hero{
     flex:0 0 auto;
@@ -423,6 +424,9 @@ body.live-tv-open .notice{display:none!important}
     border-width:1px 0;
     border-radius:0;
     box-shadow:none;
+  }
+  .live-tv-stage--watching .live-player__video{
+    max-height:32svh;
   }
   .live-player__meta{padding:8px 12px}
   .live-player__meta h2{font-size:16px;margin:0 0 2px}

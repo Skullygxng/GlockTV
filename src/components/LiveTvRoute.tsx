@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
-import { Heart, LoaderCircle, Radio, Search, Tv, WifiOff } from 'lucide-react';
+import { Heart, LoaderCircle, Radio, Search, Tv, WifiOff, X } from 'lucide-react';
 import {
   categoryLabel,
   clearIptvOrgCatalogCache,
@@ -17,6 +17,7 @@ const BATCH_SIZE = 50;
 export interface LiveTvRouteProps {
   loadCatalog?: () => Promise<LiveTvCatalog>;
   PlayerComponent?: ComponentType<{ channel: LiveChannel }>;
+  onClose?: () => void;
 }
 
 function readFavorites() {
@@ -31,6 +32,7 @@ function readFavorites() {
 export function LiveTvRoute({
   loadCatalog = defaultLoadCatalog,
   PlayerComponent = LiveTvPlayer,
+  onClose,
 }: LiveTvRouteProps) {
   const [catalog, setCatalog] = useState<LiveTvCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -149,10 +151,17 @@ export function LiveTvRoute({
           <h1>Live TV</h1>
           <p>Public live channels from IPTV-org, filtered for browser-compatible HTTPS streams.</p>
         </div>
-        <div className="live-tv-source">
-          <Tv />
-          <strong>IPTV-org</strong>
-          <small>United States catalog</small>
+        <div className="live-tv-hero__actions">
+          <div className="live-tv-source">
+            <Tv />
+            <strong>IPTV-org</strong>
+            <small>United States catalog</small>
+          </div>
+          {onClose && (
+            <button type="button" className="live-tv-close" aria-label="Close Live TV" onClick={onClose}>
+              <X />
+            </button>
+          )}
         </div>
       </header>
 
@@ -214,27 +223,14 @@ export function LiveTvRoute({
             </div>
 
             <div className="live-tv-categories" aria-label="Live TV categories">
-              <button
-                type="button"
-                className={category === 'all' ? 'active' : ''}
-                onClick={() => setCategory('all')}
-              >
+              <button type="button" className={category === 'all' ? 'active' : ''} onClick={() => setCategory('all')}>
                 All
               </button>
-              <button
-                type="button"
-                className={category === 'favorites' ? 'active' : ''}
-                onClick={() => setCategory('favorites')}
-              >
+              <button type="button" className={category === 'favorites' ? 'active' : ''} onClick={() => setCategory('favorites')}>
                 Favorites
               </button>
               {categories.slice(0, 10).map(([name]) => (
-                <button
-                  type="button"
-                  key={name}
-                  className={category === name ? 'active' : ''}
-                  onClick={() => setCategory(name)}
-                >
+                <button type="button" key={name} className={category === name ? 'active' : ''} onClick={() => setCategory(name)}>
                   {categoryLabel(name)}
                 </button>
               ))}
@@ -258,22 +254,10 @@ export function LiveTvRoute({
                     const isActive = channel.id === selectedId;
                     return (
                       <article key={channel.id} className={isActive ? 'active' : ''}>
-                        <button
-                          type="button"
-                          className="live-tv-channel"
-                          onClick={() => setSelectedId(channel.id)}
-                          aria-label={`Watch ${title}`}
-                        >
+                        <button type="button" className="live-tv-channel" onClick={() => setSelectedId(channel.id)} aria-label={`Watch ${title}`}>
                           <span className="live-tv-channel__logo">
                             {channel.logo ? (
-                              <img
-                                src={channel.logo}
-                                alt=""
-                                loading="lazy"
-                                onError={(event) => {
-                                  event.currentTarget.style.display = 'none';
-                                }}
-                              />
+                              <img src={channel.logo} alt="" loading="lazy" onError={(event) => { event.currentTarget.style.display = 'none'; }} />
                             ) : (
                               <Tv />
                             )}
@@ -300,10 +284,7 @@ export function LiveTvRoute({
                   })}
                   {hasMore && (
                     <div className="live-tv-load-more">
-                      <button
-                        type="button"
-                        onClick={() => setVisibleCount((count) => count + BATCH_SIZE)}
-                      >
+                      <button type="button" onClick={() => setVisibleCount((count) => count + BATCH_SIZE)}>
                         Load more ({filtered.length - visibleCount} remaining)
                       </button>
                     </div>

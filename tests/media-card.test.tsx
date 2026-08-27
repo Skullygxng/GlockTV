@@ -44,7 +44,7 @@ describe('MediaCard', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'Joker' })).toBeInTheDocument();
-    expect(screen.getByText('93% match for you')).toBeInTheDocument();
+    expect(screen.getByText('93% GlockTV match')).toBeInTheDocument();
     expect(screen.getByText('2h 2m')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Watch movie' }));
@@ -52,7 +52,7 @@ describe('MediaCard', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Details for Joker' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Joker to My List' }));
     fireEvent.click(screen.getByRole('button', { name: 'Like Joker' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Not for me' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Not interested in Joker' }));
 
     expect(onWatch).toHaveBeenCalledWith(item);
     expect(onTrailer).toHaveBeenCalledWith(item);

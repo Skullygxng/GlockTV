@@ -27,6 +27,26 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Guard production file integrity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          checks = {
+            'src/App.tsx': 20000,
+            'src/components/FriendsExperience.tsx': 20000,
+            'src/friends.css': 8000,
+            'tests/friends-watch-party.test.tsx': 10000,
+          }
+          for path, minimum in checks.items():
+              size = Path(path).stat().st_size
+              text = Path(path).read_text(encoding='utf-8', errors='replace')
+              if size < minimum:
+                  raise SystemExit(f'{path} is {size} bytes; expected at least {minimum}')
+              if 'PLACEHOLDER_' in text:
+                  raise SystemExit(f'{path} still contains a placeholder overwrite')
+          print('integrity ok')
+          PY
+
       - name: Install dependencies
         run: npm ci
 
@@ -68,4 +88,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-

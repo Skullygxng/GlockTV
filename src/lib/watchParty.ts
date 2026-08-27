@@ -67,8 +67,8 @@ export interface PartySubscriptionHandlers {
   onRoom: (room: PartyRoom) => void;
   onMessage: (message: PartyMessage) => void;
   onMembersChanged: () => void;
+  onChatCleared?: () => void;
   onReady: () => void;
-
 }
 
 export interface WatchPartyService {
@@ -163,6 +163,8 @@ const mapMessage = (row: MessageRow): PartyMessage => ({ id: row.id, roomId: row
 const mapPublicRoom = (row: PublicRoomRow): PublicPartyRoom => ({ ...mapRoom(row), audienceCount: Number(row.audience_count ?? 0) });
 
 class SupabaseWatchPartyService implements WatchPartyService {
+  private readonly roomChannels = new Map<string, RealtimeChannel>();
+
   constructor(private readonly client: SupabaseClient) {}
 
   async ensureUser() {
@@ -256,11 +258,20 @@ class SupabaseWatchPartyService implements WatchPartyService {
 
   subscribe(roomId: string, handlers: PartySubscriptionHandlers) {
     const channel: RealtimeChannel = this.client.channel(`watch-party:${roomId}`)
+      .on('broadcast', { event: 'chat-cleared' }, () => handlers.onChatCleared?.())
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'watch_rooms', filter: `id=eq.${roomId}` }, (payload) => handlers.onRoom(mapRoom(payload.new as RoomRow)))
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_messages', filter: `room_id=eq.${roomId}` }, (payload) => handlers.onMessage(mapMessage(payload.new as MessageRow)))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${roomId}` }, handlers.onMembersChanged)
       .subscribe((status) => { if (status === 'SUBSCRIBED') handlers.onReady(); });
-    return () => { void this.client.removeChannel(channel); };
+
+    this.roomChannels.set(roomId, channel);
+
+    return () => {
+      if (this.roomChannels.get(roomId) === channel) {
+        this.roomChannels.delete(roomId);
+      }
+      void this.client.removeChannel(channel);
+    };
   }
 
   async leaveRoom(roomId: string) {
@@ -331,6 +342,15 @@ class SupabaseWatchPartyService implements WatchPartyService {
   async clearChat(roomId: string) {
     const { error } = await this.client.rpc('clear_watch_room_chat', { p_room_id: roomId });
     if (error) throw new Error(error.message);
+
+    const channel = this.roomChannels.get(roomId);
+    if (channel) {
+      void channel.send({
+        type: 'broadcast',
+        event: 'chat-cleared',
+        payload: { roomId },
+      }).catch(() => undefined);
+    }
   }
 
   async getBannedMembers(roomId: string) {

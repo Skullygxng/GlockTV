@@ -186,7 +186,7 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   return <motion.div className="overlay playback-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
     <motion.section className="playback-modal" role="dialog" aria-label={playerName} aria-modal="true" initial={{ y: 26, scale: .985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .99 }}>
       <header className="playback-modal__header">
-        <div className="playback-brand"><span>GlockTV player</span><small>{item.mediaType === 'movie' ? 'Feature' : `S${season} Â· E${episode}`} Â· {item.title}</small></div>
+        <div className="playback-brand"><span>GlockTV player</span><small>{item.mediaType === 'movie' ? 'Feature' : `S${season} / E${episode}`} - {item.title}</small></div>
         <div className="playback-modal__actions">
           {compatibleServers.length > 0 && <div className="server-picker">
             <button type="button" className="server-picker__trigger" aria-label="Open server list" aria-expanded={serverOpen} onClick={() => setServerOpen((open) => !open)}><ShieldCheck /><span><small>Server</small>{activeServer?.label}</span><ChevronDown /></button>
@@ -214,7 +214,7 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
         />
         {playerState !== 'loaded' && <div className={`playback-status playback-status--${playerState}`} role="status">
           <LoaderCircle className="spin" />
-          <span>{playerState === 'slow' ? 'This server is taking too long.' : `Connecting to ${activeServer?.label ?? 'server'}â¦`}</span>
+          <span>{playerState === 'slow' ? 'This server is taking too long.' : `Connecting to ${activeServer?.label ?? 'server'}...`}</span>
           {playerState === 'slow' && <div className="playback-status__actions">
             <button type="button" onClick={retry}>Retry</button>
             {compatibleServers.length > 1 && <button type="button" onClick={nextServer}>Next server</button>}
@@ -222,11 +222,11 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
         </div>}
       </div> : <div className="playback-unconfigured"><Film /><strong>Playback source not connected</strong><p>Add your authorized {item.mediaType === 'movie' ? 'movie' : 'TV'} embed URL template to the GlockTV environment configuration.</p></div>}
       <footer className="playback-modal__footer">
-        <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><h2>{item.title}</h2><strong>{item.year} Â· {item.genres.slice(0, 2).join(' Â· ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>
+        <div><span>{item.mediaType === 'movie' ? 'Feature presentation' : 'Episode playback'}</span><h2>{item.title}</h2><strong>{item.year} - {item.genres.slice(0, 2).join(' - ') || (item.mediaType === 'movie' ? 'Movie' : 'Series')}</strong></div>
         <small><ShieldCheck /> Pop-up windows are blocked. Ads drawn inside a third-party player cannot be removed by GlockTV.</small>
       </footer>
       {item.mediaType === 'tv' && <EpisodeBrowser client={client} seriesId={item.id} activeSeason={season} activeEpisode={episode} onSelect={selectEpisode} />}
-      {!!recommendations.length && <section className="playback-recommendations" aria-label="More like this"><header><span>Keep watching</span><h3>More like this</h3></header><div>{recommendations.slice(0, 6).map((recommendation) => <button type="button" key={`${recommendation.mediaType}-${recommendation.id}`} onClick={() => onSelect?.(recommendation)}>{imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500') ? <img loading="lazy" decoding="async" src={imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500')!} alt="" /> : <span className="playback-recommendations__fallback"><Film /></span>}<strong>{recommendation.title}</strong><small>{recommendation.year} Â· â {recommendation.rating.toFixed(1)}</small></button>)}</div></section>}
+      {!!recommendations.length && <section className="playback-recommendations" aria-label="More like this"><header><span>Keep watching</span><h3>More like this</h3></header><div>{recommendations.slice(0, 6).map((recommendation) => <button type="button" key={`${recommendation.mediaType}-${recommendation.id}`} onClick={() => onSelect?.(recommendation)}>{imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500') ? <img loading="lazy" decoding="async" src={imageUrl(recommendation.backdropPath ?? recommendation.posterPath, 'w500')!} alt="" /> : <span className="playback-recommendations__fallback"><Film /></span>}<strong>{recommendation.title}</strong><small>{recommendation.year} - Rating {recommendation.rating.toFixed(1)}</small></button>)}</div></section>}
     </motion.section>
   </motion.div>;
 }

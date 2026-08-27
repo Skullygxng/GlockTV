@@ -431,8 +431,13 @@ body.live-tv-open .notice{display:none!important}
     border-radius:0;
     box-shadow:none;
   }
-  .live-tv-stage--watching .live-player__video{
-    max-height:32svh;
+  .live-player__video{
+    width:100%;
+    aspect-ratio:16/9;
+    max-height:none;
+  }
+  .live-player video{
+    object-fit:cover;
   }
   .live-player__meta{padding:8px 14px}
   .live-player__meta h2{font-size:16px;margin:0 0 2px}

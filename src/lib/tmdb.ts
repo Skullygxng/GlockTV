@@ -15,6 +15,10 @@ export interface ProviderRegion {
   rent?: Provider[];
   buy?: Provider[];
 }
+export interface PreviewContext {
+  details: MediaItem;
+  trailer: VideoResult | null;
+}
 
 export interface TitleContext {
   details: MediaItem;

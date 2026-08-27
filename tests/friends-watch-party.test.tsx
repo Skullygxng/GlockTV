@@ -29,7 +29,7 @@ describe('Friends watch parties', () => {
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
     fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
-    expect(await screen.findByText('HEAT95')).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Watch party HEAT95' })).toBeInTheDocument();
     expect(partyService.createRoom).toHaveBeenCalledWith(expect.objectContaining({
       nickname: 'Skully',
       titleId: 1,

@@ -352,6 +352,145 @@
   font-size: 9px;
 }
 
+.invite-join-card {
+  margin: 8px 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #4a3160;
+  border-radius: 10px;
+  background: linear-gradient(120deg, rgba(120, 21, 233, .16), rgba(16, 12, 20, .94));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.invite-join-card > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.invite-join-card small {
+  color: #c16afa;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.invite-join-card strong {
+  color: #fff;
+  font-size: 16px;
+  letter-spacing: .08em;
+}
+
+.invite-join-card span {
+  color: #8e8795;
+  font-size: 8px;
+}
+
+.invite-join-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.invite-join-card__actions button {
+  min-height: 30px;
+  border: 1px solid #8430bd;
+  border-radius: 7px;
+  background: #1a1222;
+  color: #f4eaff;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.invite-join-card__actions button svg {
+  width: 12px;
+}
+
+.lounge-nextup {
+  margin: 8px 10px 0;
+  padding: 10px;
+  border: 1px solid #3d2a4d;
+  border-radius: 10px;
+  background: #110d16;
+}
+
+.lounge-nextup header {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.lounge-nextup small {
+  color: #b454ff;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+
+.lounge-nextup strong {
+  color: #f5f1f7;
+  font-size: 11px;
+}
+
+.lounge-nextup ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.lounge-nextup li button {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid #32283c;
+  border-radius: 8px;
+  background: #17121c;
+  color: #efeaf3;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+}
+
+.lounge-nextup li button[aria-pressed='true'] {
+  border-color: #8d2df2;
+  background: #21132d;
+}
+
+.lounge-nextup li span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lounge-nextup li small {
+  color: #817a89;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 600;
+}
+
+.lounge-nextup li em {
+  color: #c75bff;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
 .party-chat {
   position: relative;
 }

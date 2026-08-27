@@ -37,15 +37,17 @@ export function visiblePartyMessages(
   options: { titleChangedAt?: string; now?: number; ttlMs?: number } = {},
 ) {
   const now = options.now ?? Date.now();
+  const applyTtl = options.ttlMs != null || Boolean(options.titleChangedAt);
   const ttlMs = options.ttlMs ?? LOUNGE_CHAT_TTL_MS;
   const titleChangedAt = options.titleChangedAt ? Date.parse(options.titleChangedAt) : Number.NaN;
-  const floor = Number.isFinite(titleChangedAt) ? titleChangedAt : now - ttlMs;
 
   return messages.filter((message) => {
     if (parseLoungeVote(message)) return false;
     const created = Date.parse(message.createdAt);
     if (!Number.isFinite(created)) return true;
-    return created >= floor && now - created <= ttlMs;
+    if (Number.isFinite(titleChangedAt) && created < titleChangedAt) return false;
+    if (applyTtl && now - created > ttlMs) return false;
+    return true;
   });
 }
 

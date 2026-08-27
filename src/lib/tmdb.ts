@@ -51,10 +51,21 @@ export interface TmdbClient {
   getTrending(): Promise<MediaItem[]>;
   discover(filters: DiscoveryFilters): Promise<MediaItem[]>;
   search(query: string): Promise<MediaItem[]>;
-  getTitleContext(item: Pick<MediaItem, 'id' | 'mediaType'>): Promise<TitleContext>;
+
+  getPreviewContext?(
+    item: Pick<MediaItem, 'id' | 'mediaType'>,
+  ): Promise<PreviewContext>;
+
+  getTitleContext(
+    item: Pick<MediaItem, 'id' | 'mediaType'>,
+  ): Promise<TitleContext>;
+
   getPersonCredits(personId: number): Promise<MediaItem[]>;
   getTvSeriesGuide?(seriesId: number): Promise<TvSeasonSummary[]>;
-  getTvSeason?(seriesId: number, seasonNumber: number): Promise<TvEpisode[]>;
+  getTvSeason?(
+    seriesId: number,
+    seasonNumber: number,
+  ): Promise<TvEpisode[]>;
 }
 
 interface ClientOptions {

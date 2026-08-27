@@ -113,11 +113,16 @@ body.live-tv-open .notice{display:none!important}
   place-items:center;
   gap:8px;
   text-align:center;
-  padding:24px;
+  padding:24px 16px;
   color:#9a94a4;
 }
 .live-player__idle-message svg{width:28px;color:#a52cf4}
-.live-player__idle-message strong{color:#f6f3ff;font-size:12px}
+.live-player__idle-message strong{
+  color:#f6f3ff;
+  font-size:12px;
+  max-width:100%;
+  overflow-wrap:anywhere;
+}
 .live-player__idle-message span{font-size:9px;color:#7a7480}
 
 .live-player__status{
@@ -404,6 +409,9 @@ body.live-tv-open .notice{display:none!important}
     gap:0;
     overflow:hidden;
   }
+  .live-tv-stage:not(.live-tv-stage--watching) .live-tv-content{
+    display:none;
+  }
   .live-tv-content{
     flex:0 0 auto;
     z-index:6;
@@ -414,15 +422,6 @@ body.live-tv-open .notice{display:none!important}
     border-radius:0;
     box-shadow:none;
   }
-  .live-player--idle .live-player__video{
-    aspect-ratio:auto;
-    min-height:72px;
-  }
-  .live-player--idle .live-player__idle-message{
-    padding:12px;
-    gap:4px;
-  }
-  .live-player--idle .live-player__idle-message svg{width:18px}
   .live-player__meta{padding:8px 12px}
   .live-player__meta h2{font-size:16px;margin:0 0 2px}
   .live-tv-disclaimer{display:none}

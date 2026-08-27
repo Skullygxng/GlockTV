@@ -213,8 +213,28 @@ const touchStartY = useRef<number | null>(null);
     return () => { cancelled = true; };
   }, [api]);
 
-  const currentItems = view === 'list' ? session.myList : items.filter((item) => !session.skippedIds.includes(item.id));
-  const current = currentItems[Math.min(activeIndex, Math.max(0, currentItems.length - 1))];
+  const const currentItems =
+  view === 'list'
+    ? session.myList
+    : items.filter(
+        (item) =>
+          !session.skippedKeys.includes(
+            mediaKey(item),
+          ),
+      );
+useEffect(() => {
+  setActiveIndex((index) => {
+    if (!currentItems.length) {
+      return 0;
+    }
+
+    return Math.min(
+      index,
+      currentItems.length - 1,
+    );
+  });
+}, [currentItems.length]);
+current = currentItems[Math.min(activeIndex, Math.max(0, currentItems.length - 1))];
   const saved = current ? session.myList.some((item) => item.id === current.id && item.mediaType === current.mediaType) : false;
   const match = current ? scoreMatch(current, {
     selectedGenreIds: filters.genreIds,

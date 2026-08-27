@@ -211,14 +211,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
   return (
     <section className="live-player" aria-label={`${title} live player`}>
       <div className="live-player__video">
-        <video
-          ref={video}
-          controls
-          playsInline
-          preload="metadata"
-          // @ts-expect-error iOS Safari inline playback
-          webkit-playsinline="true"
-        />
+        <video ref={video} controls playsInline preload="metadata" />
         {showOverlay && (
           <div className={`live-player__status live-player__status--${state === 'error' ? 'error' : 'loading'}`} role="status">
             {state === 'error' ? <AlertTriangle /> : <LoaderCircle className="spin" />}

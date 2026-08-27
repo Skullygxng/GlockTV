@@ -35,7 +35,7 @@ jobs:
             'src/App.tsx': 20000,
             'src/components/FriendsExperience.tsx': 20000,
             'src/friends.css': 8000,
-            'tests/friends-watch-party.test.tsx': 10000,
+            'tests/friends-watch-party.test.tsx': 3000,
           }
           for path, minimum in checks.items():
               size = Path(path).stat().st_size

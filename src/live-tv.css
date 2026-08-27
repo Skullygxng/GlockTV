@@ -390,11 +390,11 @@ body.live-tv-open .notice{display:none!important}
     right:0;
     left:0;
     bottom:calc(62px + env(safe-area-inset-bottom, 0px));
-    padding:0;
-    padding-top:env(safe-area-inset-top, 0px);
-    padding-left:max(12px, env(safe-area-inset-left, 0px));
-    padding-right:max(12px, env(safe-area-inset-right, 0px));
-    background:#050507;
+    padding-top:calc(6px + env(safe-area-inset-top, 0px));
+    padding-left:16px;
+    padding-right:16px;
+    padding-bottom:8px;
+    background:#0a090d;
     overflow:hidden;
     display:flex;
     flex-direction:column;
@@ -404,7 +404,7 @@ body.live-tv-open .notice{display:none!important}
   .live-tv-hero{
     flex:0 0 auto;
     width:100%;
-    padding:10px 4px 8px;
+    padding:8px 2px 10px;
     margin:0;
     align-items:center;
   }
@@ -420,7 +420,7 @@ body.live-tv-open .notice{display:none!important}
     width:100%;
     display:flex;
     flex-direction:column;
-    gap:8px;
+    gap:10px;
     overflow:hidden;
   }
   .live-tv-stage:not(.live-tv-stage--watching) .live-tv-content{
@@ -431,10 +431,9 @@ body.live-tv-open .notice{display:none!important}
     min-width:0;
     z-index:6;
     background:transparent;
-    padding:0 0 2px;
   }
   .live-player{
-    border:1px solid #30243a;
+    border:1px solid #3d3348;
     border-radius:14px;
     box-shadow:none;
   }
@@ -449,12 +448,11 @@ body.live-tv-open .notice{display:none!important}
     min-width:0;
     min-height:0;
     width:100%;
-    border:1px solid #25212b;
+    border:1px solid #3d3348;
     border-radius:14px;
     overflow:hidden;
     display:flex;
     flex-direction:column;
-    margin-bottom:8px;
   }
   .live-tv-search{
     flex:0 0 auto;
@@ -483,8 +481,7 @@ body.live-tv-open .notice{display:none!important}
   .live-tv-state{
     min-height:0;
     flex:1;
-    margin:8px;
-    border:1px solid #25212b;
+    border:1px solid #3d3348;
     border-radius:14px;
   }
   .bottom-nav .live-tv-nav-button span{display:block}

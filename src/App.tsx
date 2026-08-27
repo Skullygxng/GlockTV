@@ -122,7 +122,69 @@ const touchStartY = useRef<number | null>(null);
   const wheelLockedUntil = useRef(0);
 
   const loadTitleContext = useCallback((item: Pick<MediaItem, 'id' | 'mediaType'>) => {
-    const key = `${item.mediaType}:${item.id}`;
+  const loadPreviewContext = useCallback(
+  (
+    item: Pick<
+      MediaItem,
+      'id' | 'mediaType'
+    >,
+  ) => {
+    const key = mediaKey(item);
+
+    const cached =
+      previewCache.current.get(key);
+
+    if (cached) {
+      return Promise.resolve(cached);
+    }
+
+    const inFlight =
+      previewRequests.current.get(key);
+
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const pending =
+      (
+        api.getPreviewContext?.(item)
+        ?? api.getTitleContext(item)
+      )
+        .then((result) => {
+          const preview: PreviewContext = {
+            details: result.details,
+            trailer: result.trailer,
+          };
+
+          previewCache.current.set(
+            key,
+            preview,
+          );
+
+          previewRequests.current.delete(
+            key,
+          );
+
+          return preview;
+        })
+        .catch((reason) => {
+          previewRequests.current.delete(
+            key,
+          );
+
+          throw reason;
+        });
+
+    previewRequests.current.set(
+      key,
+      pending,
+    );
+
+    return pending;
+  },
+  [api],
+);
+  const key = `${item.mediaType}:${item.id}`;
     const cached = contextCache.current.get(key);
     if (cached) return Promise.resolve(cached);
     const inFlight = contextRequests.current.get(key);

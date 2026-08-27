@@ -41,7 +41,7 @@ describe('watch-party realtime readiness', () => {
     fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
     fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
-    await screen.findByText('HEAT95');
+    await screen.findByRole('region', { name: 'Watch party HEAT95' });
     await waitFor(() => expect(service.subscribe).toHaveBeenCalledTimes(1));
 
     service.getMessages.mockResolvedValueOnce([{ id: 'message-catchup', roomId: 'room-1', userId: 'user-2', nickname: 'Guest', body: 'Did you miss me?', createdAt: '2026-08-11T00:00:01.000Z' }]);

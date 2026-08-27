@@ -7,6 +7,7 @@ import {
   parseLoungeVote,
   tallyLoungeVotes,
   visiblePartyMessages,
+  visibleRoomChat,
 } from '../src/lib/lounge';
 import type { MediaItem } from '../src/lib/media';
 
@@ -45,6 +46,31 @@ describe('lounge chat and voting', () => {
     ]));
     expect(loungeNextUp([heat, matrix], 1, tallied)?.id).toBe(603);
     expect(loungeBallot([heat, matrix], 1).map((item) => item.id)).toEqual([603]);
+  });
+
+  it('applies TTL and title-change filters only to the official public lounge', () => {
+    const messages = [
+      { id: '1', roomId: 'r', userId: 'a', nickname: 'A', body: 'keep-private', createdAt: '2026-08-27T00:00:00.000Z' },
+      { id: '2', roomId: 'r', userId: 'a', nickname: 'A', body: encodeLoungeVote(matrix), createdAt: '2026-08-27T01:00:00.000Z' },
+      { id: '3', roomId: 'r', userId: 'b', nickname: 'B', body: 'keep-official', createdAt: '2026-08-27T01:01:00.000Z' },
+    ];
+    const privateVisible = visibleRoomChat(messages, {
+      isOfficial: false,
+      isPublic: false,
+      playbackUpdatedAt: '2026-08-27T01:00:30.000Z',
+    }, { now: Date.parse('2026-08-27T03:00:00.000Z') });
+    expect(privateVisible.map((item) => item.body)).toEqual([
+      'keep-private',
+      encodeLoungeVote(matrix),
+      'keep-official',
+    ]);
+
+    const officialVisible = visibleRoomChat(messages, {
+      isOfficial: true,
+      isPublic: true,
+      playbackUpdatedAt: '2026-08-27T01:00:30.000Z',
+    }, { now: Date.parse('2026-08-27T01:02:00.000Z') });
+    expect(officialVisible.map((item) => item.body)).toEqual(['keep-official']);
   });
 
   it('advances when the shared runtime is over', () => {

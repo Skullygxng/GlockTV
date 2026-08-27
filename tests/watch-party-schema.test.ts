@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import reliabilityMigrationSource from '../supabase/migrations/20260818042433_room_reliability_suite.sql?raw';
+import loungeMigrationSource from '../supabase/migrations/20260827070000_official_lounge_rotation.sql?raw';
 
 const reliabilityMigration = () => reliabilityMigrationSource.toLowerCase();
 
@@ -23,6 +24,13 @@ describe('watch party database enforcement', () => {
     expect(sql).toContain('clear_watch_room_chat');
     expect(sql).toContain('chat slow mode');
     expect(sql).toContain('duplicate message');
+  });
+
+  it('lets official lounge members rotate the shared title and clear chat', () => {
+    const sql = loungeMigrationSource.toLowerCase();
+    expect(sql).toContain('apply_official_lounge_title');
+    expect(sql).toContain('is_official');
+    expect(sql).toContain('delete from public.chat_messages');
   });
 
   it('adds private block/report/profile data with row-level security', () => {

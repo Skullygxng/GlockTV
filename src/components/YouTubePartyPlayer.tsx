@@ -59,6 +59,7 @@ declare global {
 }
 
 let youtubeApiPromise: Promise<YouTubeNamespace> | null = null;
+let activePreview: PartyPlayer | null = null;
 
 function loadYouTubeApi() {
   if (window.YT?.Player) return Promise.resolve(window.YT);
@@ -77,7 +78,10 @@ function loadYouTubeApi() {
     script.src = 'https://www.youtube.com/iframe_api';
     script.async = true;
     script.dataset.glocktvYoutube = 'true';
-    script.onerror = () => reject(new Error('YouTube player could not load.'));
+    script.onerror = () => {
+      youtubeApiPromise = null;
+      reject(new Error('YouTube player could not load.'));
+    };
     document.head.appendChild(script);
   });
   return youtubeApiPromise;
@@ -86,6 +90,7 @@ function loadYouTubeApi() {
 export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onReady, onStateChange, options = {}) => {
   let raw: RawYouTubePlayer | null = null;
   let destroyed = false;
+  const isPreview = options.autoplay === true && options.loop === true;
   const controller: PartyPlayer = {
     play: () => raw?.playVideo(),
     pause: () => raw?.pauseVideo(),
@@ -93,8 +98,20 @@ export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onRead
     mute: () => raw?.mute(),
     unmute: () => raw?.unMute(),
     getCurrentTime: () => raw?.getCurrentTime() ?? 0,
-    destroy: () => { destroyed = true; raw?.destroy(); raw = null; },
+    destroy: () => {
+      destroyed = true;
+      raw?.destroy();
+      raw = null;
+      if (activePreview === controller) activePreview = null;
+    },
   };
+
+  if (isPreview && activePreview && activePreview !== controller) {
+    activePreview.destroy();
+    activePreview = controller;
+  } else if (isPreview) {
+    activePreview = controller;
+  }
 
   void loadYouTubeApi().then((YT) => {
     if (destroyed) return;
@@ -119,6 +136,8 @@ export const createYouTubePlayer: PartyPlayerFactory = (element, videoId, onRead
         onStateChange: (event) => { if (event.data === 1 || event.data === 2) onStateChange(event.data === 1 ? 'playing' : 'paused', event.target.getCurrentTime()); },
       },
     });
+  }).catch(() => {
+    if (!destroyed) onStateChange('paused', 0);
   });
 
   return controller;

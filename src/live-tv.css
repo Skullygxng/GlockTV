@@ -142,8 +142,12 @@ body.live-tv-open .notice{display:none!important}
   pointer-events:auto;
 }
 .live-player__status--tap-play{
+  width:100%;
+  border:0;
+  color:inherit;
+  cursor:pointer;
   background:radial-gradient(circle at center,rgba(110,21,210,.1),transparent 40%),rgba(1,1,2,.45);
-  pointer-events:none;
+  pointer-events:auto;
 }
 .live-player__status--tap-play svg{width:28px;color:#c75bff}
 .live-player__tap-hint{font-size:9px;color:#a59fb0}
@@ -444,7 +448,7 @@ body.live-tv-open .notice{display:none!important}
     max-height:none;
   }
   .live-player video{
-    object-fit:cover;
+    object-fit:contain;
   }
   .live-player__meta{padding:8px 14px}
   .live-player__meta h2{font-size:16px;margin:0 0 2px}

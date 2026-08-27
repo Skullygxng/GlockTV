@@ -159,9 +159,11 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
           hls.on('hlsError', (_event, data) => {
             if (data.fatal) fail();
           });
+          hls.on('hlsManifestParsed', () => {
+            if (!disposed) tryPlay();
+          });
           hls.loadSource(stream.url);
           hls.attachMedia(element);
-          tryPlay();
         })
         .catch(() => fail('Could not load stream player.'));
     }
@@ -220,7 +222,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
   return (
     <section className="live-player" aria-label={`${title} live player`}>
       <div className="live-player__video">
-        <video ref={video} controls playsInline preload="metadata" />
+        <video ref={video} controls playsInline preload="none" />
         {showOverlay && (
           <div className={`live-player__status live-player__status--${state === 'error' ? 'error' : 'loading'}`} role="status">
             {state === 'error' ? <AlertTriangle /> : <LoaderCircle className="spin" />}

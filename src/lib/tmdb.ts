@@ -57,7 +57,7 @@ export interface TvEpisode {
 
 export interface TmdbClient {
   getTrending(): Promise<MediaItem[]>;
-  discover(filters: DiscoveryFilters): Promise<MediaItem[]>;
+  discover(filters: DiscoveryFilters, page?: number): Promise<MediaItem[]>;
   search(query: string): Promise<MediaItem[]>;
 
   getPreviewContext?(
@@ -178,11 +178,11 @@ export function createTmdbClient({
         .slice(0, 40);
     },
 
-    async discover(filters) {
+    async discover(filters, page = 1) {
       const genres = await getGenres();
 
       const results = await Promise.all(
-        buildDiscoveryQueries(filters).map(async ({ mediaType, params }) => {
+        buildDiscoveryQueries(filters, page).map(async ({ mediaType, params }) => {
           const payload = await request<{ results: RawMedia[] }>(
             `/discover/${mediaType}`,
             params,

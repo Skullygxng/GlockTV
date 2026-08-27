@@ -96,6 +96,7 @@ body.live-tv-open .notice{display:none!important}
 }
 .live-player__video{
   position:relative;
+  width:100%;
   aspect-ratio:16/9;
   background:#000;
 }
@@ -380,18 +381,17 @@ body.live-tv-open .notice{display:none!important}
 
 @media(max-width:980px){
   .live-tv-layout{grid-template-columns:minmax(0,1fr) 330px}
-  .live-tv-stage{padding:18px}
 }
 
-@media(max-width:700px){
+@media(max-width:900px){
   .live-tv-stage{
     z-index:35;
     top:0;
     right:0;
     left:0;
     bottom:calc(62px + env(safe-area-inset-bottom, 0px));
-    padding:0;
-    padding-top:env(safe-area-inset-top, 0px);
+    padding:0 !important;
+    padding-top:env(safe-area-inset-top, 0px) !important;
     background:#050507;
     overflow:hidden;
     display:flex;
@@ -413,6 +413,9 @@ body.live-tv-open .notice{display:none!important}
     flex:1 1 auto;
     min-width:0;
     min-height:0;
+    width:100%;
+    max-width:none;
+    margin:0;
     display:flex;
     flex-direction:column;
     gap:0;
@@ -423,16 +426,20 @@ body.live-tv-open .notice{display:none!important}
   }
   .live-tv-content{
     flex:0 0 auto;
+    width:100%;
     z-index:6;
     background:#050507;
   }
   .live-player{
+    width:100%;
+    margin:0;
     border:0;
     border-radius:0;
     box-shadow:none;
   }
   .live-player__video{
     width:100%;
+    max-width:none;
     aspect-ratio:16/9;
     max-height:none;
   }
@@ -445,6 +452,7 @@ body.live-tv-open .notice{display:none!important}
   .live-tv-browser{
     flex:1 1 auto;
     min-height:0;
+    width:100%;
     border:0;
     border-top:1px solid #25212b;
     border-radius:0;

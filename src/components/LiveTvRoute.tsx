@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { Heart, LoaderCircle, Radio, Search, Tv, WifiOff, X } from 'lucide-react';
 import {
   categoryLabel,
@@ -42,6 +42,7 @@ export function LiveTvRoute({
   const [selectedId, setSelectedId] = useState('');
   const [favorites, setFavorites] = useState<string[]>(readFavorites);
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
     (force = false) => {
@@ -125,6 +126,14 @@ export function LiveTvRoute({
     }
   }, [filtered, selectedId]);
 
+  useEffect(() => {
+    if (!selectedId || !listRef.current) return;
+    const row = listRef.current.querySelector(`[data-channel-id="${CSS.escape(selectedId)}"]`);
+    if (row instanceof HTMLElement) {
+      row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }, [selectedId]);
+
   const selected =
     selectedId && catalog
       ? (catalog.channels.find((channel) => channel.id === selectedId) ?? null)
@@ -142,7 +151,7 @@ export function LiveTvRoute({
   const handleRetry = () => refresh(true);
 
   return (
-    <main className="live-tv-stage" aria-label="Live TV">
+    <main className={`live-tv-stage${selected ? ' live-tv-stage--watching' : ''}`} aria-label="Live TV">
       <header className="live-tv-hero">
         <div>
           <span>
@@ -182,7 +191,7 @@ export function LiveTvRoute({
         </div>
       ) : catalog ? (
         <div className="live-tv-layout">
-          <section className="live-tv-content">
+          <section className="live-tv-content" id="live-tv-player">
             {selected ? (
               <PlayerComponent channel={selected} />
             ) : (
@@ -190,17 +199,8 @@ export function LiveTvRoute({
                 <div className="live-player__video live-player__video--idle">
                   <div className="live-player__idle-message">
                     <Tv />
-                    <strong>Choose a channel to start watching live TV</strong>
-                    <span>Select any channel from the lineup below.</span>
-                  </div>
-                </div>
-                <div className="live-player__meta">
-                  <span className="live-badge live-badge--idle">
-                    <Radio /> LIVE
-                  </span>
-                  <div>
-                    <h2>Channel lineup</h2>
-                    <p>No stream selected</p>
+                    <strong>Choose a channel</strong>
+                    <span>Pick one from the lineup to start watching.</span>
                   </div>
                 </div>
               </div>
@@ -246,14 +246,14 @@ export function LiveTvRoute({
               )}
             </div>
 
-            <div className="live-tv-list">
+            <div className="live-tv-list" ref={listRef}>
               {filtered.length ? (
                 <>
                   {visible.map((channel) => {
                     const title = channel.displayName || channel.name;
                     const isActive = channel.id === selectedId;
                     return (
-                      <article key={channel.id} className={isActive ? 'active' : ''}>
+                      <article key={channel.id} data-channel-id={channel.id} className={isActive ? 'active' : ''}>
                         <button type="button" className="live-tv-channel" onClick={() => setSelectedId(channel.id)} aria-label={`Watch ${title}`}>
                           <span className="live-tv-channel__logo">
                             {channel.logo ? (

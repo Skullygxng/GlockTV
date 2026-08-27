@@ -1,4 +1,5 @@
-import { mediaKey, scoreMatch, type MediaItem } from './media';
+import { scoreMatch, type MediaItem } from './media';
+import { mediaKey } from './session';
 
 export interface FeedTaste {
   likedGenreIds: number[];

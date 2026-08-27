@@ -60,6 +60,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
     element.setAttribute('playsinline', 'true');
     element.setAttribute('webkit-playsinline', 'true');
     element.playsInline = true;
+    element.controls = true;
 
     const markAttempted = (index: number) => {
       attemptedRef.current.add(index);
@@ -219,7 +220,7 @@ export function LiveTvPlayer({ channel }: LiveTvPlayerProps) {
   return (
     <section className="live-player" aria-label={`${title} live player`}>
       <div className="live-player__video">
-        <video ref={video} playsInline preload="metadata" />
+        <video ref={video} controls playsInline preload="metadata" />
         {showOverlay && (
           <div className={`live-player__status live-player__status--${state === 'error' ? 'error' : 'loading'}`} role="status">
             {state === 'error' ? <AlertTriangle /> : <LoaderCircle className="spin" />}

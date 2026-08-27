@@ -8,7 +8,6 @@ import {
 import { MediaCard } from './components/MediaCard';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
-import { composeDiscoverFeed, mergeFeed, sessionFeedSeed } from './lib/feed';
 import { imageUrl, scoreMatch, type MediaItem } from './lib/media';
 import { getPlaybackConfig, type PlaybackConfig } from './lib/playback';
 import {
@@ -25,3 +24,10 @@ import {
 } from './lib/tmdb';
 import type { PartyPlaybackConfig } from './components/PartyPlaybackPlayer';
 import type { WatchPartyService } from './lib/watchParty';
+
+export interface AppProps {
+  client?: TmdbClient;
+  partyService?: WatchPartyService | null;
+  playbackConfig?: PlaybackConfig;
+  partyPlaybackConfig?: PartyPlaybackConfig;
+}

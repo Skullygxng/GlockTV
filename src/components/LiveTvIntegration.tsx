@@ -3,14 +3,41 @@ import { createPortal } from 'react-dom';
 import { Radio } from 'lucide-react';
 import { LiveTvRoute } from './LiveTvRoute';
 
+function findNavs() {
+  return {
+    desktop: document.querySelector('.topbar__nav'),
+    mobile: document.querySelector('.bottom-nav'),
+  };
+}
+
 export function LiveTvIntegration() {
   const [open, setOpen] = useState(false);
   const [desktopNav, setDesktopNav] = useState<Element | null>(null);
   const [mobileNav, setMobileNav] = useState<Element | null>(null);
 
   useEffect(() => {
-    setDesktopNav(document.querySelector('.topbar__nav'));
-    setMobileNav(document.querySelector('.bottom-nav'));
+    const attach = () => {
+      const next = findNavs();
+      setDesktopNav(next.desktop);
+      setMobileNav(next.mobile);
+      return Boolean(next.desktop && next.mobile);
+    };
+
+    if (attach()) return;
+
+    const observer = new MutationObserver(() => {
+      if (attach()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    const retry = window.setInterval(() => {
+      if (attach()) window.clearInterval(retry);
+    }, 250);
+
+    return () => {
+      observer.disconnect();
+      window.clearInterval(retry);
+    };
   }, []);
 
   useEffect(() => {
@@ -29,19 +56,37 @@ export function LiveTvIntegration() {
     return () => document.removeEventListener('click', closeForOtherNavigation, true);
   }, [open]);
 
+  const toggle = () => setOpen((current) => !current);
+
   const desktopButton = (
-    <button type="button" data-live-tv-nav className={open ? 'active live-tv-nav-button' : 'live-tv-nav-button'} onClick={() => setOpen(true)}>Live TV</button>
+    <button
+      type="button"
+      data-live-tv-nav
+      className={open ? 'active live-tv-nav-button' : 'live-tv-nav-button'}
+      onClick={toggle}
+    >
+      Live TV
+    </button>
   );
 
   const mobileButton = (
-    <button type="button" data-live-tv-nav aria-label="Mobile Live TV" className={open ? 'active live-tv-nav-button' : 'live-tv-nav-button'} onClick={() => setOpen(true)}><Radio /><span>Live</span></button>
+    <button
+      type="button"
+      data-live-tv-nav
+      aria-label="Mobile Live TV"
+      className={open ? 'active live-tv-nav-button' : 'live-tv-nav-button'}
+      onClick={toggle}
+    >
+      <Radio />
+      <span>Live</span>
+    </button>
   );
 
   return (
     <>
       {desktopNav && createPortal(desktopButton, desktopNav)}
       {mobileNav && createPortal(mobileButton, mobileNav)}
-      {open && <LiveTvRoute />}
+      {open && <LiveTvRoute onClose={() => setOpen(false)} />}
     </>
   );
 }

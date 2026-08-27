@@ -126,14 +126,6 @@ export function LiveTvRoute({
     }
   }, [filtered, selectedId]);
 
-  useEffect(() => {
-    if (!selectedId || !listRef.current) return;
-    const row = listRef.current.querySelector(`[data-channel-id="${CSS.escape(selectedId)}"]`);
-    if (row instanceof HTMLElement && typeof row.scrollIntoView === 'function') {
-      row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }
-  }, [selectedId]);
-
   const selected =
     selectedId && catalog
       ? (catalog.channels.find((channel) => channel.id === selectedId) ?? null)

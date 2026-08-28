@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
 import type { PpvEmbed, PpvEvent } from '../lib/ppv';
-import { formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
+import {
+  formatPpvStart,
+  loadPpvEmbeds,
+  PPV_IFRAME_ALLOW,
+  PPV_IFRAME_REFERRER_POLICY,
+  PPV_IFRAME_SANDBOX,
+} from '../lib/ppv';
 
 interface PpvPlayerProps {
   event: PpvEvent;
@@ -62,9 +68,10 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
             className="ppv-player__frame"
             src={embed.url}
             title={event.title}
-            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            sandbox={PPV_IFRAME_SANDBOX}
+            allow={PPV_IFRAME_ALLOW}
             allowFullScreen
-            referrerPolicy="no-referrer-when-downgrade"
+            referrerPolicy={PPV_IFRAME_REFERRER_POLICY}
           />
         ) : (
           <div className="live-player__video live-player__video--idle">

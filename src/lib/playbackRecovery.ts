@@ -39,6 +39,10 @@ export function providerEmitsPlaybackSignal(server?: PlaybackServer | null) {
   return server?.commandMode === 'cinesrc' || server?.commandMode === 'vidzen';
 }
 
+export function providerAllowsAutomaticFailover(server?: PlaybackServer | null) {
+  return providerEmitsPlaybackSignal(server);
+}
+
 export function isProviderPlaybackSignal(raw: unknown) {
   try {
     const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;

@@ -3,6 +3,7 @@ import {
   isProviderPlaybackSignal,
   nextPlaybackServerId,
   playbackSessionExhausted,
+  providerAllowsAutomaticFailover,
   providerEmitsPlaybackSignal,
 } from '../src/lib/playbackRecovery';
 import { buildPlaybackUrl, type PlaybackServer } from '../src/lib/playback';
@@ -35,5 +36,8 @@ describe('playback recovery helpers', () => {
     expect(isProviderPlaybackSignal({ type: 'cinesrc:timeupdate', currentTime: 12 })).toBe(true);
     expect(isProviderPlaybackSignal({ type: 'PLAYER_EVENT', data: { event: 'ready', currentTime: 0 } })).toBe(true);
     expect(isProviderPlaybackSignal({ type: 'iframe-load' })).toBe(false);
+    expect(providerAllowsAutomaticFailover(servers[0])).toBe(true);
+    expect(providerAllowsAutomaticFailover(servers[1])).toBe(false);
+    expect(providerAllowsAutomaticFailover(servers[2])).toBe(true);
   });
 });

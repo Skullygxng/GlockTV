@@ -3,7 +3,7 @@ import { Check, ChevronDown, Pause, Server } from 'lucide-react';
 import { imageUrl } from '../lib/media';
 import type { PartyRoom, PlaybackState } from '../lib/watchParty';
 import { buildPlaybackUrl, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
-import { PARTY_PLAYBACK_FALLBACK_MS, nextPlaybackServerId } from '../lib/playbackRecovery';
+import { PARTY_PLAYBACK_FALLBACK_MS, nextPlaybackServerId, providerAllowsAutomaticFailover } from '../lib/playbackRecovery';
 import '../party-player.css';
 
 export interface PartyPlaybackConfig extends PlaybackConfig { movieUrlTemplate: string; tvUrlTemplate: string }
@@ -50,8 +50,8 @@ export function getPartyPlaybackConfig(): PartyPlaybackConfig {
   const cineSrcTv = import.meta.env.VITE_CINESRC_TV_EMBED_URL_TEMPLATE ?? '';
   return { movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, servers: [
     { id: 'cinesrc', label: 'CineSrc Sync', description: 'Documented play, pause and seek controls', movieUrlTemplate: cineSrcMovie, tvUrlTemplate: cineSrcTv, commandMode: 'cinesrc', startTimeParam: 't' },
-    { id: 'auto', label: 'VidCore Backup', description: 'Standard playback fallback · limited room sync', movieUrlTemplate: autoMovie, tvUrlTemplate: autoTv, commandMode: 'none' },
-    { id: 'backup', label: 'VidZen Backup', description: 'Alternate provider · limited room sync', movieUrlTemplate: legacyMovie, tvUrlTemplate: legacyTv, commandMode: 'vidzen' },
+    { id: 'auto', label: 'VidCore Backup', description: 'Standard playback fallback \u00b7 limited room sync', movieUrlTemplate: autoMovie, tvUrlTemplate: autoTv, commandMode: 'none' },
+    { id: 'backup', label: 'VidZen Backup', description: 'Alternate provider \u00b7 limited room sync', movieUrlTemplate: legacyMovie, tvUrlTemplate: legacyTv, commandMode: 'vidzen' },
   ] };
 }
 
@@ -98,7 +98,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   const lastPlayerTime = useRef(0);
   const lastHealthReport = useRef({ at: 0, status: '', offset: Number.NaN });
   const [loaded, setLoaded] = useState(false);
-  const [providerState, setProviderState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const [providerState, setProviderState] = useState<'loading' | 'ready' | 'slow' | 'unavailable'>('loading');
   const attemptedServers = useRef(new Set<string>());
   const [guestActivated, setGuestActivated] = useState(false);
   const [guestUnlocked, setGuestUnlocked] = useState(false);
@@ -136,13 +136,8 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
       return;
     }
     if (commandMode !== 'vidzen') return;
-    // VidZen documents wildcard delivery because its player can hand playback to a
-    // different origin. The message contains commands only, and the receiver is
-    // still the exact iframe window rather than an arbitrary browsing context.
     const payload = { command, ...values };
     receiver?.postMessage(buildPartyPlayerCommand(command, values), '*');
-    // Some VidZen source handoffs expose the same API but accept the structured
-    // clone rather than the serialized envelope advertised by the landing page.
     receiver?.postMessage(payload, '*');
   };
 
@@ -217,8 +212,12 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   }, [commandMode, guestActivated, isHost, onHostCommand, onSyncHealth, room.playbackPosition, room.playbackState, room.playbackUpdatedAt, serverId]);
 
   useEffect(() => {
-    if (!shouldMountPlayer || providerState === 'ready' || providerState === 'unavailable') return;
+    if (!shouldMountPlayer || providerState === 'ready' || providerState === 'slow' || providerState === 'unavailable') return;
     const timer = window.setTimeout(() => {
+      if (!providerAllowsAutomaticFailover(activeServer)) {
+        setProviderState('slow');
+        return;
+      }
       attemptedServers.current.add(serverId);
       const nextId = nextPlaybackServerId(servers, room.mediaType, serverId, attemptedServers.current);
       if (!nextId) {
@@ -231,7 +230,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
       setProviderState('loading');
     }, PARTY_PLAYBACK_FALLBACK_MS);
     return () => window.clearTimeout(timer);
-  }, [isHost, onHostServerChange, providerState, room.mediaType, roomServerId, serverId, servers, shouldMountPlayer]);
+  }, [activeServer, isHost, onHostServerChange, providerState, room.mediaType, roomServerId, serverId, servers, shouldMountPlayer]);
 
   useEffect(() => {
     if (!guestUnlocked) return;
@@ -262,6 +261,21 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
     setGuestUnlocked(false);
   };
 
+  const retryProvider = () => {
+    attemptedServers.current = new Set();
+    setProviderState('loading');
+    setLoaded(false);
+  };
+
+  const nextProvider = () => {
+    if (servers.length < 2) {
+      retryProvider();
+      return;
+    }
+    const index = Math.max(0, servers.findIndex((server) => server.id === serverId));
+    chooseServer(servers[(index + 1) % servers.length].id);
+  };
+
   if (!playbackUrl) return <div className="party-player-missing"><strong>Friends playback is not connected</strong><span>Add the authorized party embed templates to the environment.</span></div>;
 
   return <div className={`party-video party-video--full ${isHost ? 'is-host' : 'is-guest'} ${room.isOfficial ? 'is-official' : ''} ${guestActivated ? 'is-guest-activated' : ''} ${guestUnlocked ? 'is-guest-unlocked' : ''}`}>
@@ -269,14 +283,23 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
       ? <iframe ref={iframe} key={playbackUrl} title={`${room.titleName} full ${room.mediaType === 'movie' ? 'movie' : 'episode'}`} src={playbackUrl} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setLoaded(true)} />
       : <div className="party-video__paused" role="status" style={imageUrl(room.backdropPath ?? null, 'w1280') ? { '--paused-backdrop': `url(${imageUrl(room.backdropPath ?? null, 'w1280')})` } as React.CSSProperties : undefined}><span><Pause fill="currentColor" /></span><strong>{isHost ? 'Room paused' : 'Paused by the host'}</strong><small>{isHost ? 'Resume when everyone is ready.' : 'Playback will resume for everyone together.'}</small></div>}
     {shouldMountPlayer && providerState !== 'ready' && <div className="party-video__provider-status" role="status">
-      <span>{providerState === 'unavailable' ? 'Provider unavailable. Retry or switch servers.' : `Connecting to ${activeServer?.label ?? 'server'}...`}</span>
-      {providerState === 'unavailable' && <button type="button" onClick={() => { attemptedServers.current = new Set(); setProviderState('loading'); setLoaded(false); }}>Retry</button>}
+      <span>{
+        providerState === 'unavailable'
+          ? 'Provider unavailable. Retry or switch servers.'
+          : providerState === 'slow'
+            ? 'This server is taking too long'
+            : `Connecting to ${activeServer?.label ?? 'server'}...`
+      }</span>
+      {(providerState === 'slow' || providerState === 'unavailable') && <>
+        <button type="button" onClick={retryProvider}>Retry</button>
+        {servers.length > 1 && <button type="button" onClick={nextProvider}>Next server</button>}
+      </>}
     </div>}
-    {isHost && <div className="party-video__host-note"><strong>Host controls</strong><span>Use the player controls · your changes sync to everyone</span></div>}
+    {isHost && <div className="party-video__host-note"><strong>Host controls</strong><span>Use the player controls \u00b7 your changes sync to everyone</span></div>}
     {!isHost && shouldMountPlayer && <div className={`party-video__lock ${!room.isOfficial && !guestActivated ? 'party-video__lock--action' : ''}`}>{room.isOfficial
       ? <span>Tap the player once to join the public timeline</span>
       : guestActivated
-        ? <span>{room.playbackState === 'paused' ? 'Paused by host' : guestUnlocked ? 'Joining the host…' : 'Synced to host'}</span>
+        ? <span>{room.playbackState === 'paused' ? 'Paused by host' : guestUnlocked ? 'Joining the host\u2026' : 'Synced to host'}</span>
         : <button type="button" aria-label="Join playback" onClick={activateGuest}><strong>Join playback</strong><small>One tap unlocks video and sound in this browser</small></button>}
     </div>}
     <div className="party-server-picker">

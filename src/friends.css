@@ -353,8 +353,8 @@
 }
 
 .invite-join-card {
-  margin: 8px 10px 0;
-  padding: 10px 12px;
+  margin: 6px 10px 0;
+  padding: 8px 10px;
   border: 1px solid #4a3160;
   border-radius: 10px;
   background: linear-gradient(120deg, rgba(120, 21, 233, .16), rgba(16, 12, 20, .94));
@@ -415,8 +415,8 @@
 }
 
 .lounge-nextup {
-  margin: 8px 10px 0;
-  padding: 10px;
+  margin: 6px 10px 0;
+  padding: 8px 10px;
   border: 1px solid #3d2a4d;
   border-radius: 10px;
   background: #110d16;
@@ -446,13 +446,13 @@
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 6px;
+  gap: 5px;
 }
 
 .lounge-nextup li button {
   width: 100%;
-  min-height: 40px;
-  padding: 8px 10px;
+  min-height: 36px;
+  padding: 6px 10px;
   border: 1px solid #32283c;
   border-radius: 8px;
   background: #17121c;
@@ -495,6 +495,34 @@
   position: relative;
 }
 
+/* The chat panel is a conversation surface: chrome (header, invite, ballot,
+   member strip, composer) keeps its natural height and the message history
+   takes every remaining pixel. The base grid template only declares four rows,
+   so with the invite card and the optional lounge ballot in the column the
+   flexible row landed on the member strip instead of the messages. Flex sizing
+   keeps the message list the flexible region no matter how much chrome is on
+   screen. Raised specificity so this holds regardless of stylesheet order. */
+aside.party-chat {
+  display: flex;
+  flex-direction: column;
+}
+
+aside.party-chat > header {
+  flex: 0 0 auto;
+  min-height: 48px;
+}
+
+aside.party-chat > .invite-join-card,
+aside.party-chat > .lounge-nextup,
+aside.party-chat > .party-members,
+aside.party-chat > .party-compose {
+  flex: 0 0 auto;
+}
+
+aside.party-chat > .party-messages-shell {
+  flex: 1 1 auto;
+}
+
 .party-messages-shell {
   position: relative;
   min-height: 0;
@@ -506,10 +534,25 @@
 }
 
 @media (min-width: 701px) {
+  /* Viewport-aware instead of a rigid 720px: 126px of app chrome above the
+     watch party, its own 48px header, and the 1px layout border. Capped so very
+     tall displays do not produce an unreadable column. */
   .watch-party--cinematic .party-chat {
-    height: 720px;
+    height: min(1080px, calc(100svh - 175px));
+    min-height: 420px;
     align-self: start;
     overflow: hidden;
+  }
+}
+
+@media (max-width: 700px) {
+  /* 34svh left roughly one message visible once the chrome was accounted for.
+     svh (not dvh) so the panel does not resize as mobile browser chrome or the
+     on-screen keyboard appears. */
+  aside.party-chat,
+  .watch-party--cinematic aside.party-chat {
+    height: 72svh;
+    min-height: 360px;
   }
 }
 

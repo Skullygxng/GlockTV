@@ -70,3 +70,31 @@
 .party-video--full.is-guest.is-guest-activated iframe {
   pointer-events: auto;
 }
+
+.party-video__provider-status {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 52px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,.16);
+  border-radius: 12px;
+  background: rgba(5,5,8,.88);
+  color: #c8c1ce;
+  font-size: 9px;
+}
+
+.party-video__provider-status button {
+  border: 0;
+  border-radius: 999px;
+  background: #7f1ce7;
+  padding: 6px 9px;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+}

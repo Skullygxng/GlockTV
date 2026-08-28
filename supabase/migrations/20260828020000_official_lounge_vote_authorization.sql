@@ -57,26 +57,20 @@ create policy official_lounge_ballot_select
     )
   );
 
+-- Raw vote rows stay server-only. Clients read vote_count/is_mine from
+-- get_official_lounge_ballot and write through cast_official_lounge_vote.
 drop policy if exists official_lounge_votes_select on public.official_lounge_votes;
-create policy official_lounge_votes_select
-  on public.official_lounge_votes for select to authenticated
-  using (
-    exists (
-      select 1 from public.watch_rooms r
-      where r.id = room_id and r.is_official and r.is_public
-    )
-  );
 
-revoke all on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes from public, anon;
-grant select on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes to authenticated;
+revoke all on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes from public, anon, authenticated;
+grant select on public.official_lounge_catalog, public.official_lounge_ballot to authenticated;
 
 insert into public.official_lounge_catalog (media_type, title_id, title_name, backdrop_path, duration_seconds, sort_order)
 values
-  ('movie', 603, 'The Matrix', '/matrix-backdrop.jpg', 8100, 10),
-  ('movie', 807, 'Se7en', '/se7en-backdrop.jpg', 7620, 20),
-  ('movie', 550, 'Fight Club', '/fight-club-backdrop.jpg', 8340, 30),
-  ('movie', 27205, 'Inception', '/inception-backdrop.jpg', 8880, 40),
-  ('movie', 155, 'The Dark Knight', '/tdk-backdrop.jpg', 9120, 50)
+  ('movie', 603, 'The Matrix', null, 8100, 10),
+  ('movie', 807, 'Se7en', null, 7620, 20),
+  ('movie', 550, 'Fight Club', null, 8340, 30),
+  ('movie', 27205, 'Inception', null, 8880, 40),
+  ('movie', 155, 'The Dark Knight', null, 9120, 50)
 on conflict (media_type, title_id) do update
 set title_name = excluded.title_name,
     backdrop_path = excluded.backdrop_path,
@@ -172,7 +166,7 @@ begin
    and v.title_id = b.title_id
   where b.room_id = p_room_id
   group by b.media_type, b.title_id, b.title_name, b.backdrop_path, b.duration_seconds, b.cycle_started_at
-  order by count(v.user_id) desc, b.title_name;
+  order by count(v.user_id) desc, max(v.created_at) desc nulls last, b.title_name, b.media_type, b.title_id;
 end;
 $$;
 
@@ -275,13 +269,15 @@ begin
   where id = p_room_id
     and is_official
     and is_public
-    and expires_at > now();
+    and expires_at > now()
+  for update;
   if not found then
     raise exception 'Only the public lounge can rotate titles this way';
   end if;
 
   perform public.ensure_official_lounge_ballot(p_room_id);
 
+  -- Same winner order as get_official_lounge_ballot: vote_count, latest vote, title/media/id.
   select counted.votes, b.*
   into v_winner_votes, v_winner
   from (
@@ -290,14 +286,14 @@ begin
     where v.room_id = p_room_id
       and v.cycle_started_at = v_room.playback_updated_at
     group by v.media_type, v.title_id
-    order by count(*) desc, max(v.created_at) desc
-    limit 1
   ) counted
   join public.official_lounge_ballot b
     on b.room_id = p_room_id
    and b.cycle_started_at = v_room.playback_updated_at
    and b.media_type = counted.media_type
-   and b.title_id = counted.title_id;
+   and b.title_id = counted.title_id
+  order by counted.votes desc, counted.latest_at desc, b.title_name, b.media_type, b.title_id
+  limit 1;
 
   if v_winner.title_id is null or coalesce(v_winner_votes, 0) < 1 then
     raise exception 'The lounge has no votes to apply';

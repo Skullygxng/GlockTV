@@ -61,6 +61,18 @@ describe('official lounge vote authorization', () => {
     expect(stale[0]?.cycleStartedAt).not.toBe(cycle);
   });
 
+  it('rejects early rotation before the current title is effectively finished', () => {
+    const sql = loungeAuthMigrationSource;
+    expect(sql).toContain("raise exception 'The current lounge title is still playing'");
+    expect(sql).toContain('coalesce(v_room.duration_seconds, 0) <= 0');
+    expect(sql).toContain("v_room.playback_state = 'paused'");
+    expect(sql).toContain('v_effective_position := v_room.playback_position');
+    expect(sql).toContain('extract(epoch from (now() - v_room.playback_updated_at))');
+    expect(sql).toContain('v_effective_position < greatest(90, v_room.duration_seconds - 20)');
+    expect(sql).toContain("raise exception 'The lounge just changed titles. Vote on the next one.'");
+    expect(sql).toContain("raise exception 'The lounge has no votes to apply'");
+  });
+
   it('does not let client-supplied fake metadata invent a winner', () => {
     const sql = loungeAuthMigrationSource;
     expect(sql).toContain('v_winner.title_name');

@@ -112,8 +112,13 @@ describe('playback iframe hardening', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close player' }));
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Movie player' })).not.toBeInTheDocument());
-    expect(document.documentElement).not.toHaveClass('playback-open');
-    expect(document.body).not.toHaveClass('playback-open');
+    // The classes are dropped in the modal's effect cleanup, which React flushes
+    // separately from removing the dialog node, so wait for that transition
+    // rather than asserting on the tick the dialog disappears.
+    await waitFor(() => {
+      expect(document.documentElement).not.toHaveClass('playback-open');
+      expect(document.body).not.toHaveClass('playback-open');
+    });
   });
 
   it('only offers servers that can play the active media type', async () => {

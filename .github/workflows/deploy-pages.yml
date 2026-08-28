@@ -28,54 +28,7 @@ jobs:
           cache: npm
 
       - name: Guard production file integrity
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          checks = {
-            'src/App.tsx': {
-              'minimum': 30000,
-              'sentinels': ['FriendsRoute', 'MediaCard', 'PlaybackModal', 'loadDiscovery', 'openContext', 'export function App'],
-            },
-            'src/components/FriendsExperience.tsx': {
-              'minimum': 36000,
-              'sentinels': ['createRoom', 'joinRoom', 'sendMessage', 'subscribe', 'clearChat', 'PartyPlaybackPlayer', 'export function FriendsExperience'],
-            },
-            'src/friends.css': {
-              'minimum': 8000,
-              'sentinels': ['.watch-party', '.resume-room-card', '.party-chat', '.party-roster'],
-            },
-            'tests/friends-watch-party.test.tsx': {
-              'minimum': 10000,
-              'sentinels': ['Create private room', 'Join invite', 'Stay in room', 'Resume hosting', 'Jump to latest message', 'Message the room'],
-            },
-          }
-
-          for path, spec in checks.items():
-              file = Path(path)
-              size = file.stat().st_size
-              text = file.read_text(encoding='utf-8', errors='replace')
-              if size < spec['minimum']:
-                  raise SystemExit(f'{path} is {size} bytes; expected at least {spec["minimum"]}')
-              if 'PLACEHOLDER_' in text or text.strip() in {'PLACEHOLDER_APP', 'PLACEHOLDER_FRIENDS', 'PLACEHOLDER_CSS', 'PLACEHOLDER_TEST'}:
-                  raise SystemExit(f'{path} still contains a placeholder overwrite')
-              missing = [token for token in spec['sentinels'] if token not in text]
-              if missing:
-                  raise SystemExit(f'{path} is missing production sentinels: {', '.join(missing)}')
-              print(f'{path}: {size} bytes, sentinels ok')
-
-          suite = sorted(Path('tests').glob('friends-watch-party*.test.tsx'))
-          suite_text = '\n'.join(path.read_text(encoding='utf-8', errors='replace') for path in suite)
-          suite_size = sum(path.stat().st_size for path in suite)
-          if suite_size < 25000:
-              raise SystemExit(f'Friends test suite is {suite_size} bytes; expected at least 25000')
-          suite_sentinels = ['Room controls', 'Make Date Night co-host', 'Change title', 'Automated GlockTV host', 'Resync me']
-          missing_suite = [token for token in suite_sentinels if token not in suite_text]
-          if missing_suite:
-              raise SystemExit(f'Friends test suite is missing coverage: {', '.join(missing_suite)}')
-          print(f'friends suite: {suite_size} bytes across {len(suite)} files')
-          print('integrity ok')
-          PY
+        run: node scripts/check-production-integrity.mjs
 
       - name: Install dependencies
         run: npm ci

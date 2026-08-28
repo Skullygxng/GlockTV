@@ -232,7 +232,7 @@ begin
     room_id, cycle_started_at, user_id, media_type, title_id
   )
   values (p_room_id, v_room.playback_updated_at, auth.uid(), p_media_type, p_title_id)
-  on conflict (room_id, cycle_started_at, user_id)
+  on conflict on constraint official_lounge_votes_pkey
   do update set media_type = excluded.media_type, title_id = excluded.title_id, created_at = now();
 
   return query select * from public.get_official_lounge_ballot(p_room_id);
@@ -249,8 +249,7 @@ set search_path = ''
 as $$
 declare
   v_room public.watch_rooms%rowtype;
-  v_winner public.official_lounge_ballot%rowtype;
-  v_winner_votes integer;
+  v_winner record;
   v_effective_position double precision;
 begin
   if auth.uid() is null then
@@ -278,8 +277,8 @@ begin
   perform public.ensure_official_lounge_ballot(p_room_id);
 
   -- Same winner order as get_official_lounge_ballot: vote_count, latest vote, title/media/id.
-  select counted.votes, b.*
-  into v_winner_votes, v_winner
+  select counted.votes as votes, b.*
+  into v_winner
   from (
     select v.media_type, v.title_id, count(*)::integer as votes, max(v.created_at) as latest_at
     from public.official_lounge_votes v
@@ -295,7 +294,7 @@ begin
   order by counted.votes desc, counted.latest_at desc, b.title_name, b.media_type, b.title_id
   limit 1;
 
-  if v_winner.title_id is null or coalesce(v_winner_votes, 0) < 1 then
+  if v_winner.title_id is null or coalesce(v_winner.votes, 0) < 1 then
     raise exception 'The lounge has no votes to apply';
   end if;
 

@@ -8,6 +8,7 @@ import {
   PLAYBACK_SLOW_MS,
   isProviderPlaybackSignal,
   nextPlaybackServerId,
+  providerAllowsAutomaticFailover,
 } from '../lib/playbackRecovery';
 import { parsePlaybackProgressEvent, readPlaybackProgress, savePlaybackProgress } from '../lib/playbackProgress';
 import type { TitleContext, TmdbClient } from '../lib/tmdb';
@@ -164,6 +165,10 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
 
     const fallbackTimer = window.setTimeout(() => {
       if (playerReady.current) return;
+      if (!providerAllowsAutomaticFailover(activeServer)) {
+        setPlayerState((current) => current === 'unavailable' ? current : 'slow');
+        return;
+      }
       attemptedServers.current.add(serverId);
       const nextId = nextPlaybackServerId(compatibleServers, item.mediaType, serverId, attemptedServers.current);
       if (!nextId) {
@@ -185,7 +190,7 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
       window.clearTimeout(slowTimer);
       window.clearTimeout(fallbackTimer);
     };
-  }, [compatibleServers, item.mediaType, playbackUrl, playerRevision, serverId]);
+  }, [activeServer, compatibleServers, item.mediaType, playbackUrl, playerRevision, serverId]);
 
   useEffect(() => {
     const root = document.documentElement;

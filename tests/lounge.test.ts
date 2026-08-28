@@ -87,4 +87,44 @@ describe('lounge chat and voting', () => {
       playbackUpdatedAt: new Date().toISOString(),
     })).toBe(false);
   });
+
+  it('rejects early rotation of a long title, paused titles, and missing runtimes', () => {
+    const startedNinetySecondsAgo = new Date(Date.now() - 90_000).toISOString();
+    expect(loungeShouldAdvance({
+      durationSeconds: 7200,
+      playbackPosition: 0,
+      playbackState: 'playing',
+      playbackUpdatedAt: startedNinetySecondsAgo,
+    })).toBe(false);
+    expect(loungeShouldAdvance({
+      durationSeconds: 7200,
+      playbackPosition: 100,
+      playbackState: 'paused',
+      playbackUpdatedAt: new Date(Date.now() - 8_000_000).toISOString(),
+    })).toBe(false);
+    expect(loungeShouldAdvance({
+      durationSeconds: 7200,
+      playbackPosition: 7185,
+      playbackState: 'paused',
+      playbackUpdatedAt: new Date().toISOString(),
+    })).toBe(true);
+    expect(loungeShouldAdvance({
+      durationSeconds: 7200,
+      playbackPosition: 7180,
+      playbackState: 'playing',
+      playbackUpdatedAt: new Date(Date.now() - 5_000).toISOString(),
+    })).toBe(true);
+    expect(loungeShouldAdvance({
+      durationSeconds: null,
+      playbackPosition: 10_000,
+      playbackState: 'playing',
+      playbackUpdatedAt: new Date(Date.now() - 10_000_000).toISOString(),
+    })).toBe(false);
+    expect(loungeShouldAdvance({
+      durationSeconds: 0,
+      playbackPosition: 10_000,
+      playbackState: 'playing',
+      playbackUpdatedAt: new Date(Date.now() - 10_000_000).toISOString(),
+    })).toBe(false);
+  });
 });

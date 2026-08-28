@@ -85,4 +85,45 @@ describe('official lounge vote authorization', () => {
     expect(sql.toLowerCase()).not.toContain('grant update on public.official_lounge_catalog');
     expect(sql.toLowerCase()).not.toContain('grant delete on public.official_lounge_catalog');
   });
+
+  it('does not grant authenticated clients direct SELECT on raw official votes', () => {
+    const sql = loungeAuthMigrationSource.toLowerCase();
+    expect(sql).toContain('alter table public.official_lounge_votes enable row level security');
+    expect(sql).toContain('drop policy if exists official_lounge_votes_select');
+    expect(sql).not.toMatch(/create policy official_lounge_votes_select/);
+    expect(sql).not.toContain('grant select on public.official_lounge_votes');
+    expect(sql).not.toContain('grant select on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes');
+    expect(sql).toContain('revoke all on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes from public, anon, authenticated');
+    expect(sql).toContain('grant select on public.official_lounge_catalog, public.official_lounge_ballot to authenticated');
+    expect(sql).toContain('count(v.user_id)::integer as vote_count');
+    expect(sql).toContain('bool_or(v.user_id = auth.uid()) as is_mine');
+    expect(sql).not.toMatch(/select v\.user_id/);
+  });
+
+  it('uses the same tied-vote order for the ballot RPC and rotation winner', () => {
+    const sql = loungeAuthMigrationSource;
+    expect(sql).toContain('order by count(v.user_id) desc, max(v.created_at) desc nulls last, b.title_name, b.media_type, b.title_id');
+    expect(sql).toContain('order by counted.votes desc, counted.latest_at desc, b.title_name, b.media_type, b.title_id');
+    expect(sql).not.toContain('order by count(v.user_id) desc, b.title_name;');
+    expect(sql).not.toContain('order by count(*) desc, max(v.created_at) desc\n    limit 1');
+  });
+
+  it('serializes official title rotation against the locked room row', () => {
+    const applyFn = loungeAuthMigrationSource.slice(
+      loungeAuthMigrationSource.indexOf('create function public.apply_official_lounge_title(p_room_id uuid)'),
+    );
+    expect(applyFn).toContain('for update;');
+    expect(applyFn).toContain("raise exception 'The current lounge title is still playing'");
+    expect(loungeAuthMigrationSource).not.toContain('update_watch_room_title');
+  });
+
+  it('seeds catalog titles without fake TMDB backdrop paths', () => {
+    const sql = loungeAuthMigrationSource;
+    expect(sql).not.toContain('/matrix-backdrop.jpg');
+    expect(sql).not.toContain('/se7en-backdrop.jpg');
+    expect(sql).not.toContain('/fight-club-backdrop.jpg');
+    expect(sql).not.toContain('/inception-backdrop.jpg');
+    expect(sql).not.toContain('/tdk-backdrop.jpg');
+    expect(sql).toContain("('movie', 603, 'The Matrix', null, 8100, 10)");
+  });
 });

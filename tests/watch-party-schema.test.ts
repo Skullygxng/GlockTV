@@ -47,6 +47,11 @@ describe('watch party database enforcement', () => {
     expect(sql).toContain('lounge votes must use the official ballot');
     expect(sql).not.toContain('delete from public.chat_messages');
     expect(sql).toContain('grant execute on function public.apply_official_lounge_title');
+    expect(sql).toContain('revoke all on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes from public, anon, authenticated');
+    expect(sql).toContain('grant select on public.official_lounge_catalog, public.official_lounge_ballot to authenticated');
+    expect(sql).not.toContain('grant select on public.official_lounge_votes');
+    expect(sql).toContain('for update');
+    expect(sql).toContain('order by counted.votes desc, counted.latest_at desc, b.title_name, b.media_type, b.title_id');
   });
 
   it('adds private block/report/profile data with row-level security', () => {

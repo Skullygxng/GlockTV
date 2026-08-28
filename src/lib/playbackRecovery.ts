@@ -21,8 +21,7 @@ export function nextPlaybackServerId(
   const compatible = serversForMedia(servers, mediaType);
   const attempted = new Set(attemptedIds);
   attempted.add(currentId);
-  const next = compatible.find((server) => !attempted.has(server.id));
-  return next?.id ?? null;
+  return compatible.find((server) => !attempted.has(server.id))?.id ?? null;
 }
 
 export function playbackSessionExhausted(
@@ -38,4 +37,24 @@ export function playbackSessionExhausted(
 
 export function providerEmitsPlaybackSignal(server?: PlaybackServer | null) {
   return server?.commandMode === 'cinesrc' || server?.commandMode === 'vidzen';
+}
+
+export function isProviderPlaybackSignal(raw: unknown) {
+  try {
+    const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!payload || typeof payload !== 'object') return false;
+    const message = payload as {
+      type?: unknown;
+      event?: unknown;
+      data?: { event?: unknown };
+    };
+    if (typeof message.type === 'string' && message.type.startsWith('cinesrc:')) {
+      return ['ready', 'play', 'pause', 'seeked', 'timeupdate', 'ended'].includes(message.type.slice('cinesrc:'.length));
+    }
+    const eventName = message.type === 'mplayer' ? message.event : message.data?.event;
+    return (message.type === 'PLAYER_EVENT' || message.type === 'mplayer')
+      && ['ready', 'play', 'pause', 'seeked', 'timeupdate', 'ended'].includes(String(eventName));
+  } catch {
+    return false;
+  }
 }

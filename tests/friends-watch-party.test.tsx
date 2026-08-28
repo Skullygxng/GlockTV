@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it } from 'vitest';
 import { App } from '../src/App';
 import { tmdbClient, partyPlaybackConfig, makePartyService } from './friends-party-harness';
+import friendsCss from '../src/friends.css?raw';
 
 describe('Friends watch parties', () => {
   beforeEach(() => {
@@ -108,6 +109,50 @@ describe('Friends watch parties', () => {
     fireEvent.click(jump);
     expect(chat.scrollTop).toBe(900);
     expect(screen.queryByRole('button', { name: 'Jump to latest message' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a reader in place while unread messages pile up and jumps back on demand', async () => {
+    const partyService = makePartyService();
+    let onMessage: ((message: { id: string; roomId: string; userId: string; nickname: string; body: string; createdAt: string }) => void) | undefined;
+    partyService.subscribe.mockImplementation((_roomId, handlers) => {
+      onMessage = handlers.onMessage;
+      return () => undefined;
+    });
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Skully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
+    const chat = await screen.findByRole('log', { name: 'Chat messages' });
+    await waitFor(() => expect(partyService.subscribe).toHaveBeenCalledWith('room-1', expect.any(Object)));
+    Object.defineProperties(chat, {
+      scrollHeight: { configurable: true, value: 900 },
+      clientHeight: { configurable: true, value: 300 },
+      scrollTop: { configurable: true, value: 120, writable: true },
+    });
+    fireEvent.scroll(chat);
+    act(() => onMessage?.({
+      id: 'message-2', roomId: 'room-1', userId: 'user-2', nickname: 'Date Night', body: 'Grabbing snacks', createdAt: '2026-08-11T00:02:00.000Z',
+    }));
+    act(() => onMessage?.({
+      id: 'message-3', roomId: 'room-1', userId: 'user-3', nickname: 'Rowdy', body: 'Back in two minutes', createdAt: '2026-08-11T00:03:00.000Z',
+    }));
+    expect(screen.getByText('Grabbing snacks')).toBeInTheDocument();
+    expect(screen.getByText('Back in two minutes')).toBeInTheDocument();
+    expect(chat.scrollTop).toBe(120);
+    const jump = await screen.findByRole('button', { name: 'Jump to latest message' });
+    expect(jump).toHaveTextContent('2 new');
+    fireEvent.click(jump);
+    expect(chat.scrollTop).toBe(900);
+    expect(screen.queryByRole('button', { name: 'Jump to latest message' })).not.toBeInTheDocument();
+  });
+
+  it('gives the chat message history the flexible space instead of a fixed panel', () => {
+    expect(friendsCss).toMatch(/aside\.party-chat \{[^}]*flex-direction: column;/);
+    expect(friendsCss).toMatch(/aside\.party-chat > \.party-messages-shell \{[^}]*flex: 1 1 auto;/);
+    expect(friendsCss).toContain('height: min(1080px, calc(100svh - 175px))');
+    expect(friendsCss).not.toContain('height: 720px');
+    expect(friendsCss).toContain('height: 72svh');
   });
 
   it('waits for an explicit join click when opening an invite link', async () => {

@@ -9,6 +9,7 @@ import {
   type LiveTvCatalog,
 } from '../lib/iptvOrg';
 import { LiveTvPlayer } from './LiveTvPlayer';
+import { PpvPanel } from './PpvPanel';
 import '../live-tv.css';
 
 const FAVORITES_KEY = 'glocktv:live-favorites:v1';
@@ -42,6 +43,7 @@ export function LiveTvRoute({
   const [selectedId, setSelectedId] = useState('');
   const [favorites, setFavorites] = useState<string[]>(readFavorites);
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
+  const [pane, setPane] = useState<'channels' | 'ppv'>('channels');
   const listRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
@@ -150,13 +152,17 @@ export function LiveTvRoute({
             <Radio /> GLOCKTV LIVE
           </span>
           <h1>Live TV</h1>
-          <p>Public live channels from IPTV-org, filtered for browser-compatible HTTPS streams.</p>
+          <p>
+            {pane === 'ppv'
+              ? 'Live and upcoming fight cards with hosted embeds from Streamed and SportSRC.'
+              : 'Public live channels from IPTV-org, filtered for browser-compatible HTTPS streams.'}
+          </p>
         </div>
         <div className="live-tv-hero__actions">
           <div className="live-tv-source">
             <Tv />
-            <strong>IPTV-org</strong>
-            <small>United States catalog</small>
+            <strong>{pane === 'ppv' ? 'Streamed.pk' : 'IPTV-org'}</strong>
+            <small>{pane === 'ppv' ? 'PPV hosted embeds' : 'United States catalog'}</small>
           </div>
           {onClose && (
             <button type="button" className="live-tv-close" aria-label="Close Live TV" onClick={onClose}>
@@ -166,7 +172,30 @@ export function LiveTvRoute({
         </div>
       </header>
 
-      {loading ? (
+      <div className="live-tv-tabs" role="tablist" aria-label="Live sections">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'channels'}
+          className={pane === 'channels' ? 'active' : ''}
+          onClick={() => setPane('channels')}
+        >
+          Channels
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={pane === 'ppv'}
+          className={pane === 'ppv' ? 'active' : ''}
+          onClick={() => setPane('ppv')}
+        >
+          PPV
+        </button>
+      </div>
+
+      {pane === 'ppv' ? (
+        <PpvPanel />
+      ) : loading ? (
         <div className="live-tv-state">
           <LoaderCircle className="spin" />
           <strong>Loading live channels</strong>

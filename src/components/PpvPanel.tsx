@@ -9,6 +9,7 @@ import {
   type PpvEvent,
 } from '../lib/ppv';
 import { PpvPlayer } from './PpvPlayer';
+import '../ppv.css';
 
 interface PpvPanelProps {
   loadCatalog?: typeof loadPpvCatalog;

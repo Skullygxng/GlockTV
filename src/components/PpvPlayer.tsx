@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
 import type { PpvEmbed, PpvEvent } from '../lib/ppv';
+import { formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
 import {
-  formatPpvStart,
-  loadPpvEmbeds,
   PPV_IFRAME_ALLOW,
   PPV_IFRAME_REFERRER_POLICY,
   PPV_IFRAME_SANDBOX,
-} from '../lib/ppv';
+} from '../lib/ppvEmbedPolicy';
 
 interface PpvPlayerProps {
   event: PpvEvent;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import reliabilityMigrationSource from '../supabase/migrations/20260818042433_room_reliability_suite.sql?raw';
 import loungeMigrationSource from '../supabase/migrations/20260827070000_official_lounge_rotation.sql?raw';
+import loungeAuthMigrationSource from '../supabase/migrations/20260828020000_official_lounge_vote_authorization.sql?raw';
 
 const reliabilityMigration = () => reliabilityMigrationSource.toLowerCase();
 
@@ -31,6 +32,26 @@ describe('watch party database enforcement', () => {
     expect(sql).toContain('apply_official_lounge_title');
     expect(sql).toContain('is_official');
     expect(sql).toContain('delete from public.chat_messages');
+  });
+
+  it('authorizes official lounge title changes from vote winners and no longer wipes chat', () => {
+    const sql = loungeAuthMigrationSource.toLowerCase();
+    expect(sql).toContain('official_lounge_catalog');
+    expect(sql).toContain('official_lounge_ballot');
+    expect(sql).toContain('official_lounge_votes');
+    expect(sql).toContain('cast_official_lounge_vote');
+    expect(sql).toContain('that title is not on the current lounge ballot');
+    expect(sql).toContain('the lounge has no votes to apply');
+    expect(sql).toContain('the current lounge title is still playing');
+    expect(sql).toContain('greatest(90, v_room.duration_seconds - 20)');
+    expect(sql).toContain('lounge votes must use the official ballot');
+    expect(sql).not.toContain('delete from public.chat_messages');
+    expect(sql).toContain('grant execute on function public.apply_official_lounge_title');
+    expect(sql).toContain('revoke all on public.official_lounge_catalog, public.official_lounge_ballot, public.official_lounge_votes from public, anon, authenticated');
+    expect(sql).toContain('grant select on public.official_lounge_catalog, public.official_lounge_ballot to authenticated');
+    expect(sql).not.toContain('grant select on public.official_lounge_votes');
+    expect(sql).toContain('for update');
+    expect(sql).toContain('order by counted.votes desc, counted.latest_at desc, b.title_name, b.media_type, b.title_id');
   });
 
   it('adds private block/report/profile data with row-level security', () => {

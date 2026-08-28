@@ -34,22 +34,11 @@ describe('Supabase watch party service', () => {
     });
     expect(service).not.toBeNull();
 
-    await expect(service!.applyOfficialLoungeTitle('public-1', {
-      titleId: 603,
-      mediaType: 'movie',
-      titleName: 'The Matrix',
-      backdropPath: '/matrix-backdrop.jpg',
-      durationSeconds: 8100,
-    })).rejects.toThrow('The lounge just changed titles. Vote on the next one.');
+    await expect(service!.applyOfficialLoungeTitle('public-1')).rejects.toThrow('The lounge just changed titles. Vote on the next one.');
 
     expect(rpc).toHaveBeenCalledTimes(1);
     expect(rpc).toHaveBeenCalledWith('apply_official_lounge_title', {
       p_room_id: 'public-1',
-      p_title_id: 603,
-      p_media_type: 'movie',
-      p_title_name: 'The Matrix',
-      p_backdrop_path: '/matrix-backdrop.jpg',
-      p_duration_seconds: 8100,
     });
     expect(rpc).not.toHaveBeenCalledWith('update_watch_room_title', expect.anything());
   });
@@ -84,13 +73,7 @@ describe('Supabase watch party service', () => {
       publishableKey: 'test-key',
     });
 
-    await expect(service!.applyOfficialLoungeTitle('public-1', {
-      titleId: 603,
-      mediaType: 'movie',
-      titleName: 'The Matrix',
-      backdropPath: '/matrix-backdrop.jpg',
-      durationSeconds: 8100,
-    })).resolves.toEqual(expect.objectContaining({
+    await expect(service!.applyOfficialLoungeTitle('public-1')).resolves.toEqual(expect.objectContaining({
       id: 'public-1',
       titleName: 'The Matrix',
       titleId: 603,

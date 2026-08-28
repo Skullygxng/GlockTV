@@ -72,6 +72,8 @@ export function makePartyService() {
     sendMessage: vi.fn().mockResolvedValue({ id: 'message-1', roomId: 'room-1', userId: 'user-1', nickname: 'Skully', body: 'Ready?', createdAt: '2026-08-11T00:00:00.000Z' }),
     updatePlayback: vi.fn().mockResolvedValue(undefined),
     applyOfficialLoungeTitle: vi.fn().mockResolvedValue(publicRoom),
+    getOfficialLoungeBallot: vi.fn().mockResolvedValue([]),
+    castOfficialLoungeVote: vi.fn().mockResolvedValue([]),
     updateTitle: vi.fn().mockImplementation(async (_roomId: string, input: { titleId: number; mediaType: 'movie' | 'tv'; titleName: string; backdropPath: string | null; durationSeconds: number | null }) => ({
       ...room,
       titleId: input.titleId,

@@ -3,6 +3,13 @@ import { motion } from 'motion/react';
 import { Check, ChevronDown, Film, LoaderCircle, RotateCw, ShieldCheck, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import { buildPlaybackUrl, canResumePlaybackServer, getDefaultPlaybackServerId, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
+import {
+  PLAYBACK_FALLBACK_MS,
+  PLAYBACK_SLOW_MS,
+  isProviderPlaybackSignal,
+  nextPlaybackServerId,
+  providerAllowsAutomaticFailover,
+} from '../lib/playbackRecovery';
 import { parsePlaybackProgressEvent, readPlaybackProgress, savePlaybackProgress } from '../lib/playbackProgress';
 import type { TitleContext, TmdbClient } from '../lib/tmdb';
 import { EpisodeBrowser } from './EpisodeBrowser';
@@ -16,7 +23,7 @@ interface PlaybackModalProps {
   onSelect?: (item: MediaItem) => void;
 }
 
-type PlayerState = 'loading' | 'loaded' | 'slow';
+type PlayerState = 'loading' | 'loaded' | 'slow' | 'unavailable';
 
 export function PlaybackModal({ item, config, client, onClose, onSelect }: PlaybackModalProps) {
   const servers = useMemo(() => getPlaybackServers(config), [config]);
@@ -40,14 +47,21 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   const [context, setContext] = useState<TitleContext | null>(null);
   const iframe = useRef<HTMLIFrameElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const frameLoaded = useRef(false);
+  const playerReady = useRef(false);
+  const attemptedServers = useRef(new Set<string>());
   const progressPosition = useRef(canResumeInitialProgress ? initialProgress?.position ?? 0 : 0);
   const progressDuration = useRef(canResumeInitialProgress ? initialProgress?.duration : undefined);
   const playbackUrl = buildPlaybackUrl(item, config, { season, episode, startAt: resumeAt }, serverId);
   const activeServer = compatibleServers.find((server) => server.id === serverId) ?? compatibleServers[0];
   const playerName = item.mediaType === 'movie' ? 'Movie player' : 'TV player';
 
-  const retry = () => setPlayerRevision((revision) => revision + 1);
+  const retry = () => {
+    attemptedServers.current = new Set();
+    playerReady.current = false;
+    setPlayerState('loading');
+    setServerId(getDefaultPlaybackServerId(compatibleServers, item.mediaType));
+    setPlayerRevision((revision) => revision + 1);
+  };
 
   const selectServer = (nextId: string) => {
     const nextServer = compatibleServers.find((server) => server.id === nextId);
@@ -96,6 +110,8 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
     setResumeAt(canResumeSaved ? saved?.position ?? 0 : 0);
     progressPosition.current = canResumeSaved ? saved?.position ?? 0 : 0;
     progressDuration.current = canResumeSaved ? saved?.duration : undefined;
+    attemptedServers.current = new Set();
+    playerReady.current = false;
   }, [compatibleServers, episode, item.id, item.mediaType, season]);
 
   useEffect(() => {
@@ -110,6 +126,10 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
       if (event.source !== iframe.current?.contentWindow) return;
       if (activeServer?.commandMode === 'cinesrc' && event.origin !== 'https://cinesrc.st') return;
       const progress = parsePlaybackProgressEvent(event.data);
+      if (isProviderPlaybackSignal(event.data)) {
+        playerReady.current = true;
+        setPlayerState('loaded');
+      }
       if (!progress) return;
       if (progress.currentTime !== null) progressPosition.current = progress.currentTime;
       if (progress.duration) progressDuration.current = progress.duration;
@@ -136,22 +156,41 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   useEffect(() => {
     if (!playbackUrl) return;
 
-    frameLoaded.current = false;
+    playerReady.current = false;
     setPlayerState('loading');
 
     const slowTimer = window.setTimeout(() => {
-      if (!frameLoaded.current) setPlayerState('slow');
-    }, 9000);
+      if (!playerReady.current) setPlayerState((current) => current === 'unavailable' ? current : 'slow');
+    }, PLAYBACK_SLOW_MS);
 
     const fallbackTimer = window.setTimeout(() => {
-      if (!frameLoaded.current && compatibleServers.length > 1) nextServer();
-    }, 15000);
+      if (playerReady.current) return;
+      if (!providerAllowsAutomaticFailover(activeServer)) {
+        setPlayerState((current) => current === 'unavailable' ? current : 'slow');
+        return;
+      }
+      attemptedServers.current.add(serverId);
+      const nextId = nextPlaybackServerId(compatibleServers, item.mediaType, serverId, attemptedServers.current);
+      if (!nextId) {
+        setPlayerState('unavailable');
+        return;
+      }
+      const nextServerConfig = compatibleServers.find((server) => server.id === nextId);
+      if (!nextServerConfig) {
+        setPlayerState('unavailable');
+        return;
+      }
+      const canResumeNext = canResumePlaybackServer(nextServerConfig, item.mediaType);
+      setResumeAt(canResumeNext ? progressPosition.current : 0);
+      setServerId(nextId);
+      setPlayerRevision((revision) => revision + 1);
+    }, PLAYBACK_FALLBACK_MS);
 
     return () => {
       window.clearTimeout(slowTimer);
       window.clearTimeout(fallbackTimer);
     };
-  }, [playbackUrl, playerRevision]);
+  }, [activeServer, compatibleServers, item.mediaType, playbackUrl, playerRevision, serverId]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -206,16 +245,19 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
           allowFullScreen
           sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"
           referrerPolicy="strict-origin-when-cross-origin"
-          onLoad={() => {
-            frameLoaded.current = true;
-            setPlayerState('loaded');
-          }}
-          onError={() => setPlayerState('slow')}
+          onLoad={() => undefined}
+          onError={() => setPlayerState((current) => current === 'loaded' ? current : 'slow')}
         />
         {playerState !== 'loaded' && <div className={`playback-status playback-status--${playerState}`} role="status">
-          <LoaderCircle className="spin" />
-          <span>{playerState === 'slow' ? 'This server is taking too long.' : `Connecting to ${activeServer?.label ?? 'server'}...`}</span>
-          {playerState === 'slow' && <div className="playback-status__actions">
+          {playerState !== 'unavailable' && <LoaderCircle className="spin" />}
+          <span>{
+            playerState === 'unavailable'
+              ? 'Provider unavailable. Try another server or retry.'
+              : playerState === 'slow'
+                ? 'This server is taking too long.'
+                : `Connecting to ${activeServer?.label ?? 'server'}...`
+          }</span>
+          {(playerState === 'slow' || playerState === 'unavailable') && <div className="playback-status__actions">
             <button type="button" onClick={retry}>Retry</button>
             {compatibleServers.length > 1 && <button type="button" onClick={nextServer}>Next server</button>}
           </div>}

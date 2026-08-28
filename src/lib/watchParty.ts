@@ -51,6 +51,17 @@ export interface PartyMessage {
   createdAt: string;
 }
 
+export interface OfficialLoungeBallotEntry {
+  mediaType: 'movie' | 'tv';
+  titleId: number;
+  titleName: string;
+  backdropPath: string | null;
+  durationSeconds: number | null;
+  voteCount: number;
+  isMine: boolean;
+  cycleStartedAt: string;
+}
+
 export interface CreateRoomInput {
   nickname: string;
   titleId: number;
@@ -82,7 +93,9 @@ export interface WatchPartyService {
   sendMessage(roomId: string, nickname: string, body: string): Promise<PartyMessage>;
   updatePlayback(roomId: string, state: PlaybackState, position: number): Promise<void>;
   updateTitle(roomId: string, input: UpdateRoomTitleInput): Promise<PartyRoom>;
-  applyOfficialLoungeTitle(roomId: string, input: UpdateRoomTitleInput): Promise<PartyRoom>;
+  applyOfficialLoungeTitle(roomId: string): Promise<PartyRoom>;
+  getOfficialLoungeBallot(roomId: string): Promise<OfficialLoungeBallotEntry[]>;
+  castOfficialLoungeVote(roomId: string, titleId: number, mediaType: 'movie' | 'tv'): Promise<OfficialLoungeBallotEntry[]>;
   subscribe(roomId: string, handlers: PartySubscriptionHandlers): () => void;
   updateEpisode(roomId: string, seasonNumber: number, episodeNumber: number): Promise<PartyRoom>;
   leaveRoom(roomId: string, userId: string): Promise<void>;
@@ -133,6 +146,16 @@ interface MemberRow {
 interface MessageRow { id: string; room_id: string; user_id: string; nickname: string; body: string; created_at: string }
 interface PublicRoomRow extends RoomRow { audience_count: number }
 interface BannedMemberRow { user_id: string; nickname: string; created_at: string }
+interface OfficialBallotRow {
+  media_type: 'movie' | 'tv';
+  title_id: number;
+  title_name: string;
+  backdrop_path: string | null;
+  duration_seconds: number | null;
+  vote_count: number;
+  is_mine: boolean;
+  cycle_started_at: string;
+}
 
 const mapRoom = (row: RoomRow): PartyRoom => ({
   id: row.id,
@@ -162,6 +185,16 @@ const mapMember = (row: MemberRow): PartyMember => ({
 });
 const mapMessage = (row: MessageRow): PartyMessage => ({ id: row.id, roomId: row.room_id, userId: row.user_id, nickname: row.nickname, body: row.body, createdAt: row.created_at });
 const mapPublicRoom = (row: PublicRoomRow): PublicPartyRoom => ({ ...mapRoom(row), audienceCount: Number(row.audience_count ?? 0) });
+const mapOfficialBallot = (row: OfficialBallotRow): OfficialLoungeBallotEntry => ({
+  mediaType: row.media_type,
+  titleId: Number(row.title_id),
+  titleName: row.title_name,
+  backdropPath: row.backdrop_path ?? null,
+  durationSeconds: row.duration_seconds == null ? null : Number(row.duration_seconds),
+  voteCount: Number(row.vote_count ?? 0),
+  isMine: Boolean(row.is_mine),
+  cycleStartedAt: row.cycle_started_at,
+});
 
 class SupabaseWatchPartyService implements WatchPartyService {
   private readonly roomChannels = new Map<string, RealtimeChannel>();
@@ -245,19 +278,30 @@ class SupabaseWatchPartyService implements WatchPartyService {
     return mapRoom(data as RoomRow);
   }
 
-  async applyOfficialLoungeTitle(roomId: string, input: UpdateRoomTitleInput) {
+  async applyOfficialLoungeTitle(roomId: string) {
     const { data, error } = await this.client.rpc('apply_official_lounge_title', {
       p_room_id: roomId,
-      p_title_id: input.titleId,
-      p_media_type: input.mediaType,
-      p_title_name: input.titleName,
-      p_backdrop_path: input.backdropPath,
-      p_duration_seconds: input.durationSeconds,
     }).single();
     if (error || !data) {
       throw new Error(error?.message ?? 'The public lounge title could not be changed.');
     }
     return mapRoom(data as RoomRow);
+  }
+
+  async getOfficialLoungeBallot(roomId: string) {
+    const { data, error } = await this.client.rpc('get_official_lounge_ballot', { p_room_id: roomId });
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as OfficialBallotRow[]).map(mapOfficialBallot);
+  }
+
+  async castOfficialLoungeVote(roomId: string, titleId: number, mediaType: 'movie' | 'tv') {
+    const { data, error } = await this.client.rpc('cast_official_lounge_vote', {
+      p_room_id: roomId,
+      p_title_id: titleId,
+      p_media_type: mediaType,
+    });
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as OfficialBallotRow[]).map(mapOfficialBallot);
   }
 
   async updateEpisode(roomId: string, seasonNumber: number, episodeNumber: number) {

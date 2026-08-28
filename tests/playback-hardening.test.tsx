@@ -168,12 +168,14 @@ describe('playback iframe hardening', () => {
           label: 'Primary',
           description: 'Primary server',
           movieUrlTemplate: 'https://primary.example/movie/{tmdb_id}',
+          commandMode: 'vidzen',
         },
         {
           id: 'backup',
           label: 'Backup',
           description: 'Backup server',
           movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}',
+          commandMode: 'vidzen',
         },
       ],
     };
@@ -205,6 +207,108 @@ describe('playback iframe hardening', () => {
     );
 
     unmount();
+  });
+
+  it('does not treat iframe load as ready and falls over after the timeout', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'primary', label: 'Primary', description: 'Primary server', movieUrlTemplate: 'https://primary.example/movie/{tmdb_id}', commandMode: 'cinesrc' },
+        { id: 'backup', label: 'Backup', description: 'Backup server', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}', commandMode: 'vidzen' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    fireEvent.load(screen.getByTitle(`${movie.title} playback`));
+    expect(screen.getByText(/Connecting to Primary/i)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://backup.example/movie/533535');
+  });
+
+  it('shows provider unavailable after every configured server fails, then retries from the start', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'primary', label: 'Primary', description: 'Primary server', movieUrlTemplate: 'https://primary.example/movie/{tmdb_id}', commandMode: 'vidzen' },
+        { id: 'backup', label: 'Backup', description: 'Backup server', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}', commandMode: 'cinesrc' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    act(() => { vi.advanceTimersByTime(14_000); });
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByText(/Provider unavailable/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://primary.example/movie/533535');
+  });
+
+  it('does not auto-switch a loaded commandMode:none provider just because it emits no playback signal', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'auto', label: 'VidCore', description: 'TV default', movieUrlTemplate: 'https://www.vidcore.org/embed/movie/{tmdb_id}', commandMode: 'none' },
+        { id: 'backup', label: 'VidZen Backup', description: 'Backup', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}', commandMode: 'vidzen' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    fireEvent.load(screen.getByTitle(`${movie.title} playback`));
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://www.vidcore.org/embed/movie/533535');
+    expect(screen.getByText(/This server is taking too long/i)).toBeInTheDocument();
+  });
+
+  it('still auto-fails CineSrc when no readiness signal arrives', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'cinesrc', label: 'CineSrc', description: 'Signalled', movieUrlTemplate: 'https://cinesrc.st/embed/movie/{tmdb_id}', commandMode: 'cinesrc' },
+        { id: 'auto', label: 'VidCore', description: 'Fallback', movieUrlTemplate: 'https://www.vidcore.org/embed/movie/{tmdb_id}', commandMode: 'none' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://www.vidcore.org/embed/movie/533535');
+  });
+
+  it('still auto-fails VidZen when no readiness signal arrives', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'backup', label: 'VidZen', description: 'Signalled', movieUrlTemplate: 'https://vidzen.fun/movie/{tmdb_id}', commandMode: 'vidzen' },
+        { id: 'auto', label: 'VidCore', description: 'Fallback', movieUrlTemplate: 'https://www.vidcore.org/embed/movie/{tmdb_id}', commandMode: 'none' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://www.vidcore.org/embed/movie/533535');
+  });
+
+  it('lets the viewer manually pick the next server for commandMode:none', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'auto', label: 'VidCore', description: 'Unsignalled', movieUrlTemplate: 'https://www.vidcore.org/embed/movie/{tmdb_id}', commandMode: 'none' },
+        { id: 'backup', label: 'VidZen Backup', description: 'Backup', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}', commandMode: 'vidzen' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    act(() => { vi.advanceTimersByTime(14_000); });
+    fireEvent.click(screen.getByRole('button', { name: 'Next server' }));
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://backup.example/movie/533535');
+  });
+
+  it('does not auto-switch the TV default VidCore provider at 14s', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'cinesrc', label: 'CineSrc', description: 'Movie default', movieUrlTemplate: 'https://cinesrc.st/embed/movie/{tmdb_id}', tvUrlTemplate: 'https://cinesrc.st/embed/tv/{tmdb_id}?s={season_number}&e={episode_number}', commandMode: 'cinesrc' },
+        { id: 'auto', label: 'VidCore', description: 'TV default', movieUrlTemplate: 'https://www.vidcore.org/embed/movie/{tmdb_id}', tvUrlTemplate: 'https://www.vidcore.org/embed/tv/{tmdb_id}/{season_number}/{episode_number}', commandMode: 'none', preferredFor: ['tv'] },
+        { id: 'backup', label: 'VidZen Backup', description: 'Backup', movieUrlTemplate: 'https://vidzen.fun/movie/{tmdb_id}', tvUrlTemplate: 'https://vidzen.fun/tv/{tmdb_id}/{season_number}/{episode_number}', commandMode: 'vidzen' },
+      ],
+    };
+    render(<PlaybackModal item={series} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', 'https://www.vidcore.org/embed/tv/1396/1/1');
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByTitle(`${series.title} playback`)).toHaveAttribute('src', 'https://www.vidcore.org/embed/tv/1396/1/1');
+    expect(screen.getByText(/This server is taking too long/i)).toBeInTheDocument();
   });
 
 });

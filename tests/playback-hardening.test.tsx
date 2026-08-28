@@ -207,4 +207,35 @@ describe('playback iframe hardening', () => {
     unmount();
   });
 
+  it('does not treat iframe load as ready and falls over after the timeout', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'primary', label: 'Primary', description: 'Primary server', movieUrlTemplate: 'https://primary.example/movie/{tmdb_id}' },
+        { id: 'backup', label: 'Backup', description: 'Backup server', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    fireEvent.load(screen.getByTitle(`${movie.title} playback`));
+    expect(screen.getByText(/Connecting to Primary/i)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://backup.example/movie/533535');
+  });
+
+  it('shows provider unavailable after every configured server fails, then retries from the start', () => {
+    vi.useFakeTimers();
+    const config: PlaybackConfig = {
+      servers: [
+        { id: 'primary', label: 'Primary', description: 'Primary server', movieUrlTemplate: 'https://primary.example/movie/{tmdb_id}' },
+        { id: 'backup', label: 'Backup', description: 'Backup server', movieUrlTemplate: 'https://backup.example/movie/{tmdb_id}' },
+      ],
+    };
+    render(<PlaybackModal item={movie} config={config} client={{ getTitleContext: vi.fn(() => new Promise(() => undefined)) } as never} onClose={() => undefined} />);
+    act(() => { vi.advanceTimersByTime(14_000); });
+    act(() => { vi.advanceTimersByTime(14_000); });
+    expect(screen.getByText(/Provider unavailable/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(screen.getByTitle(`${movie.title} playback`)).toHaveAttribute('src', 'https://primary.example/movie/533535');
+  });
+
 });

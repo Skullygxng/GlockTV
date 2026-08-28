@@ -3,8 +3,8 @@ import { motion } from 'motion/react';
 import { Ban, ChevronDown, Copy, Crown, DoorOpen, Flag, LoaderCircle, LockKeyhole, Mail, MessageCircle, Play, Radio, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, UserCheck, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import type { TmdbClient } from '../lib/tmdb';
-import type { BannedPartyMember, PartyAccount, PartyMember, PartyMessage, PartyPresence, PartyRoom, PlaybackState, PublicPartyRoom, WatchPartyService } from '../lib/watchParty';
-import { encodeLoungeVote, isOfficialLounge, loungeBallot, loungeNextUp, loungeShouldAdvance, parseLoungeVote, tallyLoungeVotes, visibleRoomChat } from '../lib/lounge';
+import type { BannedPartyMember, OfficialLoungeBallotEntry, PartyAccount, PartyMember, PartyMessage, PartyPresence, PartyRoom, PlaybackState, PublicPartyRoom, WatchPartyService } from '../lib/watchParty';
+import { isOfficialLounge, loungeShouldAdvance, officialBallotCandidates, officialBallotTallies, officialBallotWinner, visibleRoomChat } from '../lib/lounge';
 import { EpisodeBrowser } from './EpisodeBrowser';
 import { InviteJoinCard } from './InviteJoinCard';
 import { LoungeBallotPanel } from './LoungeBallotPanel';
@@ -83,7 +83,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [account, setAccount] = useState<PartyAccount | null>(null);
   const [accountEmail, setAccountEmail] = useState('');
   const [accountStatus, setAccountStatus] = useState('');
-  const [loungePool, setLoungePool] = useState<MediaItem[]>(selectedTitle ? [selectedTitle] : []);
+  const [officialBallot, setOfficialBallot] = useState<OfficialLoungeBallotEntry[]>([]);
   const loungeAdvanceKey = useRef('');
   const messageList = useRef<HTMLDivElement>(null);
   const chatAtBottom = useRef(true);
@@ -223,16 +223,16 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   }, [service]);
 
   useEffect(() => {
-    if (!room || !isOfficialLounge(room)) return;
-    let active = true;
-    client.getTrending().then((items) => {
-      if (!active) return;
-      const seed = selectedTitle ? [selectedTitle, ...items] : items;
-      const unique = new Map(seed.map((item) => [`${item.mediaType}:${item.id}`, item]));
-      setLoungePool([...unique.values()]);
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [client, room?.id, room?.isOfficial, room?.isPublic, selectedTitle]);
+    if (!service || !room || !isOfficialLounge(room)) {
+      setOfficialBallot([]);
+      return;
+    }
+    let cancelled = false;
+    service.getOfficialLoungeBallot(room.id)
+      .then((entries) => { if (!cancelled && activeRoomId.current === room.id) setOfficialBallot(entries); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [room?.id, room?.isOfficial, room?.isPublic, room?.playbackUpdatedAt, service]);
 
   useEffect(() => {
     if (!service || !room) return;
@@ -595,9 +595,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const voteLoungeTitle = async (item: MediaItem) => {
     if (!service || !room || !isOfficialLounge(room)) return;
     try {
-      const sent = await service.sendMessage(room.id, nickname.trim() || 'Guest', encodeLoungeVote(item));
-      messageMutationVersion.current += 1;
-      setMessages((previous) => upsertMessage(previous, sent));
+      setOfficialBallot(await service.castOfficialLoungeVote(room.id, item.id, item.mediaType));
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Vote failed to send.'); }
   };
 
@@ -607,7 +605,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     snapshotVersion.current += 1;
     messageMutationVersion.current += 1;
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
-    setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false); setRosterOpen(false); setControlsOpen(false); setRemoveConfirmId(''); setTransferConfirmId('');
+    setRoom(null); setMembers([]); setMessages([]); setOfficialBallot([]); setError(''); setLeaveConfirm(false); setRosterOpen(false); setControlsOpen(false); setRemoveConfirmId(''); setTransferConfirmId('');
     if (service && leaving) await service.leaveRoom(leaving.id, userId).catch(() => undefined);
     if (service?.listPublicRooms) service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   };
@@ -620,27 +618,23 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
       playbackState: room.playbackState,
       playbackUpdatedAt: room.playbackUpdatedAt,
     })) return;
-    const next = loungeNextUp(loungePool, room.titleId, tallyLoungeVotes(messages, room.playbackUpdatedAt));
-    if (!next || next.id === room.titleId) return;
-    const advanceKey = `${room.id}:${room.titleId}:${next.id}`;
+    const winner = officialBallotWinner(officialBallot);
+    if (!winner || winner.titleId === room.titleId) return;
+    const advanceKey = `${room.id}:${room.titleId}:${winner.titleId}`;
     if (loungeAdvanceKey.current === advanceKey) return;
     loungeAdvanceKey.current = advanceKey;
     let cancelled = false;
     void (async () => {
       try {
-        const context = await client.getTitleContext(next);
         if (cancelled || activeRoomId.current !== room.id) return;
-        const nextRoom = await service.applyOfficialLoungeTitle(room.id, {
-          titleId: context.details.id, mediaType: context.details.mediaType, titleName: context.details.title,
-          backdropPath: context.details.backdropPath, durationSeconds: context.details.runtime ? context.details.runtime * 60 : null,
-        });
+        const nextRoom = await service.applyOfficialLoungeTitle(room.id);
         if (!cancelled && activeRoomId.current === room.id) setRoom(nextRoom);
       } catch {
         loungeAdvanceKey.current = '';
       }
     })();
     return () => { cancelled = true; };
-  }, [client, loungePool, messages, room, service]);
+  }, [officialBallot, room, service]);
 
   if (!room) {
     const heroImage = imageUrl(selectedTitle?.backdropPath ?? null, 'w1280');
@@ -692,9 +686,9 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     messages.filter((item) => !blockedUsers.includes(item.userId)),
     officialLounge ? room : null,
   );
-  const loungeVotes = officialLounge ? tallyLoungeVotes(messages, room.playbackUpdatedAt) : [];
-  const loungeCandidates = officialLounge ? loungeBallot(loungePool, room.titleId) : [];
-  const currentLoungeVote = officialLounge ? [...messages].reverse().map(parseLoungeVote).find((vote) => vote?.userId === userId) : null;
+  const loungeVotes = officialLounge ? officialBallotTallies(officialBallot) : [];
+  const loungeCandidates = officialLounge ? officialBallotCandidates(officialBallot) : [];
+  const currentLoungeVote = officialLounge ? officialBallot.find((entry) => entry.isMine) : null;
 
   const latestVisibleMessage = visibleMessages[visibleMessages.length - 1];
   return <motion.section className="watch-party watch-party--cinematic" aria-label={`Watch party ${room.code}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }}>

@@ -1,6 +1,6 @@
 import type { MediaItem } from './media';
 import { mediaKey } from './session';
-import type { PartyMessage } from './watchParty';
+import type { OfficialLoungeBallotEntry, PartyMessage } from './watchParty';
 
 export const LOUNGE_VOTE_PREFIX = '\u2060VOTE|';
 export const LOUNGE_CHAT_TTL_MS = 45 * 60 * 1000;
@@ -107,6 +107,44 @@ export function loungeBallot(pool: MediaItem[], currentTitleId?: number, limit =
 
 export function isOfficialLounge(room?: { isOfficial?: boolean; isPublic?: boolean } | null) {
   return Boolean(room?.isOfficial && room?.isPublic);
+}
+
+export function officialBallotCandidates(entries: OfficialLoungeBallotEntry[]): MediaItem[] {
+  return entries.map((entry) => ({
+    id: entry.titleId,
+    mediaType: entry.mediaType,
+    title: entry.titleName,
+    overview: '',
+    date: '',
+    year: '',
+    genreIds: [],
+    genres: [],
+    rating: 0,
+    voteCount: entry.voteCount,
+    popularity: 0,
+    runtime: entry.durationSeconds ? Math.round(entry.durationSeconds / 60) : null,
+    posterPath: null,
+    backdropPath: entry.backdropPath,
+  }));
+}
+
+export function officialBallotTallies(entries: OfficialLoungeBallotEntry[]) {
+  return entries
+    .filter((entry) => entry.voteCount > 0)
+    .map((entry) => ({
+      vote: {
+        userId: entry.isMine ? 'mine' : 'field',
+        titleId: entry.titleId,
+        mediaType: entry.mediaType,
+        titleName: entry.titleName,
+      },
+      count: entry.voteCount,
+    }))
+    .sort((left, right) => right.count - left.count);
+}
+
+export function officialBallotWinner(entries: OfficialLoungeBallotEntry[]) {
+  return officialBallotTallies(entries)[0]?.vote ?? null;
 }
 
 export function visibleRoomChat(

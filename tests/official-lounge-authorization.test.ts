@@ -1,31 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import loungeAuthMigrationSource from '../supabase/migrations/20260828020000_official_lounge_vote_authorization.sql?raw';
 import privateTitleMigrationSource from '../supabase/migrations/20260811123000_full_title_watch_rooms.sql?raw';
-import { encodeLoungeVote, loungeNextUp, tallyLoungeVotes } from '../src/lib/lounge';
-import type { MediaItem } from '../src/lib/media';
+import { officialBallotTallies, officialBallotWinner } from '../src/lib/lounge';
+import type { OfficialLoungeBallotEntry } from '../src/lib/watchParty';
 
-const heat: MediaItem = {
-  id: 1, mediaType: 'movie', title: 'Heat', overview: '', date: '1995-12-15', year: '1995',
-  genreIds: [80], genres: ['Crime'], rating: 8, voteCount: 1, popularity: 90, runtime: 170,
-  posterPath: null, backdropPath: null,
-};
-const matrix: MediaItem = { ...heat, id: 603, title: 'The Matrix' };
+const cycle = '2026-08-27T01:00:00.000Z';
+const previousCycle = '2026-08-27T00:00:00.000Z';
+
+function entry(overrides: Partial<OfficialLoungeBallotEntry>): OfficialLoungeBallotEntry {
+  return {
+    mediaType: 'movie',
+    titleId: 603,
+    titleName: 'The Matrix',
+    backdropPath: '/matrix-backdrop.jpg',
+    durationSeconds: 8100,
+    voteCount: 0,
+    isMine: false,
+    cycleStartedAt: cycle,
+    ...overrides,
+  };
+}
 
 describe('official lounge vote authorization', () => {
-  it('rejects an arbitrary title that is not the lounge vote winner', () => {
+  it('rejects forged chat votes and titles outside the current ballot', () => {
     const sql = loungeAuthMigrationSource;
-    expect(sql).toContain("raise exception 'That title is not the current lounge winner'");
+    expect(sql).toContain("raise exception 'That title is not on the current lounge ballot'");
+    expect(sql).toContain("raise exception 'Lounge votes must use the official ballot'");
     expect(sql).toContain("raise exception 'The lounge has no votes to apply'");
-    expect(sql).toContain("chr(8288) || 'VOTE|'");
+    expect(sql).toContain('cast_official_lounge_vote');
+    expect(sql).toContain('official_lounge_catalog');
     expect(sql).not.toMatch(/delete from public\.chat_messages/i);
+    expect(sql).not.toContain('p_title_name');
   });
 
-  it('still grants the official RPC only to authenticated members', () => {
+  it('still grants official RPCs only to authenticated members', () => {
     const sql = loungeAuthMigrationSource.toLowerCase();
     expect(sql).toContain('security definer');
+    expect(sql).toContain('join the lounge before voting');
     expect(sql).toContain('join the lounge before changing the title');
-    expect(sql).toContain('revoke all on function public.apply_official_lounge_title');
-    expect(sql).toContain('grant execute on function public.apply_official_lounge_title');
+    expect(sql).toContain('revoke all on function public.cast_official_lounge_vote');
+    expect(sql).toContain('grant execute on function public.cast_official_lounge_vote');
     expect(sql).toContain('to authenticated');
   });
 
@@ -35,15 +49,28 @@ describe('official lounge vote authorization', () => {
     expect(loungeAuthMigrationSource).not.toContain('update_watch_room_title');
   });
 
-  it('keeps vote-marker encoding compatible with server-side parsing', () => {
-    const encoded = encodeLoungeVote(matrix);
-    expect(encoded.startsWith('\u2060VOTE|')).toBe(true);
-    expect(encoded).toBe('\u2060VOTE|movie:603:The Matrix');
-    const tallied = tallyLoungeVotes([
-      { id: '1', roomId: 'r', userId: 'a', nickname: 'A', body: encoded, createdAt: '2026-08-27T01:00:00.000Z' },
-      { id: '2', roomId: 'r', userId: 'b', nickname: 'B', body: encodeLoungeVote(heat), createdAt: '2026-08-27T00:59:00.000Z' },
-    ], '2026-08-27T00:59:30.000Z');
-    expect(tallied[0]?.vote.titleId).toBe(603);
-    expect(loungeNextUp([heat, matrix], 1, tallied)?.id).toBe(603);
+  it('counts only current-cycle ballot votes and uses ballot metadata', () => {
+    const current = [
+      entry({ titleId: 603, titleName: 'The Matrix', voteCount: 1, isMine: true }),
+      entry({ titleId: 807, titleName: 'Se7en', voteCount: 2 }),
+    ];
+    expect(officialBallotWinner(current)?.titleId).toBe(807);
+    expect(officialBallotTallies(current).map((item) => item.vote.titleId)).toEqual([807, 603]);
+
+    const stale = [entry({ titleId: 550, titleName: 'Fight Club', voteCount: 9, cycleStartedAt: previousCycle })];
+    expect(stale[0]?.cycleStartedAt).not.toBe(cycle);
+  });
+
+  it('does not let client-supplied fake metadata invent a winner', () => {
+    const sql = loungeAuthMigrationSource;
+    expect(sql).toContain('v_winner.title_name');
+    expect(sql).toContain('v_winner.backdrop_path');
+    expect(sql).toContain('v_winner.duration_seconds');
+    expect(sql).not.toContain('p_title_name := btrim');
+    expect(sql).toContain('create table if not exists public.official_lounge_catalog');
+    expect(sql).toContain('grant select on public.official_lounge_catalog');
+    expect(sql.toLowerCase()).not.toContain('grant insert on public.official_lounge_catalog');
+    expect(sql.toLowerCase()).not.toContain('grant update on public.official_lounge_catalog');
+    expect(sql.toLowerCase()).not.toContain('grant delete on public.official_lounge_catalog');
   });
 });

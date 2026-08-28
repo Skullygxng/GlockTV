@@ -3,6 +3,7 @@ import { Check, ChevronDown, Pause, Server } from 'lucide-react';
 import { imageUrl } from '../lib/media';
 import type { PartyRoom, PlaybackState } from '../lib/watchParty';
 import { buildPlaybackUrl, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
+import { PARTY_PLAYBACK_FALLBACK_MS, nextPlaybackServerId } from '../lib/playbackRecovery';
 import '../party-player.css';
 
 export interface PartyPlaybackConfig extends PlaybackConfig { movieUrlTemplate: string; tvUrlTemplate: string }
@@ -97,6 +98,8 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   const lastPlayerTime = useRef(0);
   const lastHealthReport = useRef({ at: 0, status: '', offset: Number.NaN });
   const [loaded, setLoaded] = useState(false);
+  const [providerState, setProviderState] = useState<'loading' | 'ready' | 'unavailable'>('loading');
+  const attemptedServers = useRef(new Set<string>());
   const [guestActivated, setGuestActivated] = useState(false);
   const [guestUnlocked, setGuestUnlocked] = useState(false);
   const servers = useMemo(() => getPlaybackServers(config), [config]);
@@ -113,7 +116,9 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   useEffect(() => {
     lastPlayerTime.current = 0;
     lastHealthReport.current = { at: 0, status: '', offset: Number.NaN };
+    attemptedServers.current = new Set();
     setLoaded(false);
+    setProviderState('loading');
   }, [room.episodeNumber, room.mediaType, room.seasonNumber, room.titleId]);
 
   const send = (command: string, values: Record<string, unknown> = {}) => {
@@ -183,6 +188,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
       if (commandMode === 'cinesrc' && event.origin !== 'https://cinesrc.st') return;
       const playerEvent = parsePartyPlayerEvent(event.data);
       if (!playerEvent) return;
+      setProviderState('ready');
       if (playerEvent.event === 'ready') { syncPlayer(); return; }
       if (playerEvent.currentTime > 0) lastPlayerTime.current = playerEvent.currentTime;
       if (playerEvent.event === 'timeupdate') reportSyncHealth(playerEvent.currentTime);
@@ -211,6 +217,23 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
   }, [commandMode, guestActivated, isHost, onHostCommand, onSyncHealth, room.playbackPosition, room.playbackState, room.playbackUpdatedAt, serverId]);
 
   useEffect(() => {
+    if (!shouldMountPlayer || providerState === 'ready' || providerState === 'unavailable') return;
+    const timer = window.setTimeout(() => {
+      attemptedServers.current.add(serverId);
+      const nextId = nextPlaybackServerId(servers, room.mediaType, serverId, attemptedServers.current);
+      if (!nextId) {
+        setProviderState('unavailable');
+        return;
+      }
+      if (isHost) onHostServerChange?.(nextId);
+      else setServerOverride(nextId === roomServerId ? '' : nextId);
+      setLoaded(false);
+      setProviderState('loading');
+    }, PARTY_PLAYBACK_FALLBACK_MS);
+    return () => window.clearTimeout(timer);
+  }, [isHost, onHostServerChange, providerState, room.mediaType, roomServerId, serverId, servers, shouldMountPlayer]);
+
+  useEffect(() => {
     if (!guestUnlocked) return;
     const retries = [750, 1750, 3500, 6000].map((delay) => window.setTimeout(syncPlayer, delay));
     const timer = window.setTimeout(() => setGuestUnlocked(false), 15000);
@@ -234,6 +257,7 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
     else setServerOverride(nextServerId === roomServerId ? '' : nextServerId);
     setServerOpen(false);
     setLoaded(false);
+    setProviderState('loading');
     setGuestActivated(false);
     setGuestUnlocked(false);
   };
@@ -244,6 +268,10 @@ export function PartyPlaybackPlayer({ room, config, isHost, onHostCommand, onHos
     {shouldMountPlayer
       ? <iframe ref={iframe} key={playbackUrl} title={`${room.titleName} full ${room.mediaType === 'movie' ? 'movie' : 'episode'}`} src={playbackUrl} allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowFullScreen sandbox="allow-scripts allow-same-origin allow-forms allow-presentation" referrerPolicy="strict-origin-when-cross-origin" onLoad={() => setLoaded(true)} />
       : <div className="party-video__paused" role="status" style={imageUrl(room.backdropPath ?? null, 'w1280') ? { '--paused-backdrop': `url(${imageUrl(room.backdropPath ?? null, 'w1280')})` } as React.CSSProperties : undefined}><span><Pause fill="currentColor" /></span><strong>{isHost ? 'Room paused' : 'Paused by the host'}</strong><small>{isHost ? 'Resume when everyone is ready.' : 'Playback will resume for everyone together.'}</small></div>}
+    {shouldMountPlayer && providerState !== 'ready' && <div className="party-video__provider-status" role="status">
+      <span>{providerState === 'unavailable' ? 'Provider unavailable. Retry or switch servers.' : `Connecting to ${activeServer?.label ?? 'server'}...`}</span>
+      {providerState === 'unavailable' && <button type="button" onClick={() => { attemptedServers.current = new Set(); setProviderState('loading'); setLoaded(false); }}>Retry</button>}
+    </div>}
     {isHost && <div className="party-video__host-note"><strong>Host controls</strong><span>Use the player controls · your changes sync to everyone</span></div>}
     {!isHost && shouldMountPlayer && <div className={`party-video__lock ${!room.isOfficial && !guestActivated ? 'party-video__lock--action' : ''}`}>{room.isOfficial
       ? <span>Tap the player once to join the public timeline</span>

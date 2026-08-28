@@ -70,14 +70,12 @@ describe('Friends invite card and official lounge wiring', () => {
       { id: 'vote', roomId: 'public-1', userId: 'user-2', nickname: 'A', body: encodeLoungeVote(matrix), createdAt: recentChat(1, 20_000) },
       { id: 'fresh', roomId: 'public-1', userId: 'user-2', nickname: 'A', body: 'fresh lounge hello', createdAt: recentChat(1) },
     ]);
-    partyService.sendMessage.mockImplementation(async (_roomId: string, nickname: string, body: string) => ({
-      id: `vote-${body}`,
-      roomId: 'public-1',
-      userId: 'user-1',
-      nickname,
-      body,
-      createdAt: new Date().toISOString(),
-    }));
+    const ballotFor = (titleId: number, mine = false) => ([
+      { mediaType: 'movie' as const, titleId: 603, titleName: 'The Matrix', backdropPath: null, durationSeconds: 8100, voteCount: titleId === 603 ? 1 : 0, isMine: mine && titleId === 603, cycleStartedAt: lounge.playbackUpdatedAt },
+      { mediaType: 'movie' as const, titleId: 807, titleName: 'Se7en', backdropPath: null, durationSeconds: 7620, voteCount: titleId === 807 ? 1 : 0, isMine: mine && titleId === 807, cycleStartedAt: lounge.playbackUpdatedAt },
+    ]);
+    partyService.getOfficialLoungeBallot.mockResolvedValue(ballotFor(0));
+    partyService.castOfficialLoungeVote.mockImplementation(async (_roomId: string, titleId: number) => ballotFor(titleId, true));
 
     render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
     await screen.findByRole('heading', { name: 'Heat' });
@@ -91,11 +89,10 @@ describe('Friends invite card and official lounge wiring', () => {
 
     const ballot = await screen.findByRole('region', { name: 'Lounge next up ballot' });
     fireEvent.click(within(ballot).getByRole('button', { name: 'Vote for The Matrix' }));
-    await waitFor(() => expect(partyService.sendMessage).toHaveBeenCalledWith('public-1', 'Guest', encodeLoungeVote(matrix)));
+    await waitFor(() => expect(partyService.castOfficialLoungeVote).toHaveBeenCalledWith('public-1', 603, 'movie'));
     fireEvent.click(within(ballot).getByRole('button', { name: 'Vote for Se7en' }));
-    await waitFor(() => expect(partyService.sendMessage).toHaveBeenCalledWith('public-1', 'Guest', encodeLoungeVote(se7en)));
-    const voteBodies = partyService.sendMessage.mock.calls.map((call) => String(call[2])).filter((body) => body.includes('VOTE|'));
-    expect(voteBodies).toEqual([encodeLoungeVote(matrix), encodeLoungeVote(se7en)]);
+    await waitFor(() => expect(partyService.castOfficialLoungeVote).toHaveBeenCalledWith('public-1', 807, 'movie'));
+    expect(partyService.sendMessage.mock.calls.every((call) => !String(call[2] ?? '').includes('VOTE|'))).toBe(true);
     expect(screen.queryByText(encodeLoungeVote(matrix))).not.toBeInTheDocument();
     expect(screen.queryByText(encodeLoungeVote(se7en))).not.toBeInTheDocument();
     expect(within(ballot).getByText('Your vote')).toBeInTheDocument();
@@ -119,6 +116,9 @@ describe('Friends invite card and official lounge wiring', () => {
     partyService.joinRoom.mockResolvedValue(lounge);
     partyService.getRoom.mockResolvedValue(lounge);
     partyService.heartbeatRoom.mockResolvedValue(lounge);
+    partyService.getOfficialLoungeBallot.mockResolvedValue([
+      { mediaType: 'movie', titleId: 603, titleName: 'The Matrix', backdropPath: '/matrix-backdrop.jpg', durationSeconds: 8100, voteCount: 2, isMine: true, cycleStartedAt: lounge.playbackUpdatedAt },
+    ]);
     partyService.applyOfficialLoungeTitle.mockResolvedValue({ ...lounge, titleId: 603, titleName: 'The Matrix' });
 
     render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
@@ -130,9 +130,31 @@ describe('Friends invite card and official lounge wiring', () => {
     await waitFor(() => expect(partyService.applyOfficialLoungeTitle).toHaveBeenCalled());
     expect(partyService.updateTitle).not.toHaveBeenCalled();
     expect(partyService.applyOfficialLoungeTitle.mock.calls[0][0]).toBe('public-1');
-    expect(partyService.applyOfficialLoungeTitle.mock.calls[0][1]).toEqual(expect.objectContaining({
-      titleId: 603,
-      titleName: 'The Matrix',
-    }));
+    expect(partyService.applyOfficialLoungeTitle.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it('does not rotate the official lounge when the current ballot has no votes', async () => {
+    const partyService = makePartyService();
+    const lounge = officialRoom({
+      playbackState: 'playing',
+      playbackPosition: 0,
+      durationSeconds: 120,
+      playbackUpdatedAt: new Date(Date.now() - 130_000).toISOString(),
+    });
+    partyService.joinRoom.mockResolvedValue(lounge);
+    partyService.getRoom.mockResolvedValue(lounge);
+    partyService.heartbeatRoom.mockResolvedValue(lounge);
+    partyService.getOfficialLoungeBallot.mockResolvedValue([
+      { mediaType: 'movie', titleId: 603, titleName: 'The Matrix', backdropPath: null, durationSeconds: 8100, voteCount: 0, isMine: false, cycleStartedAt: lounge.playbackUpdatedAt },
+    ]);
+
+    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Join room' }));
+    await screen.findByRole('region', { name: 'Lounge next up ballot' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(partyService.applyOfficialLoungeTitle).not.toHaveBeenCalled();
   });
 });

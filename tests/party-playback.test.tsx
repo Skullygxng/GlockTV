@@ -267,6 +267,23 @@ describe('full-title party playback', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open room server list' }));
     fireEvent.click(screen.getByRole('menuitem', { name: /Glock Auto/i }));
     expect(onHostServerChange).toHaveBeenCalledWith('auto');
+  });
+
+  it('asks the host to change the room server after a dead provider timeout', () => {
+    vi.useFakeTimers();
+    const onHostServerChange = vi.fn();
+    render(<PartyPlaybackPlayer room={{ ...room, playbackState: 'playing' }} config={multiServerConfig} isHost onHostCommand={vi.fn()} onHostServerChange={onHostServerChange} />);
+    act(() => { vi.advanceTimersByTime(22_000); });
+    expect(onHostServerChange).toHaveBeenCalledWith('auto');
+    vi.useRealTimers();
+  });
+
+  it('keeps the documented host server choice contract', () => {
+    const onHostServerChange = vi.fn();
+    const { rerender } = render(<PartyPlaybackPlayer room={room} config={multiServerConfig} isHost onHostCommand={vi.fn()} onHostServerChange={onHostServerChange} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open room server list' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: /Glock Auto/i }));
+    expect(onHostServerChange).toHaveBeenCalledWith('auto');
 
     rerender(<PartyPlaybackPlayer room={{ ...room, hostId: 'another-host' }} config={multiServerConfig} isHost={false} onHostCommand={vi.fn()} />);
     fireEvent.click(screen.getByRole('button', { name: 'Open room server list' }));

@@ -36,10 +36,13 @@ describe('watch party database enforcement', () => {
 
   it('authorizes official lounge title changes from vote winners and no longer wipes chat', () => {
     const sql = loungeAuthMigrationSource.toLowerCase();
-    expect(sql).toContain('apply_official_lounge_title');
-    expect(sql).toContain('that title is not the current lounge winner');
+    expect(sql).toContain('official_lounge_catalog');
+    expect(sql).toContain('official_lounge_ballot');
+    expect(sql).toContain('official_lounge_votes');
+    expect(sql).toContain('cast_official_lounge_vote');
+    expect(sql).toContain('that title is not on the current lounge ballot');
     expect(sql).toContain('the lounge has no votes to apply');
-    expect(sql).toContain("chr(8288) || 'vote|'");
+    expect(sql).toContain('lounge votes must use the official ballot');
     expect(sql).not.toContain('delete from public.chat_messages');
     expect(sql).toContain('grant execute on function public.apply_official_lounge_title');
   });

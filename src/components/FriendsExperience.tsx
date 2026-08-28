@@ -92,6 +92,11 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const activeRoomId = useRef('');
   const messageMutationVersion = useRef(0);
   const snapshotVersion = useRef(0);
+  const blockedUsersRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    blockedUsersRef.current = blockedUsers;
+  }, [blockedUsers]);
 
   useEffect(() => {
     if (!service) return;
@@ -140,7 +145,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   }, []);
 
   const refreshMembers = useCallback(async (roomId: string) => {
-    if (!service) return;
+    if (!service || activeRoomId.current !== roomId) return;
     const nextMembers = await service.getMembers(roomId);
     if (activeRoomId.current !== roomId) return;
 
@@ -153,7 +158,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   }, [exitRemovedRoom, room?.code, room?.id, room?.isOfficial, service, userId]);
 
   const refreshSnapshot = useCallback(async (roomId: string) => {
-    if (!service) return;
+    if (!service || activeRoomId.current !== roomId) return;
 
     const requestVersion = ++snapshotVersion.current;
     const messageVersionAtStart = messageMutationVersion.current;
@@ -183,6 +188,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
 
     setRoom(nextRoom);
     setMembers(nextMembers);
+    blockedUsersRef.current = nextBlocked;
     setBlockedUsers(nextBlocked);
 
     if (messageMutationVersion.current === messageVersionAtStart) {
@@ -204,6 +210,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     if (activeRoomId.current !== nextRoom.id) return;
 
     chatAtBottom.current = true; previousMessageCount.current = 0; setUnreadMessages(0);
+    blockedUsersRef.current = nextBlocked;
     setRoom(nextRoom); setUserId(nextUserId); setMembers(nextMembers); setBlockedUsers(nextBlocked);
     setMessages(nextMessages.filter((item) => !nextBlocked.includes(item.userId)));
     setLeaveConfirm(false); setRosterOpen(false);
@@ -236,20 +243,30 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
       },
       onMessage: (next) => {
         messageMutationVersion.current += 1;
-        if (!blockedUsers.includes(next.userId)) {
+        if (!blockedUsersRef.current.includes(next.userId)) {
           setMessages((previous) => upsertMessage(previous, next));
         }
       },
-      onMembersChanged: () => { void refreshMembers(room.id); },
-      onChatCleared: () => { void refreshSnapshot(room.id); },
-      onReady: () => { void refreshSnapshot(room.id); },
+      onMembersChanged: () => {
+        if (activeRoomId.current !== room.id) return;
+        void refreshMembers(room.id);
+      },
+      onChatCleared: () => {
+        if (activeRoomId.current !== room.id) return;
+        void refreshSnapshot(room.id);
+      },
+      onReady: () => {
+        if (activeRoomId.current !== room.id) return;
+        void refreshSnapshot(room.id);
+      },
     });
-  }, [blockedUsers, refreshMembers, refreshSnapshot, room?.id, service]);
+  }, [refreshMembers, refreshSnapshot, room?.id, service]);
 
   useEffect(() => {
     if (!service || !room || !service.heartbeatRoom) return;
     let active = true;
     const heartbeat = async () => {
+      if (!active || activeRoomId.current !== room.id) return;
       try {
         const nextRoom = await service.heartbeatRoom(room.id, presence.current);
         if (active && activeRoomId.current === room.id) setRoom(nextRoom);
@@ -271,15 +288,17 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     let active = true;
 
     const checkRoomState = async () => {
+      if (!active || activeRoomId.current !== roomId) return;
       try {
         if (!room.isOfficial) {
           const membership = await service.getMembershipStatus(roomId);
           if (membership === 'removed') {
-            if (active) exitRemovedRoom(room.code);
+            if (active && activeRoomId.current === roomId) exitRemovedRoom(room.code);
             return;
           }
         }
 
+        if (activeRoomId.current !== roomId) return;
         const nextRoom = await service.getRoom(roomId);
         if (active && activeRoomId.current === roomId) setRoom(nextRoom);
       } catch {
@@ -288,16 +307,17 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     };
 
     const recover = async () => {
+      if (!active || activeRoomId.current !== roomId) return;
       try {
         if (!room.isOfficial) {
           const membership = await service.getMembershipStatus(roomId);
           if (membership === 'removed') {
-            if (active) exitRemovedRoom(room.code);
+            if (active && activeRoomId.current === roomId) exitRemovedRoom(room.code);
             return;
           }
         }
 
-        if (active) await refreshSnapshot(roomId);
+        if (active && activeRoomId.current === roomId) await refreshSnapshot(roomId);
       } catch {
         // A later heartbeat/recovery pass can repair a transient network failure.
       }
@@ -582,12 +602,13 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   };
 
   const confirmLeaveRoom = async () => {
-    if (service && room) await service.leaveRoom(room.id, userId).catch(() => undefined);
+    const leaving = room;
     activeRoomId.current = '';
     snapshotVersion.current += 1;
     messageMutationVersion.current += 1;
     const url = new URL(window.location.href); url.searchParams.delete('room'); window.history.replaceState({}, '', url);
     setRoom(null); setMembers([]); setMessages([]); setError(''); setLeaveConfirm(false); setRosterOpen(false); setControlsOpen(false); setRemoveConfirmId(''); setTransferConfirmId('');
+    if (service && leaving) await service.leaveRoom(leaving.id, userId).catch(() => undefined);
     if (service?.listPublicRooms) service.listPublicRooms().then(setPublicRooms).catch(() => undefined);
   };
 

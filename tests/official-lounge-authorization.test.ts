@@ -108,6 +108,19 @@ describe('official lounge vote authorization', () => {
     expect(sql).not.toContain('order by count(*) desc, max(v.created_at) desc\n    limit 1');
   });
 
+  it('keeps the rotation winner and vote upsert PostgreSQL-compilable', () => {
+    const sql = loungeAuthMigrationSource;
+    expect(sql).toContain('v_winner record;');
+    expect(sql).toContain('select counted.votes as votes, b.*');
+    expect(sql).toContain('into v_winner');
+    expect(sql).toContain('coalesce(v_winner.votes, 0)');
+    expect(sql).toContain('on conflict on constraint official_lounge_votes_pkey');
+    expect(sql).not.toContain('v_winner public.official_lounge_ballot%rowtype;');
+    expect(sql).not.toContain('v_winner_votes integer;');
+    expect(sql).not.toContain('into v_winner_votes, v_winner');
+    expect(sql).not.toContain('on conflict (room_id, cycle_started_at, user_id)');
+  });
+
   it('serializes official title rotation against the locked room row', () => {
     const applyFn = loungeAuthMigrationSource.slice(
       loungeAuthMigrationSource.indexOf('create function public.apply_official_lounge_title(p_room_id uuid)'),

@@ -164,4 +164,158 @@ describe('Friends realtime reconciliation', () => {
     expect(screen.getByText('The room is quiet')).toBeInTheDocument();
     expect(service.getMessages).toHaveBeenCalledTimes(2);
   });
+
+  function partyService(overrides: Record<string, unknown> = {}) {
+    let handlers: PartySubscriptionHandlers | undefined;
+    const service = {
+      ensureUser: vi.fn().mockResolvedValue({ id: 'user-2' }),
+      createRoom: vi.fn().mockResolvedValue(room),
+      joinRoom: vi.fn().mockResolvedValue(room),
+      getRoom: vi.fn().mockResolvedValue(room),
+      listPublicRooms: vi.fn().mockResolvedValue([]),
+      getMembers: vi.fn().mockResolvedValue([member]),
+      getMessages: vi.fn().mockResolvedValue([]),
+      getBlockedUsers: vi.fn().mockResolvedValue([]),
+      getMembershipStatus: vi.fn().mockResolvedValue('active'),
+      heartbeatRoom: vi.fn().mockResolvedValue(room),
+      subscribe: vi.fn().mockImplementation((_roomId: string, nextHandlers: PartySubscriptionHandlers) => {
+        handlers = nextHandlers;
+        return () => undefined;
+      }),
+      sendMessage: vi.fn(),
+      updatePlayback: vi.fn(),
+      updateTitle: vi.fn(),
+      updateEpisode: vi.fn(),
+      leaveRoom: vi.fn(),
+      setMemberMuted: vi.fn(),
+      removeMember: vi.fn(),
+      setCohost: vi.fn(),
+      transferHost: vi.fn(),
+      setRoomServer: vi.fn(),
+      setRoomControls: vi.fn(),
+      clearChat: vi.fn(),
+      getBannedMembers: vi.fn().mockResolvedValue([]),
+      unbanMember: vi.fn(),
+      blockUser: vi.fn(),
+      reportMessage: vi.fn(),
+      getAccount: vi.fn().mockResolvedValue(null),
+      linkEmail: vi.fn(),
+      sendSignInLink: vi.fn(),
+      ...overrides,
+    };
+    return { service, getHandlers: () => handlers };
+  }
+
+  async function joinFriends(service: object) {
+    window.history.replaceState({}, '', '/');
+    render(
+      <App
+        client={client}
+        partyService={service as never}
+        partyPlaybackConfig={{
+          movieUrlTemplate: 'https://party.example/movie/{tmdb_id}',
+          tvUrlTemplate: 'https://party.example/tv/{tmdb_id}/{season_number}/{episode_number}',
+        }}
+      />,
+    );
+    await screen.findByRole('heading', { name: 'Heat' });
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Primary navigation' }))
+        .getByRole('button', { name: 'Friends' }),
+    );
+    fireEvent.change(await screen.findByLabelText('Your nickname'), { target: { value: 'Guest' } });
+    fireEvent.change(screen.getByLabelText('Room code'), { target: { value: 'heat95' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Join' }));
+    await screen.findByRole('region', { name: 'Watch party HEAT95' });
+  }
+
+  it('keeps one room subscription after snapshot and blocked-user refresh', async () => {
+    const { service, getHandlers } = partyService({
+      getBlockedUsers: vi.fn().mockResolvedValue(['user-blocked']),
+    });
+    await joinFriends(service);
+    await waitFor(() => expect(getHandlers()).toBeDefined());
+    expect(service.subscribe).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      getHandlers()?.onReady();
+    });
+    await waitFor(() => expect(service.getBlockedUsers).toHaveBeenCalledTimes(2));
+
+    act(() => {
+      getHandlers()?.onMessage({
+        id: 'blocked-1', roomId: 'room-1', userId: 'user-blocked', nickname: 'Blocked',
+        body: 'should stay hidden', createdAt: '2026-08-11T00:03:00.000Z',
+      });
+      getHandlers()?.onMessage({
+        id: 'ok-1', roomId: 'room-1', userId: 'user-3', nickname: 'Friend',
+        body: 'still visible', createdAt: '2026-08-11T00:03:01.000Z',
+      });
+    });
+
+    expect(await screen.findByText('still visible')).toBeInTheDocument();
+    expect(screen.queryByText('should stay hidden')).not.toBeInTheDocument();
+    expect(service.subscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not issue stale room RPCs after Leave invalidates the active room', async () => {
+    let releaseLeave: (() => void) | undefined;
+    const { service, getHandlers } = partyService({
+      leaveRoom: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { releaseLeave = resolve; })),
+    });
+    const unhandled: string[] = [];
+    const onUnhandled = (event: PromiseRejectionEvent) => { unhandled.push(String(event.reason)); };
+    window.addEventListener('unhandledrejection', onUnhandled);
+
+    await joinFriends(service);
+    await waitFor(() => expect(getHandlers()).toBeDefined());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm leave room' }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Watch party HEAT95' })).not.toBeInTheDocument());
+    expect(await screen.findByRole('heading', { name: /Movie night/i })).toBeInTheDocument();
+
+    service.getRoom.mockClear();
+    service.getMembers.mockClear();
+    service.getMessages.mockClear();
+    service.getMembershipStatus.mockImplementation(async () => { throw new Error('Room membership required'); });
+    service.getMembers.mockRejectedValue(new Error('Room membership required'));
+    service.getMessages.mockRejectedValue(new Error('Room membership required'));
+    service.getRoom.mockRejectedValue(new Error('Room membership required'));
+
+    await act(async () => {
+      getHandlers()?.onReady();
+      getHandlers()?.onMembersChanged();
+      getHandlers()?.onChatCleared?.();
+    });
+
+    expect(service.getRoom).not.toHaveBeenCalled();
+    expect(service.getMembers).not.toHaveBeenCalled();
+    expect(service.getMessages).not.toHaveBeenCalled();
+    expect(unhandled.join(' ')).not.toMatch(/Room membership required/);
+
+    await act(async () => { releaseLeave?.(); });
+    window.removeEventListener('unhandledrejection', onUnhandled);
+  });
+
+  it('does not resubscribe or snapshot-storm while remaining in the same room', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { service, getHandlers } = partyService();
+    await joinFriends(service);
+    await waitFor(() => expect(getHandlers()).toBeDefined());
+    act(() => { getHandlers()?.onReady(); });
+    await waitFor(() => expect(service.getBlockedUsers.mock.calls.length).toBeGreaterThanOrEqual(2));
+
+    const membersAfterReady = service.getMembers.mock.calls.length;
+    const messagesAfterReady = service.getMessages.mock.calls.length;
+    const roomsAfterReady = service.getRoom.mock.calls.length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+
+    expect(service.subscribe).toHaveBeenCalledTimes(1);
+    expect(service.getMembers.mock.calls.length - membersAfterReady).toBeLessThan(6);
+    expect(service.getMessages.mock.calls.length - messagesAfterReady).toBeLessThan(6);
+    expect(service.getRoom.mock.calls.length - roomsAfterReady).toBeLessThan(8);
+    vi.useRealTimers();
+  });
 });

@@ -254,8 +254,10 @@ class SupabaseWatchPartyService implements WatchPartyService {
       p_backdrop_path: input.backdropPath,
       p_duration_seconds: input.durationSeconds,
     }).single();
-    if (!error && data) return mapRoom(data as RoomRow);
-    return this.updateTitle(roomId, input);
+    if (error || !data) {
+      throw new Error(error?.message ?? 'The public lounge title could not be changed.');
+    }
+    return mapRoom(data as RoomRow);
   }
 
   async updateEpisode(roomId: string, seasonNumber: number, episodeNumber: number) {

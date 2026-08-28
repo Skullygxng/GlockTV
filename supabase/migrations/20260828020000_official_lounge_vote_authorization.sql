@@ -257,6 +257,7 @@ declare
   v_room public.watch_rooms%rowtype;
   v_winner public.official_lounge_ballot%rowtype;
   v_winner_votes integer;
+  v_effective_position double precision;
 begin
   if auth.uid() is null then
     raise exception 'Authentication required';
@@ -309,6 +310,22 @@ begin
 
   if v_room.playback_updated_at > now() - interval '90 seconds' then
     raise exception 'The lounge just changed titles. Vote on the next one.';
+  end if;
+
+  -- Same invariant as loungeShouldAdvance: missing/invalid runtime cannot force rotation.
+  if coalesce(v_room.duration_seconds, 0) <= 0 then
+    raise exception 'The current lounge title is still playing';
+  end if;
+
+  if v_room.playback_state = 'paused' then
+    v_effective_position := v_room.playback_position;
+  else
+    v_effective_position := v_room.playback_position
+      + greatest(0, extract(epoch from (now() - v_room.playback_updated_at)));
+  end if;
+
+  if v_effective_position < greatest(90, v_room.duration_seconds - 20) then
+    raise exception 'The current lounge title is still playing';
   end if;
 
   update public.watch_rooms

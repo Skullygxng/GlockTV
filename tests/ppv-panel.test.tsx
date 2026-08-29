@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveTvRoute } from '../src/components/LiveTvRoute';
 import { PpvPanel } from '../src/components/PpvPanel';
 import { PpvPlayer } from '../src/components/PpvPlayer';
@@ -139,15 +139,324 @@ describe('PPV player', () => {
 
     const first = document.querySelector('iframe.ppv-player__frame') as HTMLIFrameElement;
     expect(first.getAttribute('src')).toBe('https://embed.st/embed/delta/a/1');
-    expect(first.getAttribute('sandbox')).toBe('allow-scripts allow-presentation');
+    expect(first.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin allow-forms allow-presentation');
     expect(first.getAttribute('sandbox')).not.toContain('allow-popups');
     expect(first.getAttribute('sandbox')).not.toContain('allow-top-navigation');
     expect(first.getAttribute('sandbox')).not.toContain('allow-downloads');
-    expect(first.getAttribute('referrerpolicy') || first.referrerPolicy).toBe('no-referrer');
+    expect(first.getAttribute('sandbox')).not.toContain('allow-modals');
+    expect(first.getAttribute('referrerpolicy') || first.referrerPolicy).toBe('strict-origin-when-cross-origin');
 
     fireEvent.click(screen.getByRole('button', { name: 'Next PPV source' }));
     const second = document.querySelector('iframe.ppv-player__frame') as HTMLIFrameElement;
     expect(second.getAttribute('src')).toBe('https://embed.streamapi.cc/sport/b/');
     expect(second.getAttribute('sandbox')).toBe(PPV_IFRAME_SANDBOX);
+  });
+});
+
+
+describe('PPV mobile watching state', () => {
+  /*
+   * The mobile stage hides .live-tv-content unless it carries
+   * live-tv-stage--watching, and PPV selection never touched Live TV's channel
+   * state, so a chosen event could stay hidden on a phone.
+   */
+  function stage(): HTMLElement {
+    return screen.getByRole('main', { name: 'Live TV' });
+  }
+
+  it('enters watching state only once a PPV event is chosen, and leaves it on return', async () => {
+    render(
+      <LiveTvRoute
+        loadCatalog={() => Promise.resolve(liveCatalog)}
+        loadPpvCatalog={() => Promise.resolve(catalog)}
+      />,
+    );
+    await screen.findByRole('tab', { name: 'PPV' });
+
+    // Channels with nothing selected: not watching, so mobile hides the player.
+    expect(stage().className).not.toContain('live-tv-stage--watching');
+
+    fireEvent.click(screen.getByRole('tab', { name: 'PPV' }));
+    await screen.findByLabelText('PPV events');
+    expect(stage().className).not.toContain('live-tv-stage--watching');
+
+    fireEvent.click(await screen.findByRole('button', { name: /Watch UFC Fight Night 286/ }));
+
+    // Selection must both flip the stage and actually render the player.
+    await waitFor(() => expect(stage().className).toContain('live-tv-stage--watching'));
+    expect(screen.getByLabelText('PPV player')).toBeInTheDocument();
+
+    // Returning to Channels with no channel selected drops watching again.
+    fireEvent.click(screen.getByRole('tab', { name: 'Channels' }));
+    await waitFor(() => expect(stage().className).not.toContain('live-tv-stage--watching'));
+    expect(screen.queryByLabelText('PPV player')).not.toBeInTheDocument();
+  });
+
+  it('still enters watching state for a normal channel', async () => {
+    render(
+      <LiveTvRoute
+        loadCatalog={() => Promise.resolve(liveCatalog)}
+        loadPpvCatalog={() => Promise.resolve(catalog)}
+      />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Watch News Network' }));
+    await waitFor(() => expect(stage().className).toContain('live-tv-stage--watching'));
+  });
+});
+
+describe('PPV player request races', () => {
+  const eventA: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'event-a',
+    title: 'Event A',
+    category: 'mma',
+    startsAt: '2026-08-29T07:00:00.000Z',
+    status: 'live',
+    sourceRefs: [{ source: 'delta', id: 'a' }],
+    embeds: [],
+  };
+  const eventB: PpvEvent = { ...eventA, providerEventId: 'event-b', title: 'Event B' };
+
+  const embedA = [{ provider: 'streamed' as const, source: 'delta', url: 'https://embed.st/embed/delta/a/1' }];
+  const embedB = [{ provider: 'streamed' as const, source: 'delta', url: 'https://embed.st/embed/delta/b/1' }];
+
+  afterEach(() => vi.useRealTimers());
+
+  it('drops the previous event iframe immediately on switch', async () => {
+    let resolveB: ((value: typeof embedB) => void) | undefined;
+    const loadEmbeds = vi.fn((event: PpvEvent) => {
+      if (event.providerEventId === 'event-a') return Promise.resolve(embedA);
+      return new Promise<typeof embedB>((resolve) => {
+        resolveB = resolve;
+      });
+    });
+
+    const view = render(<PpvPlayer event={eventA} loadEmbeds={loadEmbeds as never} />);
+    await waitFor(() =>
+      expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedA[0].url),
+    );
+
+    view.rerender(<PpvPlayer event={eventB} loadEmbeds={loadEmbeds as never} />);
+
+    // Event A's player must never sit underneath Event B's metadata.
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(screen.getByText('Event B')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveB?.(embedB);
+    });
+    await waitFor(() =>
+      expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url),
+    );
+  });
+
+  it('ignores a late result from the previous event', async () => {
+    let resolveA: ((value: typeof embedA) => void) | undefined;
+    const loadEmbeds = vi.fn((event: PpvEvent) => {
+      if (event.providerEventId === 'event-a') {
+        return new Promise<typeof embedA>((resolve) => {
+          resolveA = resolve;
+        });
+      }
+      return Promise.resolve(embedB);
+    });
+
+    const view = render(<PpvPlayer event={eventA} loadEmbeds={loadEmbeds as never} />);
+    view.rerender(<PpvPlayer event={eventB} loadEmbeds={loadEmbeds as never} />);
+    await waitFor(() =>
+      expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url),
+    );
+
+    await act(async () => {
+      resolveA?.(embedA);
+    });
+
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url);
+  });
+
+  it('ignores a late reload of the previous event', async () => {
+    let resolveReload: ((value: typeof embedA) => void) | undefined;
+    let call = 0;
+    const loadEmbeds = vi.fn((event: PpvEvent) => {
+      if (event.providerEventId === 'event-a') {
+        call += 1;
+        if (call === 1) return Promise.resolve(embedA);
+        return new Promise<typeof embedA>((resolve) => {
+          resolveReload = resolve;
+        });
+      }
+      return Promise.resolve(embedB);
+    });
+
+    const view = render(<PpvPlayer event={eventA} loadEmbeds={loadEmbeds as never} />);
+    await waitFor(() =>
+      expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedA[0].url),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reload PPV embeds' }));
+    view.rerender(<PpvPlayer event={eventB} loadEmbeds={loadEmbeds as never} />);
+    await waitFor(() =>
+      expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url),
+    );
+
+    await act(async () => {
+      resolveReload?.(embedA);
+    });
+
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url);
+  });
+
+  it('does not let a stale error or empty result clobber the active event', async () => {
+    let rejectA: ((reason: Error) => void) | undefined;
+    const loadEmbeds = vi.fn((event: PpvEvent) => {
+      if (event.providerEventId === 'event-a') {
+        return new Promise<typeof embedA>((_resolve, reject) => {
+          rejectA = reject;
+        });
+      }
+      return Promise.resolve(embedB);
+    });
+
+    const view = render(<PpvPlayer event={eventA} loadEmbeds={loadEmbeds as never} />);
+    view.rerender(<PpvPlayer event={eventB} loadEmbeds={loadEmbeds as never} />);
+    await waitFor(() =>
+      expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url),
+    );
+
+    await act(async () => {
+      rejectA?.(new Error('event A blew up'));
+    });
+
+    expect(screen.queryByText('event A blew up')).not.toBeInTheDocument();
+    expect(document.querySelector('iframe')?.getAttribute('src')).toBe(embedB[0].url);
+  });
+});
+
+describe('PPV failure-state layout', () => {
+  it('renders exactly one aspect-ratio viewport while loading and when unavailable', async () => {
+    const event: PpvEvent = {
+      provider: 'streamed',
+      providerEventId: 'event-empty',
+      title: 'Empty Event',
+      category: 'mma',
+      startsAt: '2026-08-29T07:00:00.000Z',
+      status: 'live',
+      sourceRefs: [],
+      embeds: [],
+    };
+
+    render(<PpvPlayer event={event} loadEmbeds={() => Promise.resolve([])} />);
+
+    const player = screen.getByLabelText('PPV player');
+    // A nested .live-player__video produced a double 16:9 box that squeezed the
+    // failure panel on phones.
+    expect(player.querySelectorAll('.live-player__video')).toHaveLength(1);
+    expect(player.querySelector('.live-player__video .live-player__video')).toBeNull();
+
+    await screen.findByText('Embed unavailable');
+    expect(player.querySelectorAll('.live-player__video')).toHaveLength(1);
+  });
+});
+
+describe('PPV catalog freshness', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('ticks the countdown and flips an upcoming card to live without refetching', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Far enough out to stay upcoming across the ticks: the live window opens
+    // 15 minutes before start.
+    const start = new Date('2026-08-28T21:00:00.000Z');
+    vi.setSystemTime(new Date('2026-08-28T20:00:00.000Z'));
+
+    const single: PpvCatalog = {
+      source: 'streamed',
+      loadedAt: '2026-08-28T20:00:00.000Z',
+      events: [
+        {
+          provider: 'streamed',
+          providerEventId: 'soon',
+          title: 'Soon Card',
+          category: 'mma',
+          startsAt: start.toISOString(),
+          status: 'upcoming',
+          sourceRefs: [],
+          embeds: [],
+        },
+      ],
+    };
+    const loadCatalog = vi.fn(() => Promise.resolve(single));
+    render(<PpvPanel loadCatalog={loadCatalog as never} />);
+
+    const row = () => screen.getByRole('button', { name: 'Watch Soon Card' }).textContent ?? '';
+
+    await waitFor(() => expect(row()).toMatch(/1h/));
+
+    // The clock alone must move the countdown on, with no refetch.
+    await act(async () => {
+      vi.setSystemTime(new Date('2026-08-28T20:29:00.000Z'));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(row()).not.toMatch(/1h/);
+    expect(row()).toMatch(/(29|30|31)m\s/);
+
+    // Crossing the live window flips status from the clock alone.
+    await act(async () => {
+      vi.setSystemTime(new Date('2026-08-28T20:49:00.000Z'));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(row()).toMatch(/LIVE/);
+    expect(loadCatalog).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the last good catalog when a background refresh fails', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let call = 0;
+    const loadCatalog = vi.fn(() => {
+      call += 1;
+      return call === 1 ? Promise.resolve(catalog) : Promise.reject(new Error('provider down'));
+    });
+
+    render(<PpvPanel loadCatalog={loadCatalog as never} />);
+    expect(await screen.findByText('UFC Fight Night 286 Nurmagomedov vs Song')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 100);
+    });
+
+    // The list survives; the failure is surfaced without blanking it.
+    expect(screen.getByText('UFC Fight Night 286 Nurmagomedov vs Song')).toBeInTheDocument();
+    expect(screen.getByText(/Showing the last loaded fight cards/)).toBeInTheDocument();
+  });
+
+  it('does not overlap catalog refreshes', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let resolveSecond: ((value: PpvCatalog) => void) | undefined;
+    let call = 0;
+    const loadCatalog = vi.fn(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve(catalog);
+      return new Promise<PpvCatalog>((resolve) => {
+        resolveSecond = resolve;
+      });
+    });
+
+    render(<PpvPanel loadCatalog={loadCatalog as never} />);
+    await screen.findByText('UFC Fight Night 286 Nurmagomedov vs Song');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 100);
+    });
+    expect(loadCatalog).toHaveBeenCalledTimes(2);
+
+    // A second interval firing while one request is still in flight must not
+    // stack another request on top of it.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 100);
+    });
+    expect(loadCatalog).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      resolveSecond?.(catalog);
+    });
   });
 });

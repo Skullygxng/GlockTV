@@ -48,3 +48,28 @@
 @media(max-width:900px){
   .live-tv-tabs{margin:0 14px 10px;flex:0 0 auto}
 }
+.ppv-stale{
+  margin:0 0 8px;
+  padding:8px 10px;
+  border:1px solid #4a3a25;
+  border-radius:8px;
+  background:#191309;
+  color:#e4d3b5;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:9px;
+}
+.ppv-stale svg{width:13px;flex:0 0 auto;color:#e0a33c}
+.ppv-stale span{min-width:0;flex:1 1 auto}
+.ppv-stale button{
+  flex:0 0 auto;
+  border:1px solid #6a532c;
+  border-radius:6px;
+  background:#241a0c;
+  color:#f3e3c6;
+  padding:5px 9px;
+  font-size:8px;
+  font-weight:700;
+  cursor:pointer;
+}

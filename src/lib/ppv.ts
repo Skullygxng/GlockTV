@@ -1,6 +1,8 @@
+import { isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
+
 export type PpvCategory = 'boxing' | 'mma' | 'wrestling' | 'other';
 export type PpvStatus = 'upcoming' | 'live' | 'ended';
-export type PpvProviderId = 'streamed' | 'sportsrc' | 'daddylive';
+export type PpvProviderId = 'streamed' | 'sportsrc';
 
 export interface PpvEmbed {
   provider: PpvProviderId;
@@ -33,7 +35,6 @@ export interface PpvCatalog {
 
 export const STREAMED_API = 'https://streamed.pk';
 export const SPORTSRC_API = 'https://api.sportsrc.org';
-export const DADDYLIVE_EVENTS_API = 'https://daddylive.app/api/events';
 
 const STALE_BEFORE_MS = 12 * 60 * 60 * 1000;
 const LIVE_WINDOW_BEFORE_MS = 15 * 60 * 1000;
@@ -74,17 +75,9 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+/* Single gate for every provider-supplied embed URL. See ppvEmbedPolicy. */
 export function isHostedEmbedUrl(value: string): boolean {
-  if (!value) return false;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'https:') return false;
-    if (url.pathname.toLowerCase().endsWith('.m3u8')) return false;
-    if (url.search.toLowerCase().includes('.m3u8')) return false;
-    return Boolean(url.hostname);
-  } catch {
-    return false;
-  }
+  return isAllowedPpvEmbedUrl(value);
 }
 
 export function classifyPpvCategory(title: string, id = ''): PpvCategory {
@@ -181,21 +174,106 @@ export function mergePpvEmbeds(embeds: PpvEmbed[]): PpvEmbed[] {
   return next.sort((left, right) => sourceRank(left.source) - sourceRank(right.source));
 }
 
-async function fetchJson(url: string, request: FetchLike): Promise<unknown> {
-  const response = await request(url, { headers: { Accept: 'application/json' } });
-  if (!response.ok) throw new Error(`Request failed (${response.status})`);
-  return response.json();
+/*
+ * Bounded so one hung provider cannot pin the PPV UI. Mobile networks are slow,
+ * but a hosted-embed lookup that has not answered within this window is not
+ * going to, and the user still has backup providers to try.
+ */
+export const PPV_REQUEST_TIMEOUT_MS = 8000;
+export const PPV_CATALOG_TIMEOUT_MS = 10000;
+
+export class PpvTimeoutError extends Error {
+  constructor(url: string) {
+    super(`PPV request timed out: ${url}`);
+    this.name = 'PpvTimeoutError';
+  }
+}
+
+/*
+ * Aborts the in-flight request and still settles even if the caller's fetch
+ * implementation ignores the abort signal, so a request can never leave the UI
+ * loading forever.
+ */
+async function fetchJson(url: string, request: FetchLike, timeoutMs = PPV_REQUEST_TIMEOUT_MS): Promise<unknown> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new PpvTimeoutError(url));
+    }, timeoutMs);
+  });
+
+  try {
+    const response = await Promise.race([
+      request(url, { headers: { Accept: 'application/json' }, signal: controller.signal }),
+      deadline,
+    ]);
+    if (!response.ok) throw new Error(`Request failed (${response.status})`);
+    return await Promise.race([response.json(), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function asMatchList(value: unknown): StreamedMatch[] {
   return Array.isArray(value) ? value : [];
 }
 
+/* Prefer a present, richer value over a blank or thinner duplicate. */
+function richerValue(base: unknown, next: unknown): unknown {
+  const left = asString(base);
+  const right = asString(next);
+  if (!left) return right ? next : base;
+  if (!right) return base;
+  return right.length > left.length ? next : base;
+}
+
+function mergeSourceRefs(
+  base: StreamedMatch['sources'],
+  next: StreamedMatch['sources'],
+): StreamedMatch['sources'] {
+  const seen = new Set<string>();
+  const merged: { source?: unknown; id?: unknown }[] = [];
+  for (const row of [...(base ?? []), ...(next ?? [])]) {
+    const source = asString(row?.source);
+    const id = asString(row?.id);
+    if (!source || !id) continue;
+    const key = `${source}|${id}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(row);
+  }
+  return merged;
+}
+
+function hasTeamNames(match: StreamedMatch): boolean {
+  return Boolean(asString(match.teams?.home?.name) || asString(match.teams?.away?.name));
+}
+
+/*
+ * fight/live/today can each carry the same event at a different level of
+ * detail. Merge field by field so a sparse later row cannot erase richer
+ * metadata that an earlier row already supplied.
+ */
+export function mergeStreamedMatches(base: StreamedMatch, next: StreamedMatch): StreamedMatch {
+  return {
+    id: asString(base.id) ? base.id : next.id,
+    title: richerValue(base.title, next.title),
+    category: asString(base.category) ? base.category : next.category,
+    date: asNumber(base.date) != null ? base.date : next.date,
+    poster: asString(base.poster) ? base.poster : next.poster,
+    popular: base.popular ?? next.popular,
+    teams: hasTeamNames(base) ? base.teams : (next.teams ?? base.teams),
+    sources: mergeSourceRefs(base.sources, next.sources),
+  };
+}
+
 export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCatalog> {
   const [fight, live, today] = await Promise.all([
-    fetchJson(`${STREAMED_API}/api/matches/fight`, request),
-    fetchJson(`${STREAMED_API}/api/matches/live`, request).catch(() => []),
-    fetchJson(`${STREAMED_API}/api/matches/all-today`, request).catch(() => []),
+    fetchJson(`${STREAMED_API}/api/matches/fight`, request, PPV_CATALOG_TIMEOUT_MS),
+    fetchJson(`${STREAMED_API}/api/matches/live`, request, PPV_CATALOG_TIMEOUT_MS).catch(() => []),
+    fetchJson(`${STREAMED_API}/api/matches/all-today`, request, PPV_CATALOG_TIMEOUT_MS).catch(() => []),
   ]);
 
   const liveMatches = asMatchList(live);
@@ -212,7 +290,8 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
       classifyPpvCategory(title, id) !== 'other' ||
       /\bppv\b|fight/i.test(`${id} ${title}`);
     if (!combat) continue;
-    merged.set(id, match);
+    const existing = merged.get(id);
+    merged.set(id, existing ? mergeStreamedMatches(existing, match) : match);
   }
 
   const events = [...merged.values()]
@@ -250,19 +329,30 @@ function mapStreamedStreams(rows: unknown, fallbackSource?: string): PpvEmbed[] 
   });
 }
 
+/*
+ * Each source is bounded and settled independently: one hung or failing source
+ * must never discard the sources that did answer.
+ */
 async function loadStreamedEmbeds(event: PpvEvent, request: FetchLike): Promise<PpvEmbed[]> {
-  const embeds: PpvEmbed[] = [];
-  await Promise.all(
-    event.sourceRefs.map(async (ref) => {
-      try {
-        const rows = await fetchJson(`${STREAMED_API}/api/stream/${encodeURIComponent(ref.source)}/${encodeURIComponent(ref.id)}`, request);
-        embeds.push(...mapStreamedStreams(rows, ref.source));
-      } catch {
-        /* source-specific miss is fine */
-      }
+  const seenRefs = new Set<string>();
+  const refs = event.sourceRefs.filter((ref) => {
+    const key = `${ref.source}|${ref.id}`.toLowerCase();
+    if (seenRefs.has(key)) return false;
+    seenRefs.add(key);
+    return true;
+  });
+
+  const results = await Promise.allSettled(
+    refs.map(async (ref) => {
+      const rows = await fetchJson(
+        `${STREAMED_API}/api/stream/${encodeURIComponent(ref.source)}/${encodeURIComponent(ref.id)}`,
+        request,
+      );
+      return mapStreamedStreams(rows, ref.source);
     }),
   );
-  return embeds;
+
+  return results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
 }
 
 async function loadSportSrcEmbeds(event: PpvEvent, request: FetchLike): Promise<PpvEmbed[]> {
@@ -292,60 +382,22 @@ async function loadSportSrcEmbeds(event: PpvEvent, request: FetchLike): Promise<
   }
 }
 
-function titlesOverlap(left: string, right: string): boolean {
-  const normalize = (value: string) =>
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  const a = normalize(left);
-  const b = normalize(right);
-  if (!a || !b) return false;
-  if (a.includes(b) || b.includes(a)) return true;
-  const tokens = a.split(' ').filter((token) => token.length > 3);
-  const hits = tokens.filter((token) => b.includes(token));
-  return hits.length >= 2;
-}
-
-async function loadDaddyLiveEmbeds(event: PpvEvent, request: FetchLike): Promise<PpvEmbed[]> {
-  try {
-    const payload = (await fetchJson(DADDYLIVE_EVENTS_API, request)) as {
-      categories?: Record<string, { event?: string; channels?: { channel_name?: string; url?: string }[] }[]>;
-    };
-    const categories = payload.categories ?? {};
-    const embeds: PpvEmbed[] = [];
-    for (const rows of Object.values(categories)) {
-      if (!Array.isArray(rows)) continue;
-      for (const row of rows) {
-        const title = asString(row.event);
-        if (!titlesOverlap(event.title, title)) continue;
-        for (const channel of row.channels ?? []) {
-          const url = asString(channel.url);
-          if (!isHostedEmbedUrl(url)) continue;
-          embeds.push({
-            provider: 'daddylive',
-            id: asString(channel.channel_name) || undefined,
-            source: 'daddylive',
-            url,
-          });
-        }
-      }
-    }
-    return embeds;
-  } catch {
-    return [];
-  }
-}
-
+/*
+ * Streamed and SportSRC are the only embed discovery paths. They run together
+ * and are individually bounded, so a slow Streamed lookup cannot stop SportSRC
+ * from being attempted, and an empty result costs one provider window rather
+ * than two. Every call settles into success, empty, timeout or failure.
+ *
+ * DaddyLive is not currently supported because no approved embed origin is
+ * configured, so it is not requested at all.
+ */
 export async function loadPpvEmbeds(event: PpvEvent, request: FetchLike = fetch): Promise<PpvEmbed[]> {
-  const streamed = await loadStreamedEmbeds(event, request);
-  const sportsrc = await loadSportSrcEmbeds(event, request);
-  let embeds = mergePpvEmbeds([...streamed, ...sportsrc]);
-  if (!embeds.length) {
-    embeds = mergePpvEmbeds(await loadDaddyLiveEmbeds(event, request));
-  }
-  return embeds;
+  const [streamed, sportsrc] = await Promise.all([
+    loadStreamedEmbeds(event, request).catch(() => [] as PpvEmbed[]),
+    loadSportSrcEmbeds(event, request).catch(() => [] as PpvEmbed[]),
+  ]);
+
+  return mergePpvEmbeds([...streamed, ...sportsrc]);
 }
 
 export function formatPpvStart(startsAt: string): string {

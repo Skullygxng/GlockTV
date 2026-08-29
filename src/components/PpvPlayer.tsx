@@ -1,7 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
 import type { PpvEmbed, PpvEvent } from '../lib/ppv';
-import { formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
+import { discoverPpvEmbeds, formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
+import {
+  PPV_IFRAME_PROBE_MS,
+  diagnosticHostname,
+  emptyEventDiagnostics,
+  emptyIframeDiagnostics,
+  isPpvDebugEnabled,
+  type PpvCatalogDiagnostics,
+  type PpvEventDiagnostics,
+  type PpvIframeDiagnostics,
+} from '../lib/ppvDiagnostics';
+import { PpvDiagnosticsPanel } from './PpvDiagnosticsPanel';
 import {
   PPV_IFRAME_ALLOW,
   PPV_IFRAME_REFERRER_POLICY,
@@ -10,14 +21,44 @@ import {
 
 interface PpvPlayerProps {
   event: PpvEvent;
+  /* Legacy injection point kept for existing callers and tests. */
   loadEmbeds?: typeof loadPpvEmbeds;
+  /* Diagnostic-capable discovery; used by default in production. */
+  discoverEmbeds?: typeof discoverPpvEmbeds;
+  debug?: boolean;
+  /* Rendered alongside playback diagnostics so one panel covers the chain. */
+  catalogDiagnostics?: PpvCatalogDiagnostics | null;
 }
 
-export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps) {
+/* Safe secondary line for normal users - never provider internals. */
+const UNAVAILABLE_HINT = 'No compatible hosted player was returned.';
+
+export function PpvPlayer({
+  event,
+  loadEmbeds,
+  discoverEmbeds,
+  debug,
+  catalogDiagnostics,
+}: PpvPlayerProps) {
   const [embeds, setEmbeds] = useState<PpvEmbed[]>(event.embeds);
   const [loading, setLoading] = useState(!event.embeds.length);
   const [error, setError] = useState('');
   const [index, setIndex] = useState(0);
+  const [diagnostics, setDiagnostics] = useState<PpvEventDiagnostics | null>(null);
+  const [iframeTrace, setIframeTrace] = useState<PpvIframeDiagnostics>(emptyIframeDiagnostics);
+
+  const debugEnabled = debug ?? isPpvDebugEnabled();
+
+  const discover = useMemo<typeof discoverPpvEmbeds>(() => {
+    if (discoverEmbeds) return discoverEmbeds;
+    if (loadEmbeds) {
+      return async (target, request) => ({
+        embeds: await loadEmbeds(target, request),
+        diagnostics: emptyEventDiagnostics(target.providerEventId),
+      });
+    }
+    return discoverPpvEmbeds;
+  }, [discoverEmbeds, loadEmbeds]);
 
   /*
    * Every embed request carries a generation. Initial loads and Reload share
@@ -34,24 +75,25 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
       const ticket = ++generation.current;
       setLoading(true);
       setError('');
-      void loadEmbeds(target)
+      void discover(target)
         .then((result) => {
           if (generation.current !== ticket) return;
-          setEmbeds(result);
+          setEmbeds(result.embeds);
+          setDiagnostics(result.diagnostics);
           setIndex(0);
-          if (!result.length) setError('No hosted embed is available for this event yet.');
+          if (!result.embeds.length) setError(UNAVAILABLE_HINT);
         })
         .catch((reason) => {
           if (generation.current !== ticket) return;
           setEmbeds([]);
-          setError(reason instanceof Error ? reason.message : 'PPV embed could not load.');
+          setError(reason instanceof Error ? UNAVAILABLE_HINT : UNAVAILABLE_HINT);
         })
         .finally(() => {
           if (generation.current !== ticket) return;
           setLoading(false);
         });
     },
-    [loadEmbeds],
+    [discover],
   );
 
   useEffect(() => {
@@ -60,6 +102,8 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
     // shown underneath the new event's metadata.
     setIndex(0);
     setError('');
+    setDiagnostics(null);
+    setIframeTrace(emptyIframeDiagnostics());
     if (target.embeds.length) {
       generation.current += 1;
       setEmbeds(target.embeds);
@@ -71,6 +115,36 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
   }, [eventKey, runLoad]);
 
   const embed = embeds[Math.min(index, Math.max(0, embeds.length - 1))];
+  const embedUrl = embed?.url ?? '';
+
+  /*
+   * Records that the frame mounted and, later, whether it is still mounted.
+   * None of this proves video is playing - only that a document loaded.
+   */
+  useEffect(() => {
+    if (!embedUrl) {
+      setIframeTrace(emptyIframeDiagnostics());
+      return;
+    }
+    let unmounted = false;
+    setIframeTrace({
+      ...emptyIframeDiagnostics(),
+      mounted: true,
+      hostname: diagnosticHostname(embedUrl),
+      mountedAt: Date.now(),
+    });
+    const probe = setTimeout(() => {
+      setIframeTrace((current) => ({ ...current, presentAfterProbe: !unmounted }));
+    }, PPV_IFRAME_PROBE_MS);
+    return () => {
+      unmounted = true;
+      clearTimeout(probe);
+      setIframeTrace((current) =>
+        current.presentAfterProbe === null ? { ...current, unmountedBeforeProbe: true } : current,
+      );
+    };
+  }, [embedUrl]);
+
   const sourceLabel = useMemo(() => {
     if (!embed) return '';
     return [embed.provider, embed.source, embed.hd ? 'HD' : '', embed.language].filter(Boolean).join(' · ');
@@ -96,6 +170,13 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
             allow={PPV_IFRAME_ALLOW}
             allowFullScreen
             referrerPolicy={PPV_IFRAME_REFERRER_POLICY}
+            onLoad={() =>
+              setIframeTrace((current) => ({
+                ...current,
+                iframeDocumentLoaded: true,
+                loadEventAt: Date.now(),
+              }))
+            }
           />
         ) : (
           <div className="live-player__idle-message">
@@ -131,6 +212,16 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
           </button>
         </div>
       </div>
+      {debugEnabled && (
+        <PpvDiagnosticsPanel
+          catalog={catalogDiagnostics ?? null}
+          event={diagnostics ?? emptyEventDiagnostics(event.providerEventId)}
+          iframe={iframeTrace}
+          eventId={event.providerEventId}
+          sourceIndex={embeds.length ? index + 1 : 0}
+          sourceCount={embeds.length}
+        />
+      )}
     </div>
   );
 }

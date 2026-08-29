@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Search, Swords, WifiOff } from 'lucide-react';
 import {
+  PpvCatalogError,
   derivePpvStatus,
   formatPpvCountdown,
   formatPpvStart,
@@ -11,6 +12,12 @@ import {
   type PpvStatus,
 } from '../lib/ppv';
 import { PpvPlayer } from './PpvPlayer';
+import { PpvDiagnosticsPanel } from './PpvDiagnosticsPanel';
+import {
+  isPpvDebugEnabled,
+  sanitizeDiagnosticString,
+  type PpvCatalogDiagnostics,
+} from '../lib/ppvDiagnostics';
 import '../ppv.css';
 
 interface PpvPanelProps {
@@ -21,6 +28,8 @@ interface PpvPanelProps {
    * in here rather than in Live TV's channel state.
    */
   onWatchingChange?: (watching: boolean) => void;
+  /* Off by default; enabled per-session with ?ppvdebug=1. */
+  debug?: boolean;
 }
 
 /* Countdown ticks once a minute; the catalog itself refreshes far less often. */
@@ -37,6 +46,16 @@ const FILTERS: Array<{ id: 'all' | 'live' | 'upcoming' | PpvCategory; label: str
   { id: 'wrestling', label: 'Wrestling' },
 ];
 
+/*
+ * Request errors name the URL they failed on, and that message is rendered to
+ * the user, so anything URL-shaped is replaced with the generic line.
+ */
+function catalogErrorMessage(reason: unknown): string {
+  const fallback = 'PPV events could not load.';
+  if (!(reason instanceof Error) || !reason.message) return fallback;
+  return sanitizeDiagnosticString(reason.message) === reason.message ? reason.message : fallback;
+}
+
 /* Let an upcoming card flip to live on the clock, but never downgrade a status
    the provider itself reported as live. */
 function freshStatus(event: PpvEvent, now: number): PpvStatus {
@@ -46,7 +65,7 @@ function freshStatus(event: PpvEvent, now: number): PpvStatus {
   return derivePpvStatus(startsAt, now);
 }
 
-export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: PpvPanelProps) {
+export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug }: PpvPanelProps) {
   const [catalog, setCatalog] = useState<PpvCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -54,6 +73,9 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: Ppv
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('all');
   const [selectedId, setSelectedId] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  const [catalogDiagnostics, setCatalogDiagnostics] = useState<PpvCatalogDiagnostics | null>(null);
+
+  const debugEnabled = debug ?? isPpvDebugEnabled();
 
   const inFlight = useRef(false);
 
@@ -67,6 +89,7 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: Ppv
       void loadCatalog()
         .then((result) => {
           setCatalog(result);
+          setCatalogDiagnostics(result.diagnostics ?? null);
           setError('');
           setSelectedId((current) =>
             result.events.some((event) => event.providerEventId === current) ? current : '',
@@ -74,8 +97,10 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: Ppv
         })
         .catch((reason) => {
           // Keep the last good catalog on screen; a failed refresh must not
-          // blank a list the user is reading.
-          setError(reason instanceof Error ? reason.message : 'PPV events could not load.');
+          // blank a list the user is reading. The diagnostics ride out on the
+          // typed error, so a catalog that never loaded can still say why.
+          setCatalogDiagnostics(reason instanceof PpvCatalogError ? reason.diagnostics : null);
+          setError(catalogErrorMessage(reason));
         })
         .finally(() => {
           inFlight.current = false;
@@ -150,7 +175,11 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: Ppv
     <div className="live-tv-layout" aria-label="PPV events">
       <section className="live-tv-content">
         {selected ? (
-          <PpvPlayer event={{ ...selected, status: freshStatus(selected, now) }} />
+          <PpvPlayer
+            event={{ ...selected, status: freshStatus(selected, now) }}
+            debug={debugEnabled}
+            catalogDiagnostics={catalogDiagnostics}
+          />
         ) : (
           <div className="live-player live-player--idle" aria-label="No PPV event selected">
             <div className="live-player__video live-player__video--idle">
@@ -162,6 +191,7 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: Ppv
             </div>
           </div>
         )}
+        {debugEnabled && !selected && <PpvDiagnosticsPanel catalog={catalogDiagnostics} />}
         <div className="live-tv-disclaimer">
           PPV listings come from Streamed.pk. Embeds are hosted player URLs from Streamed and SportSRC.
           Availability changes without notice. Existing Live TV channels are unchanged.

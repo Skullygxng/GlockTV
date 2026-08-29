@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PPV_REQUEST_TIMEOUT_MS,
+  PpvCatalogError,
   classifyPpvCategory,
   derivePpvStatus,
   isHostedEmbedUrl,
@@ -113,6 +114,17 @@ describe('PPV playback URL safety', () => {
 });
 
 describe('PPV catalog fetch', () => {
+  /*
+   * The fixture dates are fixed points, and status derivation uses the real
+   * clock, so this pins system time. Without it the test passes only until the
+   * fixtures age past the live window and then fails permanently.
+   */
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(now));
+  });
+  afterEach(() => vi.useRealTimers());
+
   it('loads fight events from Streamed-shaped JSON and ignores non-combat today rows', async () => {
     const request = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -337,10 +349,17 @@ describe('PPV request timeouts and failover', () => {
   });
 
   it('fails the catalog in finite time rather than loading forever', async () => {
-    const pending = loadPpvCatalog(vi.fn(never) as unknown as typeof fetch);
-    const assertion = expect(pending).rejects.toThrow(/timed out/i);
+    const settled = loadPpvCatalog(vi.fn(never) as unknown as typeof fetch).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
     await vi.advanceTimersByTimeAsync(15_000);
-    await assertion;
+    const reason = await settled;
+    // The rejection carries the timeout classification without the URL that
+    // PpvTimeoutError names in its own message.
+    expect(reason).toBeInstanceOf(PpvCatalogError);
+    expect((reason as PpvCatalogError).diagnostics.fight.status).toBe('timeout');
+    expect((reason as Error).message).not.toContain('://');
   });
 });
 

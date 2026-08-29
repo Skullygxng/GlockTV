@@ -72,30 +72,63 @@ function currentOriginHostname(): string {
   return location?.hostname?.toLowerCase() ?? '';
 }
 
-export function isAllowedPpvEmbedUrl(value: string): boolean {
-  if (!value) return false;
+export type PpvEmbedDecision =
+  | 'allowed'
+  | 'empty'
+  | 'malformed'
+  | 'non_https'
+  | 'credentials'
+  | 'local_or_private'
+  | 'own_origin'
+  | 'media_playlist'
+  | 'host_not_allowlisted';
+
+export interface PpvEmbedInspection {
+  allowed: boolean;
+  reason: PpvEmbedDecision;
+  /*
+   * Hostname only, and '' when the URL could not be parsed. The path and query
+   * are deliberately never retained: they can carry tokens or signatures.
+   */
+  hostname: string;
+}
+
+/*
+ * Same rules as before, but reports why a URL was refused so runtime
+ * diagnostics can distinguish "provider returned nothing" from "provider
+ * returned embeds we refuse to frame". The allowlist itself is unchanged.
+ */
+export function inspectPpvEmbedUrl(value: string): PpvEmbedInspection {
+  if (!value) return { allowed: false, reason: 'empty', hostname: '' };
 
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    return false;
+    return { allowed: false, reason: 'malformed', hostname: '' };
   }
 
-  // https only, which also rejects javascript:, data:, blob: and http:.
-  if (url.protocol !== 'https:') return false;
-  if (url.username || url.password) return false;
-
   const host = url.hostname.toLowerCase();
-  if (!host) return false;
-  if (isLocalHostname(host)) return false;
+
+  // https only, which also rejects javascript:, data:, blob: and http:.
+  if (url.protocol !== 'https:') return { allowed: false, reason: 'non_https', hostname: host };
+  if (url.username || url.password) return { allowed: false, reason: 'credentials', hostname: host };
+  if (!host) return { allowed: false, reason: 'malformed', hostname: '' };
+  if (isLocalHostname(host)) return { allowed: false, reason: 'local_or_private', hostname: host };
 
   // Never frame GlockTV itself: same-origin plus allow-same-origin would be a
   // real sandbox escape.
   const ownHost = currentOriginHostname();
-  if (ownHost && host === ownHost) return false;
+  if (ownHost && host === ownHost) return { allowed: false, reason: 'own_origin', hostname: host };
 
-  if (isMediaPlaylistUrl(url)) return false;
+  if (isMediaPlaylistUrl(url)) return { allowed: false, reason: 'media_playlist', hostname: host };
 
-  return PPV_EMBED_HOSTS.includes(host);
+  if (!PPV_EMBED_HOSTS.includes(host)) {
+    return { allowed: false, reason: 'host_not_allowlisted', hostname: host };
+  }
+  return { allowed: true, reason: 'allowed', hostname: host };
+}
+
+export function isAllowedPpvEmbedUrl(value: string): boolean {
+  return inspectPpvEmbedUrl(value).allowed;
 }

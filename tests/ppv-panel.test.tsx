@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveTvRoute } from '../src/components/LiveTvRoute';
 import { PpvPanel } from '../src/components/PpvPanel';
 import { PpvPlayer } from '../src/components/PpvPlayer';
-import { type PpvCatalog, type PpvEvent } from '../src/lib/ppv';
+import { PpvCatalogError, type PpvCatalog, type PpvEvent } from '../src/lib/ppv';
+import type { PpvCatalogDiagnostics } from '../src/lib/ppvDiagnostics';
 import { PPV_IFRAME_REFERRER_POLICY, PPV_IFRAME_SANDBOX } from '../src/lib/ppvEmbedPolicy';
 import type { LiveTvCatalog } from '../src/lib/iptvOrg';
 
@@ -80,7 +81,7 @@ describe('Live tab Channels | PPV', () => {
 });
 
 describe('PPV panel', () => {
-  it('renders catalog events and opens a hosted embed', async () => {
+  it('renders catalog events and mounts a hosted embed iframe', async () => {
     render(<PpvPanel loadCatalog={async () => catalog} />);
 
     expect(
@@ -458,5 +459,286 @@ describe('PPV catalog freshness', () => {
     await act(async () => {
       resolveSecond?.(catalog);
     });
+  });
+});
+
+
+describe('PPV iframe runtime trace and debug mode', () => {
+  const traced: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'traced-event',
+    title: 'Traced Event',
+    category: 'mma',
+    startsAt: '2026-08-29T22:00:00.000Z',
+    status: 'live',
+    sourceRefs: [],
+    embeds: [{ provider: 'streamed', source: 'delta', url: 'https://embed.st/embed/delta/traced/1?token=SECRET' }],
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  function panel(): HTMLElement {
+    return screen.getByLabelText('PPV runtime diagnostics');
+  }
+
+  it('is hidden unless debug mode is on', () => {
+    render(<PpvPlayer event={traced} debug={false} />);
+    expect(screen.queryByLabelText('PPV runtime diagnostics')).not.toBeInTheDocument();
+  });
+
+  it('records the iframe hostname only, never the full URL', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const text = panel().textContent ?? '';
+    expect(text).toContain('embed.st');
+    expect(text).not.toContain('https://');
+    expect(text).not.toContain('token');
+    expect(text).not.toContain('SECRET');
+  });
+
+  it('does not claim playback before a document load event', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/document load event\s*no/i);
+    // The wording must never assert that video is playing.
+    expect(text).not.toMatch(/playback_success|playback works|playing/i);
+    expect(text).toMatch(/not proof of playback/i);
+  });
+
+  it('records the document load event when the frame fires onLoad', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    fireEvent.load(frame);
+    expect(panel().textContent ?? '').toMatch(/document load event\s*yes/i);
+  });
+
+  it('clears the previous iframe trace when the event changes', () => {
+    const other: PpvEvent = {
+      ...traced,
+      providerEventId: 'other-event',
+      title: 'Other Event',
+      embeds: [{ provider: 'sportsrc', source: 'echo', url: 'https://embed.streamapi.cc/sport/other/' }],
+    };
+
+    const view = render(<PpvPlayer event={traced} debug />);
+    fireEvent.load(document.querySelector('iframe') as HTMLIFrameElement);
+    expect(panel().textContent ?? '').toMatch(/document load event\s*yes/i);
+
+    view.rerender(<PpvPlayer event={other} debug />);
+    const text = panel().textContent ?? '';
+    expect(text).toContain('embed.streamapi.cc');
+    expect(text).not.toContain('embed.st/');
+    expect(text).toMatch(/document load event\s*no/i);
+  });
+
+  it('copies a sanitized payload with no complete URLs', () => {
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    try {
+      render(<PpvPlayer event={traced} debug />);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const payload = writeText.mock.calls[0][0];
+      expect(payload).not.toContain('https://');
+      expect(payload).not.toContain('http://');
+      expect(payload).not.toContain('SECRET');
+      expect(payload).not.toContain('token=');
+      expect(payload).toContain('embed.st');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+
+describe('PPV catalog diagnostics in debug mode', () => {
+  function endpoint(status: PpvCatalogDiagnostics['fight']['status'], rowCount = 0, httpStatus: number | null = null) {
+    return { status, httpStatus, rowCount };
+  }
+
+  const loadedDiagnostics: PpvCatalogDiagnostics = {
+    stage: 'catalog',
+    startedAt: 0,
+    completedAt: 1,
+    fight: endpoint('success', 2),
+    live: endpoint('success', 3),
+    today: endpoint('timeout'),
+    normalizedEvents: 2,
+    overallStatus: 'success',
+  };
+
+  const failedDiagnostics: PpvCatalogDiagnostics = {
+    stage: 'catalog',
+    startedAt: 0,
+    completedAt: 1,
+    fight: endpoint('network_or_cors_error'),
+    live: endpoint('success', 3),
+    today: endpoint('timeout'),
+    normalizedEvents: 0,
+    overallStatus: 'network_or_cors_error',
+  };
+
+  const emptyDiagnostics: PpvCatalogDiagnostics = {
+    ...loadedDiagnostics,
+    fight: endpoint('empty_success'),
+    live: endpoint('empty_success'),
+    today: endpoint('empty_success'),
+    normalizedEvents: 0,
+    overallStatus: 'empty_success',
+  };
+
+  function panel(): HTMLElement {
+    return screen.getByLabelText('PPV runtime diagnostics');
+  }
+
+  it('stays hidden without debug mode even when the catalog fails', async () => {
+    render(
+      <PpvPanel loadCatalog={(() => Promise.reject(new PpvCatalogError(failedDiagnostics))) as never} />,
+    );
+    expect(await screen.findByText('PPV could not load')).toBeInTheDocument();
+    expect(screen.queryByLabelText('PPV runtime diagnostics')).not.toBeInTheDocument();
+  });
+
+  it('shows catalog diagnostics when the catalog fails before any event exists', async () => {
+    render(
+      <PpvPanel debug loadCatalog={(() => Promise.reject(new PpvCatalogError(failedDiagnostics))) as never} />,
+    );
+
+    await screen.findByText('PPV could not load');
+    // No event can be selected here, so the player - and its panel - never mount.
+    expect(screen.queryByLabelText('PPV player')).not.toBeInTheDocument();
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/fight status\s*network_or_cors_error/i);
+    expect(text).toMatch(/live status\s*success/i);
+    expect(text).toMatch(/today status\s*timeout/i);
+  });
+
+  it('keeps URLs out of the failure it renders', async () => {
+    render(
+      <PpvPanel debug loadCatalog={(() => Promise.reject(new PpvCatalogError(failedDiagnostics))) as never} />,
+    );
+    await screen.findByText('PPV could not load');
+    const content = document.body.textContent ?? '';
+    expect(content).not.toContain('https://');
+    expect(content).not.toContain('streamed.pk');
+    expect(content).not.toContain('/api/matches');
+  });
+
+  it('replaces a URL-bearing error message with the generic line', async () => {
+    render(
+      <PpvPanel
+        debug
+        loadCatalog={(() =>
+          Promise.reject(new Error('PPV request timed out: https://streamed.pk/api/matches/fight'))) as never}
+      />,
+    );
+    await screen.findByText('PPV could not load');
+    expect(document.body.textContent ?? '').not.toContain('https://');
+    expect(screen.getByText('PPV events could not load.')).toBeInTheDocument();
+  });
+
+  it('shows catalog diagnostics when the catalog is empty', async () => {
+    render(
+      <PpvPanel
+        debug
+        loadCatalog={(() =>
+          Promise.resolve({ ...catalog, events: [], diagnostics: emptyDiagnostics })) as never}
+      />,
+    );
+    await screen.findByText('No PPV events found');
+    expect(panel().textContent ?? '').toMatch(/overall\s*empty_success/i);
+  });
+
+  it('shows catalog diagnostics when the catalog loaded but nothing is selected', async () => {
+    render(
+      <PpvPanel debug loadCatalog={(() => Promise.resolve({ ...catalog, diagnostics: loadedDiagnostics })) as never} />,
+    );
+    await screen.findByRole('button', { name: /Watch UFC Fight Night 286/ });
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/overall\s*success/i);
+    expect(text).toMatch(/normalized events\s*2/i);
+    // Nothing is selected yet, so the playback sections have nothing to report.
+    expect(text).not.toMatch(/document load event/i);
+  });
+
+  it('shows catalog, provider and iframe diagnostics once an event is selected', async () => {
+    render(
+      <PpvPanel debug loadCatalog={(() => Promise.resolve({ ...catalog, diagnostics: loadedDiagnostics })) as never} />,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /Watch UFC Fight Night 286/ }));
+
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/fight status\s*success/i);
+    expect(text).toMatch(/final state/i);
+    expect(text).toMatch(/document load event/i);
+    expect(text).toContain('embed.st');
+    expect(document.querySelectorAll('.ppv-diag')).toHaveLength(1);
+  });
+});
+
+describe('PPV diagnostics copy states', () => {
+  const catalogDiagnostics: PpvCatalogDiagnostics = {
+    stage: 'catalog',
+    startedAt: 0,
+    completedAt: 1,
+    fight: { status: 'http_error', httpStatus: 503, rowCount: 0 },
+    live: { status: 'empty_success', httpStatus: null, rowCount: 0 },
+    today: { status: 'empty_success', httpStatus: null, rowCount: 0 },
+    normalizedEvents: 0,
+    overallStatus: 'http_error',
+  };
+
+  function renderCatalogOnly() {
+    return render(
+      <PpvPanel debug loadCatalog={(() => Promise.reject(new PpvCatalogError(catalogDiagnostics))) as never} />,
+    );
+  }
+
+  function copyButton(): HTMLElement {
+    return screen.getByRole('button', { name: 'Copy diagnostics' });
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('copies a catalog-only payload and reports success once the write resolves', async () => {
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    renderCatalogOnly();
+    await screen.findByText('PPV could not load');
+    fireEvent.click(copyButton());
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const payload = writeText.mock.calls[0][0];
+    expect(payload).toContain('http_error');
+    expect(payload).toContain('503');
+    expect(payload).not.toContain('https://');
+    expect(payload).not.toContain('http://');
+    await waitFor(() => expect(copyButton().textContent).toContain('Copied'));
+  });
+
+  it('reports a failure when the clipboard write rejects, and keeps the text selectable', async () => {
+    const writeText = vi.fn((_text: string) => Promise.reject(new Error('denied')));
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    renderCatalogOnly();
+    await screen.findByText('PPV could not load');
+    fireEvent.click(copyButton());
+
+    await waitFor(() => expect(copyButton().textContent).toContain('Copy failed'));
+    expect(copyButton().textContent).not.toContain('Copied');
+    const fallback = screen.getByLabelText('Diagnostics text') as HTMLTextAreaElement;
+    expect(fallback.value).toContain('http_error');
+    expect(fallback.value).not.toContain('https://');
+  });
+
+  it('reports a failure when the clipboard API is unavailable', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: undefined });
+
+    renderCatalogOnly();
+    await screen.findByText('PPV could not load');
+    fireEvent.click(copyButton());
+
+    await waitFor(() => expect(copyButton().textContent).toContain('Copy failed'));
+    expect(screen.getByLabelText('Diagnostics text')).toBeInTheDocument();
   });
 });

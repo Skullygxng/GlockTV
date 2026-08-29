@@ -11,6 +11,37 @@
 
 export type PpvDiagnosticStage = 'catalog' | 'streamed' | 'sportsrc' | 'policy' | 'iframe';
 
+export type PpvCatalogFeed = 'fight' | 'live' | 'today';
+
+/* Deterministic feed order for provenance reporting. */
+export const PPV_CATALOG_FEEDS: readonly PpvCatalogFeed[] = ['fight', 'live', 'today'];
+
+/*
+ * Which catalog feeds actually contributed a normalized event, and the
+ * upstream category labels they carried. Recorded because the diagnostics so
+ * far reported only per-feed row counts, which cannot say which feed
+ * introduced any particular event - the question the catalog defect turns on.
+ *
+ * Labels only: no titles, no source refs, no response bodies, no URLs.
+ */
+export interface PpvEventCatalogProvenance {
+  feeds: PpvCatalogFeed[];
+  upstreamCategories: string[];
+}
+
+/*
+ * Upstream categories are short provider labels. Anything that is not a plain
+ * short label is dropped rather than rendered, so an unexpected response can
+ * never push arbitrary text into the panel or the copy payload.
+ */
+const CATEGORY_LABEL = /^[a-z0-9][a-z0-9 _-]{0,31}$/;
+
+export function sanitizeUpstreamCategory(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const label = value.trim().toLowerCase();
+  return CATEGORY_LABEL.test(label) ? label : '';
+}
+
 /*
  * A backup provider we never had a native identity for was not requested at
  * all. That is not a provider failure and must never be reported as one.

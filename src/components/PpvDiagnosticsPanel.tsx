@@ -5,6 +5,7 @@ import {
   serializePpvDiagnostics,
   type PpvCatalogDiagnostics,
   type PpvCatalogEndpointDiagnostics,
+  type PpvEventCatalogProvenance,
   type PpvEventDiagnostics,
   type PpvIframeDiagnostics,
 } from '../lib/ppvDiagnostics';
@@ -20,6 +21,7 @@ interface PpvDiagnosticsPanelProps {
   iframe?: PpvIframeDiagnostics | null;
   /* Present only when an event is selected; gates the playback sections. */
   eventId?: string;
+  provenance?: PpvEventCatalogProvenance | null;
   sourceIndex?: number;
   sourceCount?: number;
 }
@@ -57,6 +59,7 @@ export function PpvDiagnosticsPanel({
   event,
   iframe,
   eventId,
+  provenance,
   sourceIndex = 0,
   sourceCount = 0,
 }: PpvDiagnosticsPanelProps) {
@@ -78,6 +81,7 @@ export function PpvDiagnosticsPanel({
   const onCopy = () => {
     const payload = serializePpvDiagnostics({
       catalog: catalog ?? null,
+      catalogProvenance: provenance ?? null,
       event: event ?? null,
       iframe: iframe ?? null,
       sourceIndex,
@@ -137,6 +141,11 @@ export function PpvDiagnosticsPanel({
             <Row label="event" value={eventId ?? 'none'} />
             <Row label="final state" value={event?.finalState ?? 'pending'} />
             <Row label="accepted embeds" value={event?.acceptedEmbedCount ?? 0} />
+            <Row label="catalog feeds" value={(provenance?.feeds ?? []).join(', ') || 'unknown'} />
+            <Row
+              label="upstream categories"
+              value={(provenance?.upstreamCategories ?? []).join(', ') || 'none'}
+            />
           </div>
 
           <div className="ppv-diag__group">

@@ -771,3 +771,55 @@ describe('PPV diagnostics copy states', () => {
     expect(screen.getByLabelText('Diagnostics text')).toBeInTheDocument();
   });
 });
+
+
+describe('PPV catalog provenance in the debug panel', () => {
+  const traced: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'ufc-320',
+    providerRefs: { streamed: { eventId: 'ufc-320' } },
+    catalogProvenance: { feeds: ['fight', 'today'], upstreamCategories: ['fight'] },
+    title: 'UFC 320',
+    category: 'mma',
+    startsAt: '2026-08-29T22:00:00.000Z',
+    status: 'live',
+    sourceRefs: [],
+    embeds: [{ provider: 'streamed', source: 'delta', url: 'https://embed.st/embed/delta/320/1?token=SECRET' }],
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('stays invisible in normal mode', () => {
+    render(<PpvPlayer event={traced} debug={false} />);
+    expect(screen.queryByLabelText('PPV runtime diagnostics')).not.toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/catalog feeds/i);
+  });
+
+  it('shows the contributing feeds and upstream categories for the selected event', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const text = screen.getByLabelText('PPV runtime diagnostics').textContent ?? '';
+    expect(text).toMatch(/catalog feeds\s*fight, today/i);
+    expect(text).toMatch(/upstream categories\s*fight/i);
+  });
+
+  it('reports unknown provenance rather than inventing a feed', () => {
+    render(<PpvPlayer event={{ ...traced, catalogProvenance: undefined }} debug />);
+    const text = screen.getByLabelText('PPV runtime diagnostics').textContent ?? '';
+    expect(text).toMatch(/catalog feeds\s*unknown/i);
+  });
+
+  it('includes provenance in the copied payload, still sanitized', async () => {
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    render(<PpvPlayer event={traced} debug />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+
+    const payload = writeText.mock.calls[0][0];
+    expect(payload).toContain('catalogProvenance');
+    expect(payload).toContain('today');
+    expect(payload).not.toContain('https://');
+    expect(payload).not.toContain('token=');
+    expect(payload).not.toContain('SECRET');
+  });
+});

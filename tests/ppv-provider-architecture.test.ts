@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import playerSource from '../src/components/PpvPlayer.tsx?raw';
+import { serializePpvDiagnostics } from '../src/lib/ppvDiagnostics';
 import {
   discoverPpvEmbeds,
   loadPpvCatalog,
@@ -46,67 +47,119 @@ async function idsFrom(feeds: { fight?: Row[]; live?: Row[]; today?: Row[] }) {
   return catalog.events.map((event) => event.providerEventId);
 }
 
-describe('PPV catalog admission', () => {
+describe('PPV catalog provenance', () => {
   beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
   afterEach(() => vi.useRealTimers());
 
-  it('treats the fight feed as authoritative, even for a title our classifier reads as other', async () => {
-    const ids = await idsFrom({ fight: [row('duel-arena', 'Duel Arena Showcase')] });
-    expect(ids).toEqual(['duel-arena']);
-  });
+  async function provenanceOf(
+    feeds: { fight?: Row[]; live?: Row[]; today?: Row[] },
+    id = 'ufc-320',
+  ) {
+    const catalog = await loadPpvCatalog(catalogFetch(feeds));
+    return catalog.events.find((event) => event.providerEventId === id)?.catalogProvenance;
+  }
 
-  it('excludes a supplemental-only event whose upstream category wrongly says fight', async () => {
-    // The real case: a college football game arrived on all-today as 'fight'.
-    const ids = await idsFrom({
-      today: [row('sjsu-usc', 'San Jose State Spartans at USC Trojans')],
+  it('records a fight-only event as coming from the fight feed', async () => {
+    expect(await provenanceOf({ fight: [row('ufc-320', 'UFC 320')] })).toEqual({
+      feeds: ['fight'],
+      upstreamCategories: ['fight'],
     });
-    expect(ids).toEqual([]);
   });
 
-  it('excludes ordinary sports from the supplemental feeds', async () => {
-    const ids = await idsFrom({
-      live: [row('nfl-game', 'Packers at Bears'), row('nba-game', 'Celtics vs Heat')],
-      today: [row('mlb-game', 'Yankees at Red Sox', 'baseball')],
+  it('records a live-only event as coming from the live feed', async () => {
+    expect(await provenanceOf({ live: [row('ufc-320', 'UFC 320')] })).toEqual({
+      feeds: ['live'],
+      upstreamCategories: ['fight'],
     });
-    expect(ids).toEqual([]);
   });
 
-  it('admits supplemental-only combat events our own classifier identifies', async () => {
-    const ids = await idsFrom({
-      live: [row('true-grit', 'True Grit Wrestling New Grit Rising')],
-      today: [row('ufc-320', 'UFC 320 Smith vs Jones'), row('box-1', 'Boxing Night Main Event')],
+  it('records a today-only event as coming from the today feed', async () => {
+    expect(await provenanceOf({ today: [row('ufc-320', 'UFC 320')] })).toEqual({
+      feeds: ['today'],
+      upstreamCategories: ['fight'],
     });
-    expect(ids.sort()).toEqual(['box-1', 'true-grit', 'ufc-320']);
   });
 
-  it('merges the same event from fight and live into one entry', async () => {
-    const ids = await idsFrom({
+  it('keeps both feeds when the same event arrives on fight and live', async () => {
+    const trail = await provenanceOf({
       fight: [row('ufc-320', 'UFC 320')],
       live: [row('ufc-320', 'UFC 320 Smith vs Jones')],
     });
-    expect(ids).toEqual(['ufc-320']);
+    expect(trail?.feeds).toEqual(['fight', 'live']);
   });
 
-  it('lets a supplemental feed enrich a fight-feed event rather than duplicating it', async () => {
+  it('keeps both feeds when the same event arrives on fight and today', async () => {
+    const trail = await provenanceOf({
+      fight: [row('ufc-320', 'UFC 320')],
+      today: [row('ufc-320', 'UFC 320 Smith vs Jones')],
+    });
+    expect(trail?.feeds).toEqual(['fight', 'today']);
+  });
+
+  it('keeps all three feeds in deterministic order, without duplicates', async () => {
+    const trail = await provenanceOf({
+      fight: [row('ufc-320', 'UFC 320')],
+      live: [row('ufc-320', 'UFC 320')],
+      today: [row('ufc-320', 'UFC 320'), row('ufc-320', 'UFC 320')],
+    });
+    // Merging must not let a later feed erase an earlier contributor.
+    expect(trail?.feeds).toEqual(['fight', 'live', 'today']);
+    expect(trail?.upstreamCategories).toEqual(['fight']);
+  });
+
+  it('collects distinct upstream category labels without repeating them', async () => {
+    const trail = await provenanceOf({
+      fight: [row('ufc-320', 'UFC 320', 'fight')],
+      live: [row('ufc-320', 'UFC 320', 'mma')],
+      today: [row('ufc-320', 'UFC 320', 'mma')],
+    });
+    expect(trail?.upstreamCategories).toEqual(['fight', 'mma']);
+  });
+
+  it('drops an upstream category that is not a plain label', async () => {
+    const trail = await provenanceOf({
+      fight: [row('ufc-320', 'UFC 320 fight card', 'https://evil.example/x?token=SECRET')],
+    });
+    expect(trail?.feeds).toEqual(['fight']);
+    expect(trail?.upstreamCategories).toEqual([]);
+  });
+
+  it('serializes provenance with no URLs or secrets', async () => {
+    const trail = await provenanceOf({
+      fight: [row('ufc-320', 'UFC 320 fight card', 'https://evil.example/x?token=SECRET')],
+    });
+    const payload = serializePpvDiagnostics({ catalogProvenance: trail });
+    expect(payload).not.toContain('https://');
+    expect(payload).not.toContain('token=');
+    expect(payload).not.toContain('SECRET');
+    expect(payload).toContain('fight');
+  });
+
+  it('records provenance without altering which events are admitted', async () => {
+    /*
+     * Synthetic fixtures for the admission rule as it ships today. They
+     * describe the rule, not the provenance of any real production event: the
+     * feed that introduced the observed college-football event is exactly what
+     * these diagnostics exist to find out.
+     */
     const catalog = await loadPpvCatalog(
       catalogFetch({
-        fight: [{ id: 'ufc-320', title: 'UFC 320', date: SOON, sources: [{ source: 'delta', id: 'd1' }] }],
         today: [
-          {
-            id: 'ufc-320',
-            title: 'UFC 320 Smith vs Jones',
-            date: SOON,
-            sources: [{ source: 'admin', id: 'a1' }],
-          },
+          // Admitted today because its upstream category says 'fight'.
+          row('synthetic-mislabelled', 'Synthetic Unrelated Matchup', 'fight'),
+          // Not admitted: no combat signal from any of the three rules.
+          row('synthetic-basketball', 'Synthetic Hoops Matchup', 'basketball'),
         ],
       }),
     );
 
-    expect(catalog.events).toHaveLength(1);
-    const [event] = catalog.events;
-    // Richer title and the extra source ref both survive the merge.
-    expect(event.title).toBe('UFC 320 Smith vs Jones');
-    expect(event.sourceRefs.map((ref) => ref.source)).toEqual(['delta', 'admin']);
+    const ids = catalog.events.map((event) => event.providerEventId);
+    expect(ids).toContain('synthetic-mislabelled');
+    expect(ids).not.toContain('synthetic-basketball');
+    expect(
+      catalog.events.find((event) => event.providerEventId === 'synthetic-mislabelled')
+        ?.catalogProvenance,
+    ).toEqual({ feeds: ['today'], upstreamCategories: ['fight'] });
   });
 
   it('gives every catalog event a Streamed-native identity and no foreign one', async () => {

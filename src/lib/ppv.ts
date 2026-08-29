@@ -2,6 +2,9 @@ import { inspectPpvEmbedUrl, isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
 import {
   emptyEventDiagnostics,
   emptyProviderDiagnostics,
+  sanitizeUpstreamCategory,
+  type PpvCatalogFeed,
+  type PpvEventCatalogProvenance,
   type PpvCatalogDiagnostics,
   type PpvCatalogEndpointDiagnostics,
   type PpvEventDiagnostics,
@@ -38,6 +41,8 @@ export interface PpvEvent {
   /* Streamed's identifier. Retained for catalog keys and existing callers. */
   providerEventId: string;
   providerRefs?: PpvEventProviderRefs;
+  /* Which catalog feeds contributed this event. Sanitized labels only. */
+  catalogProvenance?: PpvEventCatalogProvenance;
   title: string;
   category: PpvCategory;
   promotion?: string;
@@ -151,7 +156,12 @@ function participantsFrom(match: StreamedMatch, title: string): string[] | undef
   return vs.length === 2 ? vs : undefined;
 }
 
-export function mapStreamedMatch(match: StreamedMatch, liveIds?: Set<string>, now = Date.now()): PpvEvent | null {
+export function mapStreamedMatch(
+  match: StreamedMatch,
+  liveIds?: Set<string>,
+  now = Date.now(),
+  catalogProvenance?: PpvEventCatalogProvenance,
+): PpvEvent | null {
   const id = asString(match.id);
   const title = asString(match.title);
   const date = asNumber(match.date);
@@ -166,6 +176,7 @@ export function mapStreamedMatch(match: StreamedMatch, liveIds?: Set<string>, no
     provider: 'streamed',
     providerEventId: id,
     providerRefs: { streamed: { eventId: id } },
+    catalogProvenance,
     title,
     category: classifyPpvCategory(title, id),
     promotion: inferPromotion(title),
@@ -441,37 +452,45 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
   const liveIds = new Set(liveMatches.map((match) => asString(match.id)).filter(Boolean));
   const merged = new Map<string, StreamedMatch>();
 
-  // The fight feed is authoritative: every valid row it carries is a PPV event,
-  // even one our own classifier reads as 'other'.
-  for (const match of asMatchList(fight)) {
-    const id = asString(match.id);
-    if (!id || !asString(match.title)) continue;
-    const existing = merged.get(id);
-    merged.set(id, existing ? mergeStreamedMatches(existing, match) : match);
-  }
-
   /*
-   * live and all-today are supplemental. They enrich an event the fight feed
-   * already established, matched on the same Streamed ID. On their own they may
-   * only introduce an event our own classifier positively reads as combat -
-   * their upstream category is not trustworthy for this, and trusting it put
-   * "San Jose State Spartans at USC Trojans" into PPV.
+   * Admission is unchanged from production. Narrowing it needs evidence about
+   * which feed actually introduces a wrongly-admitted event, and the row counts
+   * reported so far cannot answer that - so this pass records provenance and
+   * changes no behaviour.
    */
-  for (const match of [...liveMatches, ...asMatchList(today)]) {
-    const id = asString(match.id);
-    const title = asString(match.title);
-    if (!id || !title) continue;
-    const existing = merged.get(id);
-    if (existing) {
-      merged.set(id, mergeStreamedMatches(existing, match));
-      continue;
+  const provenance = new Map<string, PpvEventCatalogProvenance>();
+  const feeds: Array<[PpvCatalogFeed, StreamedMatch[]]> = [
+    ['fight', asMatchList(fight)],
+    ['live', liveMatches],
+    ['today', asMatchList(today)],
+  ];
+
+  for (const [feed, rows] of feeds) {
+    for (const match of rows) {
+      const id = asString(match.id);
+      const title = asString(match.title);
+      if (!id || !title) continue;
+      const category = asString(match.category);
+      const combat =
+        category === 'fight' ||
+        classifyPpvCategory(title, id) !== 'other' ||
+        /\bppv\b|fight/i.test(`${id} ${title}`);
+      if (!combat) continue;
+
+      // Only a row that was actually admitted counts as having contributed.
+      const trail = provenance.get(id) ?? { feeds: [], upstreamCategories: [] };
+      if (!trail.feeds.includes(feed)) trail.feeds.push(feed);
+      const label = sanitizeUpstreamCategory(category);
+      if (label && !trail.upstreamCategories.includes(label)) trail.upstreamCategories.push(label);
+      provenance.set(id, trail);
+
+      const existing = merged.get(id);
+      merged.set(id, existing ? mergeStreamedMatches(existing, match) : match);
     }
-    if (classifyPpvCategory(title, id) === 'other') continue;
-    merged.set(id, match);
   }
 
-  const events = [...merged.values()]
-    .map((match) => mapStreamedMatch(match, liveIds))
+  const events = [...merged.entries()]
+    .map(([id, match]) => mapStreamedMatch(match, liveIds, Date.now(), provenance.get(id)))
     .filter((event): event is PpvEvent => Boolean(event))
     .filter((event) => event.status !== 'ended')
     .sort((left, right) => {
@@ -603,7 +622,12 @@ async function loadSportSrcEmbeds(
     return [];
   }
 
-  const category = asString(ref?.category) || SPORTSRC_CATEGORY;
+  /*
+   * Defence in depth for a value that is dormant today: the category must look
+   * like a plain provider label before it is used, and it is encoded on the way
+   * into the URL regardless.
+   */
+  const category = sanitizeUpstreamCategory(ref?.category) || SPORTSRC_CATEGORY;
   diagnostics.providerNativeIdentityAvailable = true;
   diagnostics.lookupState = 'attempted';
   diagnostics.requestCount = 1;
@@ -613,7 +637,7 @@ async function loadSportSrcEmbeds(
   diagnostics.hasSources = false;
 
   const outcome = await requestJson(
-    `${SPORTSRC_API}/?data=detail&category=${category}&id=${encodeURIComponent(nativeEventId)}`,
+    `${SPORTSRC_API}/?data=detail&category=${encodeURIComponent(category)}&id=${encodeURIComponent(nativeEventId)}`,
     request,
   );
   if (outcome.status !== 'success') {

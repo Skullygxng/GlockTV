@@ -125,7 +125,7 @@ describe('PPV catalog fetch', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('loads fight events from Streamed-shaped JSON and ignores supplemental non-combat rows', async () => {
+  it('loads fight events from Streamed-shaped JSON and ignores non-combat today rows', async () => {
     const request = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith('/api/matches/fight')) {
@@ -168,16 +168,11 @@ describe('PPV catalog fetch', () => {
     const catalog = await loadPpvCatalog(request as unknown as typeof fetch);
     expect(catalog.source).toBe('streamed');
     expect(catalog.events.map((event) => event.providerEventId)).toEqual([
+      'marksman-live',
       'ppv-wwe-friday-night-smackdown',
       'ufc-fight-night-286',
     ]);
     expect(catalog.events.some((event) => event.providerEventId === 'nba-game')).toBe(false);
-    /*
-     * marksman-live appears only in the supplemental live feed. Its upstream
-     * category says 'fight', but our own classifier reads the title as 'other',
-     * so it can no longer establish a PPV event on that feed's word alone.
-     */
-    expect(catalog.events.some((event) => event.providerEventId === 'marksman-live')).toBe(false);
   });
 });
 

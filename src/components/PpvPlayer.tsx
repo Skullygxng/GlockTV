@@ -218,6 +218,7 @@ export function PpvPlayer({
           event={diagnostics ?? emptyEventDiagnostics(event.providerEventId)}
           iframe={iframeTrace}
           eventId={event.providerEventId}
+          provenance={event.catalogProvenance ?? null}
           sourceIndex={embeds.length ? index + 1 : 0}
           sourceCount={embeds.length}
         />

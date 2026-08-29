@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveTvRoute } from '../src/components/LiveTvRoute';
 import { PpvPanel } from '../src/components/PpvPanel';
 import { PpvPlayer } from '../src/components/PpvPlayer';
-import { PpvCatalogError, type PpvCatalog, type PpvEvent } from '../src/lib/ppv';
+import { PpvCatalogError, discoverPpvEmbeds, type PpvCatalog, type PpvEvent } from '../src/lib/ppv';
 import type { PpvCatalogDiagnostics } from '../src/lib/ppvDiagnostics';
 import { PPV_IFRAME_REFERRER_POLICY, PPV_IFRAME_SANDBOX } from '../src/lib/ppvEmbedPolicy';
 import type { LiveTvCatalog } from '../src/lib/iptvOrg';
@@ -658,6 +658,35 @@ describe('PPV catalog diagnostics in debug mode', () => {
     expect(text).toMatch(/normalized events\s*2/i);
     // Nothing is selected yet, so the playback sections have nothing to report.
     expect(text).not.toMatch(/document load event/i);
+  });
+
+  it('reports an unmapped backup as skipped rather than failed', async () => {
+    const unmapped: PpvEvent = {
+      provider: 'streamed',
+      providerEventId: 'true-grit',
+      providerRefs: { streamed: { eventId: 'true-grit' } },
+      title: 'True Grit Wrestling New Grit Rising',
+      category: 'wrestling',
+      startsAt: '2026-08-29T22:00:00.000Z',
+      status: 'live',
+      sourceRefs: [{ source: 'delta', id: 'd1' }],
+      embeds: [],
+    };
+    // Streamed answers with nothing; SportSRC has no native identity to use.
+    const request = (async () =>
+      new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+
+    render(
+      <PpvPlayer event={unmapped} debug discoverEmbeds={(target) => discoverPpvEmbeds(target, request)} />,
+    );
+
+    await screen.findByText('Embed unavailable');
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/lookup state\s*not_attempted_unmapped/i);
+    expect(text).toMatch(/provider-native id\s*false/i);
+    expect(text).toMatch(/not a provider failure/i);
+    // A skipped backup must not turn into provider_failure.
+    expect(text).toMatch(/final state\s*unavailable/i);
   });
 
   it('shows catalog, provider and iframe diagnostics once an event is selected', async () => {

@@ -11,6 +11,12 @@
 
 export type PpvDiagnosticStage = 'catalog' | 'streamed' | 'sportsrc' | 'policy' | 'iframe';
 
+/*
+ * A backup provider we never had a native identity for was not requested at
+ * all. That is not a provider failure and must never be reported as one.
+ */
+export type PpvProviderLookupState = 'not_attempted_unmapped' | 'attempted';
+
 export type PpvRequestStatus =
   | 'success'
   | 'empty_success'
@@ -63,8 +69,13 @@ export interface PpvProviderDiagnostics {
   responseSuccessFlag?: boolean | null;
   hasData?: boolean;
   hasSources?: boolean;
-  crossProviderIdAssumption?: boolean;
-  crossProviderIdNote?: string;
+  /*
+   * Whether this provider had an identifier of its own for the event. An ID
+   * issued by another provider is not evidence of the same event here, so
+   * without a native one the lookup is skipped rather than guessed.
+   */
+  providerNativeIdentityAvailable?: boolean;
+  lookupState?: PpvProviderLookupState;
   /*
    * The provider answered with a well-formed body that reports no result.
    * That is an unsuccessful lookup, not a malformed response.
@@ -105,9 +116,6 @@ export interface PpvIframeDiagnostics {
 }
 
 export const PPV_IFRAME_PROBE_MS = 5000;
-
-export const PPV_CROSS_PROVIDER_ID_NOTE =
-  'SportSRC lookup currently uses the Streamed event identifier; provider ID equivalence has not been independently established.';
 
 export function emptyProviderDiagnostics(
   stage: 'streamed' | 'sportsrc',

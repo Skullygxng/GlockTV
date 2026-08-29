@@ -157,6 +157,12 @@ export function PpvDiagnosticsPanel({
 
           <div className="ppv-diag__group">
             <h4>SportSRC</h4>
+            <Row label="lookup state" value={sportsrc?.lookupState ?? 'pending'} />
+            <Row
+              label="provider-native id"
+              value={sportsrc?.providerNativeIdentityAvailable ?? false}
+            />
+            <Row label="requests" value={sportsrc?.requestCount ?? 0} />
             <Row label="category" value={sportsrc?.requestedCategory ?? 'n/a'} />
             <Row label="completed" value={sportsrc?.completedRequests ?? 0} />
             <Row label="timeouts" value={sportsrc?.timeoutCount ?? 0} />
@@ -171,8 +177,11 @@ export function PpvDiagnosticsPanel({
             <Row label="accepted" value={sportsrc?.acceptedEmbedCount ?? 0} />
             <Row label="rejected" value={sportsrc?.rejectedEmbedCount ?? 0} />
             <Row label="rejected hosts" value={(sportsrc?.rejectedHosts ?? []).join(', ') || 'none'} />
-            {sportsrc?.crossProviderIdAssumption && (
-              <p className="ppv-diag__warn">{sportsrc.crossProviderIdNote}</p>
+            {sportsrc?.lookupState === 'not_attempted_unmapped' && (
+              <p className="ppv-diag__warn">
+                Not requested: no SportSRC-native event identity for this event. This is a skipped
+                lookup, not a provider failure.
+              </p>
             )}
           </div>
 

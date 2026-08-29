@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
 import type { PpvEmbed, PpvEvent } from '../lib/ppv';
 import { formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
@@ -19,33 +19,56 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
   const [error, setError] = useState('');
   const [index, setIndex] = useState(0);
 
+  /*
+   * Every embed request carries a generation. Initial loads and Reload share
+   * the counter, so a late result from a previous event or a superseded reload
+   * can never commit state over the event the user is actually watching.
+   */
+  const generation = useRef(0);
+  const eventRef = useRef(event);
+  eventRef.current = event;
+  const eventKey = `${event.provider}:${event.providerEventId}`;
+
+  const runLoad = useCallback(
+    (target: PpvEvent) => {
+      const ticket = ++generation.current;
+      setLoading(true);
+      setError('');
+      void loadEmbeds(target)
+        .then((result) => {
+          if (generation.current !== ticket) return;
+          setEmbeds(result);
+          setIndex(0);
+          if (!result.length) setError('No hosted embed is available for this event yet.');
+        })
+        .catch((reason) => {
+          if (generation.current !== ticket) return;
+          setEmbeds([]);
+          setError(reason instanceof Error ? reason.message : 'PPV embed could not load.');
+        })
+        .finally(() => {
+          if (generation.current !== ticket) return;
+          setLoading(false);
+        });
+    },
+    [loadEmbeds],
+  );
+
   useEffect(() => {
-    let cancelled = false;
+    const target = eventRef.current;
+    // Drop the previous event's embeds immediately so its iframe can never be
+    // shown underneath the new event's metadata.
     setIndex(0);
     setError('');
-    if (event.embeds.length) {
-      setEmbeds(event.embeds);
+    if (target.embeds.length) {
+      generation.current += 1;
+      setEmbeds(target.embeds);
       setLoading(false);
       return;
     }
-    setLoading(true);
-    void loadEmbeds(event)
-      .then((result) => {
-        if (cancelled) return;
-        setEmbeds(result);
-        if (!result.length) setError('No hosted embed is available for this event yet.');
-      })
-      .catch((reason) => {
-        if (cancelled) return;
-        setError(reason instanceof Error ? reason.message : 'PPV embed could not load.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [event, loadEmbeds]);
+    setEmbeds([]);
+    runLoad(target);
+  }, [eventKey, runLoad]);
 
   const embed = embeds[Math.min(index, Math.max(0, embeds.length - 1))];
   const sourceLabel = useMemo(() => {
@@ -60,7 +83,9 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
 
   return (
     <div className="live-player" aria-label="PPV player">
-      <div className="live-player__video">
+      {/* One aspect-ratio viewport. Loading and unavailable states render
+          inside it rather than creating a second 16:9 box. */}
+      <div className={`live-player__video${embed ? '' : ' live-player__video--idle'}`}>
         {embed ? (
           <iframe
             key={embed.url}
@@ -73,12 +98,10 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
             referrerPolicy={PPV_IFRAME_REFERRER_POLICY}
           />
         ) : (
-          <div className="live-player__video live-player__video--idle">
-            <div className="live-player__idle-message">
-              {loading ? <LoaderCircle className="spin" /> : <Tv />}
-              <strong>{loading ? 'Loading hosted embed' : 'Embed unavailable'}</strong>
-              <span>{loading ? 'Asking Streamed and SportSRC for a player URL.' : error}</span>
-            </div>
+          <div className="live-player__idle-message">
+            {loading ? <LoaderCircle className="spin" /> : <Tv />}
+            <strong>{loading ? 'Loading hosted embed' : 'Embed unavailable'}</strong>
+            <span>{loading ? 'Asking Streamed and SportSRC for a player URL.' : error}</span>
           </div>
         )}
       </div>
@@ -102,22 +125,7 @@ export function PpvPlayer({ event, loadEmbeds = loadPpvEmbeds }: PpvPlayerProps)
               Source {index + 1}/{embeds.length}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              setLoading(true);
-              setError('');
-              void loadEmbeds(event)
-                .then((result) => {
-                  setEmbeds(result);
-                  setIndex(0);
-                  if (!result.length) setError('No hosted embed is available for this event yet.');
-                })
-                .catch((reason) => setError(reason instanceof Error ? reason.message : 'PPV embed could not load.'))
-                .finally(() => setLoading(false));
-            }}
-            aria-label="Reload PPV embeds"
-          >
+          <button type="button" onClick={() => runLoad(eventRef.current)} aria-label="Reload PPV embeds">
             <RotateCw />
             Reload
           </button>

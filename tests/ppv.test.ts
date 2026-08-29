@@ -1,11 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  PPV_REQUEST_TIMEOUT_MS,
   classifyPpvCategory,
   derivePpvStatus,
   isHostedEmbedUrl,
+  isLikelyPpvEventMatch,
   loadPpvCatalog,
+  loadPpvEmbeds,
   mapStreamedMatch,
   mergePpvEmbeds,
+  mergeStreamedMatches,
+  type PpvEvent,
 } from '../src/lib/ppv';
 import { PPV_IFRAME_REFERRER_POLICY, PPV_IFRAME_SANDBOX } from '../src/lib/ppvEmbedPolicy';
 
@@ -13,13 +18,15 @@ const now = Date.parse('2026-08-28T20:00:00.000Z');
 
 describe('PPV iframe policy', () => {
   it('uses a narrow sandbox and a strict referrer policy', () => {
-    expect(PPV_IFRAME_SANDBOX).toBe('allow-scripts allow-presentation');
-    expect(PPV_IFRAME_REFERRER_POLICY).toBe('no-referrer');
+    // Matches the working movie/TV hosted players so embeds can initialise on
+    // their own origin. Safe only because the host allowlist can never resolve
+    // to GlockTV's own origin.
+    expect(PPV_IFRAME_SANDBOX).toBe('allow-scripts allow-same-origin allow-forms allow-presentation');
+    expect(PPV_IFRAME_REFERRER_POLICY).toBe('strict-origin-when-cross-origin');
     expect(PPV_IFRAME_SANDBOX).not.toMatch(/allow-popups-to-escape-sandbox/);
     expect(PPV_IFRAME_SANDBOX).not.toMatch(/allow-popups(?!-)/);
     expect(PPV_IFRAME_SANDBOX).not.toContain('allow-top-navigation');
     expect(PPV_IFRAME_SANDBOX).not.toContain('allow-downloads');
-    expect(PPV_IFRAME_SANDBOX).not.toContain('allow-same-origin');
     expect(PPV_IFRAME_SANDBOX).not.toContain('allow-modals');
   });
 });
@@ -155,6 +162,190 @@ describe('PPV catalog fetch', () => {
       'ufc-fight-night-286',
     ]);
     expect(catalog.events.some((event) => event.providerEventId === 'nba-game')).toBe(false);
+  });
+});
+
+describe('PPV embed URL policy', () => {
+  it('allows only the known provider embed hosts', () => {
+    expect(isHostedEmbedUrl('https://embed.st/embed/delta/event/1')).toBe(true);
+    expect(isHostedEmbedUrl('https://embed.streamapi.cc/sport/backup/')).toBe(true);
+    // An arbitrary HTTPS host from a hostile provider response must not frame.
+    expect(isHostedEmbedUrl('https://evil.example/player')).toBe(false);
+    expect(isHostedEmbedUrl('https://embed.st.evil.example/player')).toBe(false);
+  });
+
+  it('never frames GlockTV itself', () => {
+    // allow-same-origin plus a same-origin document would be a real escape.
+    expect(isHostedEmbedUrl(`https://${window.location.hostname}/player`)).toBe(false);
+    expect(isHostedEmbedUrl('https://skullygxng.github.io/GlockTV/')).toBe(false);
+  });
+
+  it('rejects local and private destinations', () => {
+    expect(isHostedEmbedUrl('https://localhost/player')).toBe(false);
+    expect(isHostedEmbedUrl('https://127.0.0.1/player')).toBe(false);
+    expect(isHostedEmbedUrl('https://10.0.0.5/player')).toBe(false);
+    expect(isHostedEmbedUrl('https://192.168.1.10/player')).toBe(false);
+    expect(isHostedEmbedUrl('https://169.254.169.254/latest/meta-data')).toBe(false);
+    expect(isHostedEmbedUrl('https://box.local/player')).toBe(false);
+  });
+
+  it('rejects non-https schemes, credentials and malformed URLs', () => {
+    expect(isHostedEmbedUrl('http://embed.st/embed/delta/event/1')).toBe(false);
+    expect(isHostedEmbedUrl('javascript:alert(1)')).toBe(false);
+    expect(isHostedEmbedUrl('data:text/html,<script>alert(1)</script>')).toBe(false);
+    expect(isHostedEmbedUrl('blob:https://embed.st/abc')).toBe(false);
+    expect(isHostedEmbedUrl('https://user:pass@embed.st/embed/x')).toBe(false);
+    expect(isHostedEmbedUrl('not a url')).toBe(false);
+    expect(isHostedEmbedUrl('')).toBe(false);
+  });
+
+  it('rejects direct media playlists in every observed shape', () => {
+    expect(isHostedEmbedUrl('https://embed.st/high/index.m3u8')).toBe(false);
+    expect(isHostedEmbedUrl('https://embed.st/high/index.m3u8/')).toBe(false);
+    expect(isHostedEmbedUrl('https://embed.st/play?file=index.m3u8')).toBe(false);
+    expect(isHostedEmbedUrl('https://embed.st/play?file=index%2Em3u8')).toBe(false);
+    expect(isHostedEmbedUrl('https://embed.st/stream.mpd')).toBe(false);
+  });
+});
+
+describe('PPV fallback event identity', () => {
+  const base: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'ufc-320',
+    title: 'UFC Fight Night: Smith vs. Jones',
+    category: 'mma',
+    promotion: 'UFC',
+    participants: ['Smith', 'Jones'],
+    startsAt: '2026-08-28T22:00:00.000Z',
+    status: 'upcoming',
+    sourceRefs: [],
+    embeds: [],
+  };
+
+  it('matches the same event across punctuation differences', () => {
+    expect(isLikelyPpvEventMatch(base, 'UFC Fight Night - Smith vs Jones')).toBe(true);
+  });
+
+  it('matches when the participant order is swapped', () => {
+    expect(isLikelyPpvEventMatch(base, 'Jones vs Smith | UFC')).toBe(true);
+  });
+
+  it('rejects a different card from the same promotion', () => {
+    // The previous loose overlap matched this on "fight" + "night" alone.
+    expect(isLikelyPpvEventMatch(base, 'UFC Fight Night: Davis vs Brown')).toBe(false);
+  });
+
+  it('rejects an unrelated event', () => {
+    expect(isLikelyPpvEventMatch(base, 'WWE Friday Night SmackDown')).toBe(false);
+  });
+});
+
+describe('PPV catalog merge', () => {
+  it('keeps richer metadata when a sparse duplicate arrives later', () => {
+    const rich = {
+      id: 'ufc-320',
+      title: 'UFC Fight Night: Smith vs Jones',
+      category: 'fight',
+      date: 1_800_000_000_000,
+      poster: '/poster.webp',
+      teams: { home: { name: 'Smith' }, away: { name: 'Jones' } },
+      sources: [{ source: 'alpha', id: 'a1' }],
+    };
+    const sparse = { id: 'ufc-320', title: 'UFC 320', sources: [{ source: 'delta', id: 'd1' }] };
+
+    const merged = mergeStreamedMatches(rich, sparse);
+    expect(merged.title).toBe('UFC Fight Night: Smith vs Jones');
+    expect(merged.date).toBe(1_800_000_000_000);
+    expect(merged.poster).toBe('/poster.webp');
+    expect(merged.teams?.home?.name).toBe('Smith');
+    // Source refs are unioned rather than replaced.
+    expect(merged.sources).toEqual([
+      { source: 'alpha', id: 'a1' },
+      { source: 'delta', id: 'd1' },
+    ]);
+  });
+});
+
+describe('PPV request timeouts and failover', () => {
+  const event: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'ufc-320',
+    title: 'UFC 320',
+    category: 'mma',
+    startsAt: '2026-08-28T22:00:00.000Z',
+    status: 'live',
+    sourceRefs: [
+      { source: 'alpha', id: 'a1' },
+      { source: 'delta', id: 'd1' },
+    ],
+    embeds: [],
+  };
+
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const never = () => new Promise<Response>(() => {});
+
+  it('keeps a working source when another source hangs forever', async () => {
+    const request = vi.fn((url: string) => {
+      if (url.includes('/stream/alpha/')) return never();
+      if (url.includes('/stream/delta/')) {
+        return Promise.resolve(json([{ id: 's1', embedUrl: 'https://embed.st/embed/delta/a/1', source: 'delta' }]));
+      }
+      return Promise.resolve(json({}));
+    });
+
+    const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    const embeds = await pending;
+    expect(embeds.map((embed) => embed.url)).toEqual(['https://embed.st/embed/delta/a/1']);
+  });
+
+  it('lets the backup provider answer when the primary hangs', async () => {
+    const request = vi.fn((url: string) => {
+      if (url.includes('streamed.pk')) return never();
+      if (url.includes('sportsrc')) {
+        return Promise.resolve(
+          json({ success: true, data: { sources: [{ id: 'b1', embedUrl: 'https://embed.streamapi.cc/sport/b/' }] } }),
+        );
+      }
+      return Promise.resolve(json({}));
+    });
+
+    const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    expect((await pending).map((embed) => embed.url)).toEqual(['https://embed.streamapi.cc/sport/b/']);
+  });
+
+  it('reaches an unavailable state in finite time when every provider hangs', async () => {
+    const request = vi.fn(never);
+    const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
+    // Two windows: primary/backup together, then the last-resort fallback.
+    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    expect(await pending).toEqual([]);
+  });
+
+  it('aborts the request it timed out', async () => {
+    const signals: AbortSignal[] = [];
+    const request = vi.fn((_url: string, init?: RequestInit) => {
+      if (init?.signal) signals.push(init.signal);
+      return never();
+    });
+
+    const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
+    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    await pending;
+    expect(signals.length).toBeGreaterThan(0);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it('fails the catalog in finite time rather than loading forever', async () => {
+    const pending = loadPpvCatalog(vi.fn(never) as unknown as typeof fetch);
+    const assertion = expect(pending).rejects.toThrow(/timed out/i);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
   });
 });
 

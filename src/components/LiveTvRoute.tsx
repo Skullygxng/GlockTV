@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ComponentType } from 'react';
 import { Heart, LoaderCircle, Radio, Search, Tv, WifiOff, X } from 'lucide-react';
 import {
   categoryLabel,
@@ -17,6 +17,8 @@ const BATCH_SIZE = 50;
 
 export interface LiveTvRouteProps {
   loadCatalog?: () => Promise<LiveTvCatalog>;
+  /* Injectable so the PPV pane can be driven in tests without network access. */
+  loadPpvCatalog?: ComponentProps<typeof PpvPanel>['loadCatalog'];
   PlayerComponent?: ComponentType<{ channel: LiveChannel }>;
   onClose?: () => void;
 }
@@ -32,6 +34,7 @@ function readFavorites() {
 
 export function LiveTvRoute({
   loadCatalog = defaultLoadCatalog,
+  loadPpvCatalog,
   PlayerComponent = LiveTvPlayer,
   onClose,
 }: LiveTvRouteProps) {
@@ -44,6 +47,7 @@ export function LiveTvRoute({
   const [favorites, setFavorites] = useState<string[]>(readFavorites);
   const [visibleCount, setVisibleCount] = useState(BATCH_SIZE);
   const [pane, setPane] = useState<'channels' | 'ppv'>('channels');
+  const [ppvWatching, setPpvWatching] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(
@@ -144,8 +148,15 @@ export function LiveTvRoute({
 
   const handleRetry = () => refresh(true);
 
+  /*
+   * The mobile stage hides the player column unless it is in watching mode.
+   * PPV selection lives inside PpvPanel, so the stage derives watching from
+   * whichever pane is active rather than from the channel state alone.
+   */
+  const watching = pane === 'ppv' ? ppvWatching : Boolean(selected);
+
   return (
-    <main className={`live-tv-stage${selected ? ' live-tv-stage--watching' : ''}`} aria-label="Live TV">
+    <main className={`live-tv-stage${watching ? ' live-tv-stage--watching' : ''}`} aria-label="Live TV">
       <header className="live-tv-hero">
         <div>
           <span>
@@ -194,7 +205,7 @@ export function LiveTvRoute({
       </div>
 
       {pane === 'ppv' ? (
-        <PpvPanel />
+        <PpvPanel loadCatalog={loadPpvCatalog} onWatchingChange={setPpvWatching} />
       ) : loading ? (
         <div className="live-tv-state">
           <LoaderCircle className="spin" />

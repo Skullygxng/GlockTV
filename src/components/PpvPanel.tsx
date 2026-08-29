@@ -1,19 +1,32 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LoaderCircle, Search, Swords, WifiOff } from 'lucide-react';
 import {
+  derivePpvStatus,
   formatPpvCountdown,
   formatPpvStart,
   loadPpvCatalog,
   type PpvCatalog,
   type PpvCategory,
   type PpvEvent,
+  type PpvStatus,
 } from '../lib/ppv';
 import { PpvPlayer } from './PpvPlayer';
 import '../ppv.css';
 
 interface PpvPanelProps {
   loadCatalog?: typeof loadPpvCatalog;
+  /*
+   * Lets Live TV know a PPV event is being watched. The mobile layout hides the
+   * player column unless the stage is in watching mode, and PPV selection lives
+   * in here rather than in Live TV's channel state.
+   */
+  onWatchingChange?: (watching: boolean) => void;
 }
+
+/* Countdown ticks once a minute; the catalog itself refreshes far less often. */
+const PPV_CLOCK_INTERVAL_MS = 60_000;
+const PPV_CATALOG_REFRESH_MS = 5 * 60_000;
+const PPV_CATALOG_STALE_MS = 2 * 60_000;
 
 const FILTERS: Array<{ id: 'all' | 'live' | 'upcoming' | PpvCategory; label: string }> = [
   { id: 'all', label: 'All' },
@@ -24,56 +37,120 @@ const FILTERS: Array<{ id: 'all' | 'live' | 'upcoming' | PpvCategory; label: str
   { id: 'wrestling', label: 'Wrestling' },
 ];
 
-export function PpvPanel({ loadCatalog = loadPpvCatalog }: PpvPanelProps) {
+/* Let an upcoming card flip to live on the clock, but never downgrade a status
+   the provider itself reported as live. */
+function freshStatus(event: PpvEvent, now: number): PpvStatus {
+  if (event.status === 'live') return 'live';
+  const startsAt = Date.parse(event.startsAt);
+  if (!Number.isFinite(startsAt)) return event.status;
+  return derivePpvStatus(startsAt, now);
+}
+
+export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: PpvPanelProps) {
   const [catalog, setCatalog] = useState<PpvCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('all');
   const [selectedId, setSelectedId] = useState('');
+  const [now, setNow] = useState(() => Date.now());
 
-  const refresh = () => {
-    setLoading(true);
-    setError('');
-    void loadCatalog()
-      .then((result) => {
-        setCatalog(result);
-        setSelectedId((current) =>
-          result.events.some((event) => event.providerEventId === current) ? current : '',
-        );
-      })
-      .catch((reason) => setError(reason instanceof Error ? reason.message : 'PPV events could not load.'))
-      .finally(() => setLoading(false));
-  };
+  const inFlight = useRef(false);
+
+  const refresh = useCallback(
+    (background = false) => {
+      // One catalog request at a time: periodic, visibility and manual refresh
+      // must not stack into a request storm.
+      if (inFlight.current) return;
+      inFlight.current = true;
+      if (!background) setLoading(true);
+      void loadCatalog()
+        .then((result) => {
+          setCatalog(result);
+          setError('');
+          setSelectedId((current) =>
+            result.events.some((event) => event.providerEventId === current) ? current : '',
+          );
+        })
+        .catch((reason) => {
+          // Keep the last good catalog on screen; a failed refresh must not
+          // blank a list the user is reading.
+          setError(reason instanceof Error ? reason.message : 'PPV events could not load.');
+        })
+        .finally(() => {
+          inFlight.current = false;
+          if (!background) setLoading(false);
+        });
+    },
+    [loadCatalog],
+  );
 
   useEffect(() => {
     refresh();
-  }, [loadCatalog]);
+  }, [refresh]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), PPV_CLOCK_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = setInterval(() => refresh(true), PPV_CATALOG_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  const loadedAt = catalog?.loadedAt;
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      setNow(Date.now());
+      const age = loadedAt ? Date.now() - Date.parse(loadedAt) : Number.POSITIVE_INFINITY;
+      if (!Number.isFinite(age) || age > PPV_CATALOG_STALE_MS) refresh(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [loadedAt, refresh]);
 
   const events = useMemo(() => {
     if (!catalog) return [];
     const term = query.trim().toLowerCase();
-    return catalog.events.filter((event) => {
-      if (filter === 'live' && event.status !== 'live') return false;
-      if (filter === 'upcoming' && event.status !== 'upcoming') return false;
-      if (filter === 'mma' || filter === 'boxing' || filter === 'wrestling') {
-        if (event.category !== filter) return false;
-      }
-      if (!term) return true;
-      return `${event.title} ${event.promotion ?? ''} ${event.category}`.toLowerCase().includes(term);
-    });
-  }, [catalog, filter, query]);
+    return catalog.events
+      .map((event) => ({ event, status: freshStatus(event, now) }))
+      .filter(({ event, status }) => {
+        if (filter === 'live' && status !== 'live') return false;
+        if (filter === 'upcoming' && status !== 'upcoming') return false;
+        if (filter === 'mma' || filter === 'boxing' || filter === 'wrestling') {
+          if (event.category !== filter) return false;
+        }
+        if (!term) return true;
+        return `${event.title} ${event.promotion ?? ''} ${event.category}`.toLowerCase().includes(term);
+      });
+  }, [catalog, filter, now, query]);
 
   const selected =
     selectedId && catalog
       ? (catalog.events.find((event) => event.providerEventId === selectedId) ?? null)
       : null;
 
+  const watching = Boolean(selected);
+  useEffect(() => {
+    onWatchingChange?.(watching);
+  }, [onWatchingChange, watching]);
+
+  useEffect(
+    () => () => {
+      onWatchingChange?.(false);
+    },
+    [onWatchingChange],
+  );
+
+  const staleNotice = error && catalog ? error : '';
+
   return (
     <div className="live-tv-layout" aria-label="PPV events">
       <section className="live-tv-content">
         {selected ? (
-          <PpvPlayer event={selected} />
+          <PpvPlayer event={{ ...selected, status: freshStatus(selected, now) }} />
         ) : (
           <div className="live-player live-player--idle" aria-label="No PPV event selected">
             <div className="live-player__video live-player__video--idle">
@@ -116,26 +193,37 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog }: PpvPanelProps) {
         <div className="live-tv-count">
           <strong>{events.length}</strong> events
         </div>
+        {staleNotice && (
+          <div className="ppv-stale" role="status">
+            <WifiOff />
+            <span>Showing the last loaded fight cards. {staleNotice}</span>
+            <button type="button" onClick={() => refresh()}>
+              Retry
+            </button>
+          </div>
+        )}
         <div className="live-tv-list">
           {loading ? (
             <div className="live-tv-empty">
               <LoaderCircle className="spin" />
               <strong>Loading fight cards</strong>
             </div>
-          ) : error ? (
+          ) : error && !catalog ? (
             <div className="live-tv-empty">
               <WifiOff />
               <strong>PPV could not load</strong>
               <span>{error}</span>
-              <button type="button" onClick={refresh}>
+              <button type="button" onClick={() => refresh()}>
                 Try again
               </button>
             </div>
           ) : events.length ? (
-            events.map((event) => (
+            events.map(({ event, status }) => (
               <PpvEventRow
                 key={event.providerEventId}
                 event={event}
+                status={status}
+                now={now}
                 active={event.providerEventId === selectedId}
                 onSelect={() => setSelectedId(event.providerEventId)}
               />
@@ -155,10 +243,14 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog }: PpvPanelProps) {
 
 function PpvEventRow({
   event,
+  status,
+  now,
   active,
   onSelect,
 }: {
   event: PpvEvent;
+  status: PpvStatus;
+  now: number;
   active: boolean;
   onSelect: () => void;
 }) {
@@ -182,7 +274,7 @@ function PpvEventRow({
         <span className="live-tv-channel__copy">
           <strong>{event.title}</strong>
           <small>
-            {event.status === 'live' ? 'LIVE' : formatPpvCountdown(event.startsAt)} · {event.category} ·{' '}
+            {status === 'live' ? 'LIVE' : formatPpvCountdown(event.startsAt, now)} · {event.category} ·{' '}
             {formatPpvStart(event.startsAt)}
           </small>
         </span>

@@ -143,3 +143,20 @@
   line-height:1.45;
   overflow-wrap:anywhere;
 }
+/* Shown only when the clipboard write failed, so the text can still be
+   selected by hand. */
+.ppv-diag__fallback{
+  width:100%;
+  margin-top:8px;
+  min-height:120px;
+  box-sizing:border-box;
+  border-radius:8px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(10,8,16,.7);
+  color:#cdc6da;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:10px;
+  line-height:1.4;
+  padding:8px;
+  resize:vertical;
+}

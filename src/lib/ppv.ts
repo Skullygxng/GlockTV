@@ -4,6 +4,7 @@ import {
   emptyEventDiagnostics,
   emptyProviderDiagnostics,
   type PpvCatalogDiagnostics,
+  type PpvCatalogEndpointDiagnostics,
   type PpvEventDiagnostics,
   type PpvProviderDiagnostics,
   type PpvRequestStatus,
@@ -346,13 +347,84 @@ export function mergeStreamedMatches(base: StreamedMatch, next: StreamedMatch): 
   };
 }
 
+/*
+ * Carries the sanitized catalog diagnostics through a rejection, so a catalog
+ * that never produced an event can still say why. The message is deliberately
+ * generic: request errors carry the requested URL in their own message, and
+ * that must not reach the UI.
+ */
+export class PpvCatalogError extends Error {
+  constructor(readonly diagnostics: PpvCatalogDiagnostics) {
+    super('PPV events could not load.');
+    this.name = 'PpvCatalogError';
+  }
+}
+
+/*
+ * A 200 carrying the wrong shape is malformed, an empty array is a real empty
+ * answer, and every failure keeps its own class. rowCount is a count, never a
+ * payload.
+ */
+function classifyCatalogEndpoint(outcome: PpvRequestOutcome): {
+  diagnostics: PpvCatalogEndpointDiagnostics;
+  rows: StreamedMatch[];
+} {
+  if (outcome.status !== 'success') {
+    return {
+      diagnostics: {
+        status: outcome.status,
+        httpStatus: outcome.status === 'http_error' ? outcome.httpStatus : null,
+        rowCount: 0,
+      },
+      rows: [],
+    };
+  }
+  if (!Array.isArray(outcome.data)) {
+    return { diagnostics: { status: 'malformed', httpStatus: null, rowCount: 0 }, rows: [] };
+  }
+  return {
+    diagnostics: {
+      status: outcome.data.length ? 'success' : 'empty_success',
+      httpStatus: null,
+      rowCount: outcome.data.length,
+    },
+    rows: outcome.data as StreamedMatch[],
+  };
+}
+
 export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCatalog> {
   const startedAt = Date.now();
-  const [fight, live, today] = await Promise.all([
-    fetchJson(`${STREAMED_API}/api/matches/fight`, request, PPV_CATALOG_TIMEOUT_MS),
-    fetchJson(`${STREAMED_API}/api/matches/live`, request, PPV_CATALOG_TIMEOUT_MS).catch(() => []),
-    fetchJson(`${STREAMED_API}/api/matches/all-today`, request, PPV_CATALOG_TIMEOUT_MS).catch(() => []),
+  const [fightOutcome, liveOutcome, todayOutcome] = await Promise.all([
+    requestJson(`${STREAMED_API}/api/matches/fight`, request, PPV_CATALOG_TIMEOUT_MS),
+    requestJson(`${STREAMED_API}/api/matches/live`, request, PPV_CATALOG_TIMEOUT_MS),
+    requestJson(`${STREAMED_API}/api/matches/all-today`, request, PPV_CATALOG_TIMEOUT_MS),
   ]);
+
+  const fightEndpoint = classifyCatalogEndpoint(fightOutcome);
+  const liveEndpoint = classifyCatalogEndpoint(liveOutcome);
+  const todayEndpoint = classifyCatalogEndpoint(todayOutcome);
+
+  // The fight feed stays required. A failed required feed still rejects, as it
+  // always has - it just carries its diagnostics out now instead of being
+  // downgraded to a successful empty catalog.
+  if (fightOutcome.status !== 'success') {
+    throw new PpvCatalogError({
+      stage: 'catalog',
+      startedAt,
+      completedAt: Date.now(),
+      fight: fightEndpoint.diagnostics,
+      live: liveEndpoint.diagnostics,
+      today: todayEndpoint.diagnostics,
+      normalizedEvents: 0,
+      overallStatus: fightEndpoint.diagnostics.status,
+    });
+  }
+
+  // live and today keep degrading gracefully; their failures are now recorded
+  // rather than becoming indistinguishable from a genuine empty response.
+  const fight = fightEndpoint.rows;
+  const live = liveEndpoint.rows;
+  const today = todayEndpoint.rows;
 
   const liveMatches = asMatchList(live);
   const liveIds = new Set(liveMatches.map((match) => asString(match.id)).filter(Boolean));
@@ -389,12 +461,15 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
       stage: 'catalog',
       startedAt,
       completedAt: Date.now(),
-      status: events.length ? 'success' : 'empty_success',
-      httpStatus: null,
-      fightRows: asMatchList(fight).length,
-      liveRows: liveMatches.length,
-      todayRows: asMatchList(today).length,
+      fight: fightEndpoint.diagnostics,
+      live: liveEndpoint.diagnostics,
+      today: todayEndpoint.diagnostics,
       normalizedEvents: events.length,
+      overallStatus: events.length
+        ? 'success'
+        : fightEndpoint.diagnostics.status === 'malformed'
+          ? 'malformed'
+          : 'empty_success',
     },
   };
 }
@@ -510,11 +585,22 @@ async function loadSportSrcEmbeds(
 
   diagnostics.completedRequests = 1;
   const payload = outcome.data as { success?: boolean; data?: { sources?: StreamedStream[] } } | null;
+  const isObject = Boolean(payload) && typeof payload === 'object' && !Array.isArray(payload);
   diagnostics.responseSuccessFlag = typeof payload?.success === 'boolean' ? payload.success : null;
   diagnostics.hasData = Boolean(payload?.data);
 
   const sources = payload?.data?.sources;
   if (!Array.isArray(sources)) {
+    /*
+     * success:false is a well-formed provider answer meaning "no result", so it
+     * is recorded as an unsuccessful lookup. malformed is reserved for actual
+     * structural contradictions - a body that is not an object at all, or one
+     * claiming success while data/sources is missing or the wrong type.
+     */
+    if (isObject && payload?.success === false) {
+      diagnostics.providerReportedUnsuccessful = true;
+      return [];
+    }
     diagnostics.malformedResponseCount += 1;
     return [];
   }

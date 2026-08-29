@@ -19,16 +19,26 @@ export type PpvRequestStatus =
   | 'timeout'
   | 'malformed';
 
+/*
+ * One entry per catalog endpoint. Collapsing a failed endpoint into an empty
+ * array made "returned nothing" indistinguishable from "never answered", which
+ * is exactly the ambiguity a real-device run has to resolve.
+ */
+export interface PpvCatalogEndpointDiagnostics {
+  status: PpvRequestStatus;
+  httpStatus: number | null;
+  rowCount: number;
+}
+
 export interface PpvCatalogDiagnostics {
   stage: 'catalog';
   startedAt: number;
   completedAt: number;
-  status: PpvRequestStatus;
-  httpStatus: number | null;
-  fightRows: number;
-  liveRows: number;
-  todayRows: number;
+  fight: PpvCatalogEndpointDiagnostics;
+  live: PpvCatalogEndpointDiagnostics;
+  today: PpvCatalogEndpointDiagnostics;
   normalizedEvents: number;
+  overallStatus: PpvRequestStatus;
 }
 
 export interface PpvProviderDiagnostics {
@@ -55,6 +65,11 @@ export interface PpvProviderDiagnostics {
   hasSources?: boolean;
   crossProviderIdAssumption?: boolean;
   crossProviderIdNote?: string;
+  /*
+   * The provider answered with a well-formed body that reports no result.
+   * That is an unsuccessful lookup, not a malformed response.
+   */
+  providerReportedUnsuccessful?: boolean;
 }
 
 export type PpvEventFinalState =

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ClipboardCopy, LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
+import { LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
 import type { PpvEmbed, PpvEvent } from '../lib/ppv';
 import { discoverPpvEmbeds, formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
 import {
@@ -8,10 +8,11 @@ import {
   emptyEventDiagnostics,
   emptyIframeDiagnostics,
   isPpvDebugEnabled,
-  serializePpvDiagnostics,
+  type PpvCatalogDiagnostics,
   type PpvEventDiagnostics,
   type PpvIframeDiagnostics,
 } from '../lib/ppvDiagnostics';
+import { PpvDiagnosticsPanel } from './PpvDiagnosticsPanel';
 import {
   PPV_IFRAME_ALLOW,
   PPV_IFRAME_REFERRER_POLICY,
@@ -25,19 +26,26 @@ interface PpvPlayerProps {
   /* Diagnostic-capable discovery; used by default in production. */
   discoverEmbeds?: typeof discoverPpvEmbeds;
   debug?: boolean;
+  /* Rendered alongside playback diagnostics so one panel covers the chain. */
+  catalogDiagnostics?: PpvCatalogDiagnostics | null;
 }
 
 /* Safe secondary line for normal users - never provider internals. */
 const UNAVAILABLE_HINT = 'No compatible hosted player was returned.';
 
-export function PpvPlayer({ event, loadEmbeds, discoverEmbeds, debug }: PpvPlayerProps) {
+export function PpvPlayer({
+  event,
+  loadEmbeds,
+  discoverEmbeds,
+  debug,
+  catalogDiagnostics,
+}: PpvPlayerProps) {
   const [embeds, setEmbeds] = useState<PpvEmbed[]>(event.embeds);
   const [loading, setLoading] = useState(!event.embeds.length);
   const [error, setError] = useState('');
   const [index, setIndex] = useState(0);
   const [diagnostics, setDiagnostics] = useState<PpvEventDiagnostics | null>(null);
   const [iframeTrace, setIframeTrace] = useState<PpvIframeDiagnostics>(emptyIframeDiagnostics);
-  const [copied, setCopied] = useState(false);
 
   const debugEnabled = debug ?? isPpvDebugEnabled();
 
@@ -147,17 +155,6 @@ export function PpvPlayer({ event, loadEmbeds, discoverEmbeds, debug }: PpvPlaye
     setIndex((current) => (current + 1) % embeds.length);
   };
 
-  const copyDiagnostics = () => {
-    const payload = serializePpvDiagnostics({
-      event: diagnostics ?? emptyEventDiagnostics(event.providerEventId),
-      iframe: iframeTrace,
-      sourceIndex: embeds.length ? index + 1 : 0,
-      sourceCount: embeds.length,
-    });
-    void navigator.clipboard?.writeText?.(payload);
-    setCopied(true);
-  };
-
   return (
     <div className="live-player" aria-label="PPV player">
       {/* One aspect-ratio viewport. Loading and unavailable states render
@@ -217,117 +214,14 @@ export function PpvPlayer({ event, loadEmbeds, discoverEmbeds, debug }: PpvPlaye
       </div>
       {debugEnabled && (
         <PpvDiagnosticsPanel
-          diagnostics={diagnostics}
+          catalog={catalogDiagnostics ?? null}
+          event={diagnostics ?? emptyEventDiagnostics(event.providerEventId)}
           iframe={iframeTrace}
+          eventId={event.providerEventId}
           sourceIndex={embeds.length ? index + 1 : 0}
           sourceCount={embeds.length}
-          catalogNote={event.providerEventId}
-          copied={copied}
-          onCopy={copyDiagnostics}
         />
       )}
     </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string | number | boolean }) {
-  return (
-    <div className="ppv-diag__row">
-      <span>{label}</span>
-      <strong>{String(value)}</strong>
-    </div>
-  );
-}
-
-function PpvDiagnosticsPanel({
-  diagnostics,
-  iframe,
-  sourceIndex,
-  sourceCount,
-  catalogNote,
-  copied,
-  onCopy,
-}: {
-  diagnostics: PpvEventDiagnostics | null;
-  iframe: PpvIframeDiagnostics;
-  sourceIndex: number;
-  sourceCount: number;
-  catalogNote: string;
-  copied: boolean;
-  onCopy: () => void;
-}) {
-  const streamed = diagnostics?.streamed;
-  const sportsrc = diagnostics?.sportsrc;
-  const secondsSinceMount =
-    iframe.mountedAt === null ? 0 : Math.max(0, Math.round((Date.now() - iframe.mountedAt) / 1000));
-
-  return (
-    <section className="ppv-diag" aria-label="PPV runtime diagnostics">
-      <header>
-        <strong>PPV Runtime Diagnostics</strong>
-        <button type="button" onClick={onCopy} aria-label="Copy diagnostics">
-          <ClipboardCopy />
-          {copied ? 'Copied' : 'Copy diagnostics'}
-        </button>
-      </header>
-
-      <div className="ppv-diag__group">
-        <h4>Event</h4>
-        <Row label="event" value={catalogNote} />
-        <Row label="final state" value={diagnostics?.finalState ?? 'pending'} />
-        <Row label="accepted embeds" value={diagnostics?.acceptedEmbedCount ?? 0} />
-      </div>
-
-      <div className="ppv-diag__group">
-        <h4>Streamed</h4>
-        <Row label="requests" value={streamed?.requestCount ?? 0} />
-        <Row label="completed" value={streamed?.completedRequests ?? 0} />
-        <Row label="timeouts" value={streamed?.timeoutCount ?? 0} />
-        <Row label="network/CORS" value={streamed?.networkErrorCount ?? 0} />
-        <Row label="http errors" value={streamed?.httpErrorCount ?? 0} />
-        <Row label="http statuses" value={(streamed?.httpStatuses ?? []).join(', ') || 'none'} />
-        <Row label="returned rows" value={streamed?.returnedSourceCount ?? 0} />
-        <Row label="malformed rows" value={streamed?.malformedRowCount ?? 0} />
-        <Row label="accepted" value={streamed?.acceptedEmbedCount ?? 0} />
-        <Row label="rejected" value={streamed?.rejectedEmbedCount ?? 0} />
-        <Row label="rejected hosts" value={(streamed?.rejectedHosts ?? []).join(', ') || 'none'} />
-        <Row label="reject reasons" value={(streamed?.rejectionReasons ?? []).join(', ') || 'none'} />
-      </div>
-
-      <div className="ppv-diag__group">
-        <h4>SportSRC</h4>
-        <Row label="category" value={sportsrc?.requestedCategory ?? 'n/a'} />
-        <Row label="completed" value={sportsrc?.completedRequests ?? 0} />
-        <Row label="timeouts" value={sportsrc?.timeoutCount ?? 0} />
-        <Row label="network/CORS" value={sportsrc?.networkErrorCount ?? 0} />
-        <Row label="http statuses" value={(sportsrc?.httpStatuses ?? []).join(', ') || 'none'} />
-        <Row label="success flag" value={String(sportsrc?.responseSuccessFlag ?? 'n/a')} />
-        <Row label="has data" value={sportsrc?.hasData ?? false} />
-        <Row label="has sources" value={sportsrc?.hasSources ?? false} />
-        <Row label="returned rows" value={sportsrc?.returnedSourceCount ?? 0} />
-        <Row label="accepted" value={sportsrc?.acceptedEmbedCount ?? 0} />
-        <Row label="rejected" value={sportsrc?.rejectedEmbedCount ?? 0} />
-        <Row label="rejected hosts" value={(sportsrc?.rejectedHosts ?? []).join(', ') || 'none'} />
-        {sportsrc?.crossProviderIdAssumption && (
-          <p className="ppv-diag__warn">{sportsrc.crossProviderIdNote}</p>
-        )}
-      </div>
-
-      <div className="ppv-diag__group">
-        <h4>Iframe</h4>
-        <Row label="mounted" value={iframe.mounted} />
-        <Row label="hostname" value={iframe.hostname || 'none'} />
-        <Row label="document load event" value={iframe.iframeDocumentLoaded ? 'yes' : 'no'} />
-        <Row label="seconds since mounted" value={iframe.mounted ? secondsSinceMount : 0} />
-        <Row
-          label={`present after ${Math.round(PPV_IFRAME_PROBE_MS / 1000)}s`}
-          value={iframe.presentAfterProbe === null ? 'pending' : iframe.presentAfterProbe}
-        />
-        <Row label="source" value={sourceCount ? `${sourceIndex}/${sourceCount}` : '0/0'} />
-        <p className="ppv-diag__warn">
-          A document load event only means the frame document loaded. It is not proof of playback.
-        </p>
-      </div>
-    </section>
   );
 }

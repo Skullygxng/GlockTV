@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PPV_REQUEST_TIMEOUT_MS,
+  PpvCatalogError,
   PpvHttpError,
   PpvTimeoutError,
   classifyPpvRequestError,
@@ -64,51 +65,161 @@ describe('PPV catalog diagnostics', () => {
     },
   ];
 
-  it('reports row counts and normalized events on success', async () => {
-    const request = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith('/api/matches/fight')) return json(populated);
-      return json([]);
-    });
+  /* Answers fight from `fight`, and every other catalog endpoint from `rest`. */
+  function catalogFetch(
+    fight: () => Response | Promise<Response>,
+    rest: () => Response | Promise<Response> = () => json([]),
+  ) {
+    return vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/api/matches/fight') ? fight() : rest(),
+    ) as unknown as typeof fetch;
+  }
 
-    const catalog = await loadPpvCatalog(request as unknown as typeof fetch);
-    expect(catalog.diagnostics?.status).toBe('success');
-    expect(catalog.diagnostics?.fightRows).toBe(1);
-    expect(catalog.diagnostics?.liveRows).toBe(0);
-    expect(catalog.diagnostics?.todayRows).toBe(0);
+  async function rejectedDiagnostics(request: typeof fetch, advanceMs = 0) {
+    const pending = loadPpvCatalog(request).then(
+      () => null,
+      (reason: unknown) => reason,
+    );
+    if (advanceMs) await vi.advanceTimersByTimeAsync(advanceMs);
+    const reason = await pending;
+    expect(reason).toBeInstanceOf(PpvCatalogError);
+    return (reason as PpvCatalogError).diagnostics;
+  }
+
+  it('reports per-endpoint row counts and normalized events on success', async () => {
+    const catalog = await loadPpvCatalog(catalogFetch(() => json(populated)));
+    expect(catalog.diagnostics?.overallStatus).toBe('success');
+    expect(catalog.diagnostics?.fight).toEqual({ status: 'success', httpStatus: null, rowCount: 1 });
+    expect(catalog.diagnostics?.live).toEqual({ status: 'empty_success', httpStatus: null, rowCount: 0 });
+    expect(catalog.diagnostics?.today).toEqual({ status: 'empty_success', httpStatus: null, rowCount: 0 });
     expect(catalog.diagnostics?.normalizedEvents).toBe(1);
   });
 
-  it('reports empty_success when the request worked but produced nothing', async () => {
-    const catalog = await loadPpvCatalog((async () => json([])) as unknown as typeof fetch);
-    expect(catalog.diagnostics?.status).toBe('empty_success');
+  it('reports empty_success when the fight feed worked but produced nothing', async () => {
+    const catalog = await loadPpvCatalog(catalogFetch(() => json([])));
+    expect(catalog.diagnostics?.fight.status).toBe('empty_success');
+    expect(catalog.diagnostics?.overallStatus).toBe('empty_success');
     expect(catalog.diagnostics?.normalizedEvents).toBe(0);
   });
 
-  it('surfaces an HTTP failure with its status', async () => {
-    const request = vi.fn(async () => httpError(500));
-    await expect(loadPpvCatalog(request as unknown as typeof fetch)).rejects.toThrow(/500/);
+  it('carries the HTTP status of a failed fight feed out on the rejection', async () => {
+    const diagnostics = await rejectedDiagnostics(catalogFetch(() => httpError(500)));
+    expect(diagnostics.fight).toEqual({ status: 'http_error', httpStatus: 500, rowCount: 0 });
+    expect(diagnostics.overallStatus).toBe('http_error');
+    expect(diagnostics.normalizedEvents).toBe(0);
   });
 
-  it('surfaces a network/CORS failure rather than hanging', async () => {
-    const request = vi.fn(async () => {
-      throw new TypeError('Failed to fetch');
-    });
-    await expect(loadPpvCatalog(request as unknown as typeof fetch)).rejects.toBeInstanceOf(TypeError);
+  it('classifies a fetch rejection as network_or_cors_error without asserting CORS', async () => {
+    const diagnostics = await rejectedDiagnostics(
+      catalogFetch(() => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+    expect(diagnostics.fight.status).toBe('network_or_cors_error');
+    expect(diagnostics.fight.httpStatus).toBeNull();
   });
 
-  it('surfaces a timeout in finite time', async () => {
-    const request = vi.fn(() => new Promise<Response>(() => {}));
-    const pending = loadPpvCatalog(request as unknown as typeof fetch);
-    const assertion = expect(pending).rejects.toBeInstanceOf(PpvTimeoutError);
-    await vi.advanceTimersByTimeAsync(15_000);
-    await assertion;
+  it('classifies a hung fight feed as a timeout in finite time', async () => {
+    const diagnostics = await rejectedDiagnostics(
+      catalogFetch(() => new Promise<Response>(() => {})),
+      15_000,
+    );
+    expect(diagnostics.fight.status).toBe('timeout');
   });
 
-  it('treats a non-array payload as malformed rather than crashing', async () => {
-    const catalog = await loadPpvCatalog((async () => json({ nope: true })) as unknown as typeof fetch);
+  it('classifies invalid JSON on the required feed as malformed', async () => {
+    const diagnostics = await rejectedDiagnostics(
+      catalogFetch(
+        () => new Response('<html>nope</html>', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      ),
+    );
+    expect(diagnostics.fight.status).toBe('malformed');
+  });
+
+  it('reports a valid-JSON wrong-shape fight response as malformed without inventing a rejection', async () => {
+    // Production already resolved here; only the label is new.
+    const catalog = await loadPpvCatalog(catalogFetch(() => json({ nope: true })));
     expect(catalog.events).toEqual([]);
-    expect(catalog.diagnostics?.fightRows).toBe(0);
+    expect(catalog.diagnostics?.fight).toEqual({ status: 'malformed', httpStatus: null, rowCount: 0 });
+    expect(catalog.diagnostics?.overallStatus).toBe('malformed');
+  });
+
+  it('separates an optional endpoint that failed from one that was genuinely empty', async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/matches/fight')) return json(populated);
+      if (url.endsWith('/api/matches/live')) return httpError(502);
+      return json([]);
+    }) as unknown as typeof fetch;
+
+    const catalog = await loadPpvCatalog(request);
+    // Graceful degradation is preserved: the catalog still loads.
+    expect(catalog.events).toHaveLength(1);
+    expect(catalog.diagnostics?.live).toEqual({ status: 'http_error', httpStatus: 502, rowCount: 0 });
+    expect(catalog.diagnostics?.today.status).toBe('empty_success');
+    expect(catalog.diagnostics?.overallStatus).toBe('success');
+  });
+
+  it('records rows returned by the optional live feed', async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/matches/all-today')) return json([]);
+      return json(populated);
+    }) as unknown as typeof fetch;
+
+    const catalog = await loadPpvCatalog(request);
+    expect(catalog.diagnostics?.live).toEqual({ status: 'success', httpStatus: null, rowCount: 1 });
+  });
+
+  it('records a hung optional live feed as a timeout while the catalog still loads', async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/matches/live')) return new Promise<Response>(() => {});
+      if (url.endsWith('/api/matches/fight')) return json(populated);
+      return json([]);
+    }) as unknown as typeof fetch;
+
+    const pending = loadPpvCatalog(request);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const catalog = await pending;
+    expect(catalog.events).toHaveLength(1);
+    expect(catalog.diagnostics?.live.status).toBe('timeout');
+  });
+
+  it('classifies a failed today feed the same way without blocking the catalog', async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/matches/all-today')) {
+        throw new TypeError('Failed to fetch');
+      }
+      if (url.endsWith('/api/matches/fight')) return json(populated);
+      return json([]);
+    }) as unknown as typeof fetch;
+
+    const catalog = await loadPpvCatalog(request);
+    expect(catalog.events).toHaveLength(1);
+    expect(catalog.diagnostics?.today.status).toBe('network_or_cors_error');
+  });
+
+  it('keeps URLs and provider payloads out of the catalog failure it reports', async () => {
+    const diagnostics = await rejectedDiagnostics(catalogFetch(() => httpError(403)));
+    const payload = serializePpvDiagnostics(diagnostics);
+    expect(payload).not.toContain('https://');
+    expect(payload).not.toContain('http://');
+    expect(payload).not.toContain('streamed.pk');
+    expect(payload).not.toContain('/api/matches');
+    expect(payload).toContain('http_error');
+  });
+
+  it('reports a generic message so the failing URL never reaches the UI', async () => {
+    const reason = await loadPpvCatalog(catalogFetch(() => httpError(500))).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    // PpvTimeoutError names the URL it gave up on; that message must not be
+    // what the panel ends up rendering.
+    expect((reason as Error).message).toBe('PPV events could not load.');
+    expect((reason as Error).message).not.toContain('://');
   });
 });
 
@@ -245,12 +356,29 @@ describe('PPV SportSRC discovery diagnostics', () => {
     expect(diagnostics.sportsrc.networkErrorCount).toBe(1);
   });
 
-  it('distinguishes success:false, missing data, missing sources and empty sources', async () => {
+  it('treats success:false as an unsuccessful lookup, not a malformed response', async () => {
     const falsy = await sportsrcRun(async () => json({ success: false }));
     expect(falsy.diagnostics.sportsrc.responseSuccessFlag).toBe(false);
     expect(falsy.diagnostics.sportsrc.hasData).toBe(false);
     expect(falsy.diagnostics.sportsrc.hasSources).toBe(false);
+    // A well-formed body reporting no result is not a structural contradiction.
+    expect(falsy.diagnostics.sportsrc.providerReportedUnsuccessful).toBe(true);
+    expect(falsy.diagnostics.sportsrc.malformedResponseCount).toBe(0);
+    expect(falsy.diagnostics.finalState).toBe('unavailable');
+  });
 
+  it('reserves malformed for a body that contradicts its own success flag', async () => {
+    const wrongType = await sportsrcRun(async () =>
+      json({ success: true, data: { sources: 'nope' } }),
+    );
+    expect(wrongType.diagnostics.sportsrc.malformedResponseCount).toBe(1);
+    expect(wrongType.diagnostics.sportsrc.providerReportedUnsuccessful).toBeUndefined();
+
+    const notAnObject = await sportsrcRun(async () => json('nope'));
+    expect(notAnObject.diagnostics.sportsrc.malformedResponseCount).toBe(1);
+  });
+
+  it('distinguishes missing data, missing sources and empty sources', async () => {
     const noSources = await sportsrcRun(async () => json({ success: true, data: {} }));
     expect(noSources.diagnostics.sportsrc.hasData).toBe(true);
     expect(noSources.diagnostics.sportsrc.hasSources).toBe(false);

@@ -4,7 +4,6 @@ import {
   classifyPpvCategory,
   derivePpvStatus,
   isHostedEmbedUrl,
-  isLikelyPpvEventMatch,
   loadPpvCatalog,
   loadPpvEmbeds,
   mapStreamedMatch,
@@ -208,38 +207,6 @@ describe('PPV embed URL policy', () => {
   });
 });
 
-describe('PPV fallback event identity', () => {
-  const base: PpvEvent = {
-    provider: 'streamed',
-    providerEventId: 'ufc-320',
-    title: 'UFC Fight Night: Smith vs. Jones',
-    category: 'mma',
-    promotion: 'UFC',
-    participants: ['Smith', 'Jones'],
-    startsAt: '2026-08-28T22:00:00.000Z',
-    status: 'upcoming',
-    sourceRefs: [],
-    embeds: [],
-  };
-
-  it('matches the same event across punctuation differences', () => {
-    expect(isLikelyPpvEventMatch(base, 'UFC Fight Night - Smith vs Jones')).toBe(true);
-  });
-
-  it('matches when the participant order is swapped', () => {
-    expect(isLikelyPpvEventMatch(base, 'Jones vs Smith | UFC')).toBe(true);
-  });
-
-  it('rejects a different card from the same promotion', () => {
-    // The previous loose overlap matched this on "fight" + "night" alone.
-    expect(isLikelyPpvEventMatch(base, 'UFC Fight Night: Davis vs Brown')).toBe(false);
-  });
-
-  it('rejects an unrelated event', () => {
-    expect(isLikelyPpvEventMatch(base, 'WWE Friday Night SmackDown')).toBe(false);
-  });
-});
-
 describe('PPV catalog merge', () => {
   it('keeps richer metadata when a sparse duplicate arrives later', () => {
     const rich = {
@@ -317,13 +284,42 @@ describe('PPV request timeouts and failover', () => {
     expect((await pending).map((embed) => embed.url)).toEqual(['https://embed.streamapi.cc/sport/b/']);
   });
 
-  it('reaches an unavailable state in finite time when every provider hangs', async () => {
-    const request = vi.fn(never);
+  it('reaches an unavailable state after a single provider window when everything hangs', async () => {
+    const request = vi.fn((_url: string) => never());
     const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
-    // Two windows: primary/backup together, then the last-resort fallback.
-    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
+    // Primary and backup run together, so one window is the whole budget.
     await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
     expect(await pending).toEqual([]);
+    expect(request.mock.calls.every(([url]) => !String(url).includes('daddylive.app'))).toBe(true);
+  });
+
+  it('returns empty without requesting an unsupported provider when both are empty', async () => {
+    const request = vi.fn((url: string) => {
+      if (url.includes('/stream/')) return Promise.resolve(json([]));
+      if (url.includes('sportsrc')) return Promise.resolve(json({ success: true, data: { sources: [] } }));
+      return Promise.resolve(json({}));
+    });
+
+    expect(await loadPpvEmbeds(event, request as unknown as typeof fetch)).toEqual([]);
+    // DaddyLive has no approved embed origin, so it must never be requested.
+    expect(request.mock.calls.some(([url]) => String(url).includes('daddylive.app'))).toBe(false);
+  });
+
+  it('returns the backup result when the primary fails outright', async () => {
+    const request = vi.fn((url: string) => {
+      if (url.includes('/stream/')) return Promise.reject(new Error('streamed down'));
+      if (url.includes('sportsrc')) {
+        return Promise.resolve(
+          json({ success: true, data: { sources: [{ id: 'b1', embedUrl: 'https://embed.streamapi.cc/sport/b/' }] } }),
+        );
+      }
+      return Promise.resolve(json({}));
+    });
+
+    expect((await loadPpvEmbeds(event, request as unknown as typeof fetch)).map((e) => e.url)).toEqual([
+      'https://embed.streamapi.cc/sport/b/',
+    ]);
+    expect(request.mock.calls.some(([url]) => String(url).includes('daddylive.app'))).toBe(false);
   });
 
   it('aborts the request it timed out', async () => {
@@ -334,7 +330,6 @@ describe('PPV request timeouts and failover', () => {
     });
 
     const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
-    await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
     await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
     await pending;
     expect(signals.length).toBeGreaterThan(0);

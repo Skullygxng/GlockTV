@@ -26,22 +26,17 @@ export const PPV_IFRAME_ALLOW = 'autoplay; fullscreen; encrypted-media; picture-
  * Exact embed hosts returned by the currently supported provider adapters.
  * No wildcards: adding an embed host is a deliberate, reviewed change.
  *
- *   streamed  -> embed.st            (Streamed stream rows)
- *   sportsrc  -> embed.streamapi.cc  (SportSRC detail sources)
- *   daddylive -> no confirmed embed host, see PPV_UNCONFIRMED_PROVIDERS
+ *   streamed -> embed.st            (Streamed stream rows)
+ *   sportsrc -> embed.streamapi.cc  (SportSRC detail sources)
  *
- * Provider API origins (streamed.pk, api.sportsrc.org, daddylive.app) are
- * intentionally absent: they serve JSON, not embeds.
+ * Provider API origins (streamed.pk, api.sportsrc.org) are intentionally
+ * absent: they serve JSON, not embeds.
+ *
+ * DaddyLive is not currently supported because no approved embed origin is
+ * configured. Supporting it again means adding its verified embed host here
+ * and restoring a discovery path for it; nothing requests it today.
  */
 export const PPV_EMBED_HOSTS: readonly string[] = ['embed.st', 'embed.streamapi.cc'];
-
-/*
- * The DaddyLive last-resort fallback returns channel URLs whose host is not
- * evidenced anywhere in this repository. Rather than guess a host and
- * allowlist it, that provider currently yields no embeds. Add its real embed
- * host(s) to PPV_EMBED_HOSTS to re-enable it.
- */
-export const PPV_UNCONFIRMED_PROVIDERS: readonly string[] = ['daddylive'];
 
 const PRIVATE_IPV4 =
   /^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;

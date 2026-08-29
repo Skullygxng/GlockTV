@@ -2,7 +2,7 @@ import { isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
 
 export type PpvCategory = 'boxing' | 'mma' | 'wrestling' | 'other';
 export type PpvStatus = 'upcoming' | 'live' | 'ended';
-export type PpvProviderId = 'streamed' | 'sportsrc' | 'daddylive';
+export type PpvProviderId = 'streamed' | 'sportsrc';
 
 export interface PpvEmbed {
   provider: PpvProviderId;
@@ -35,7 +35,6 @@ export interface PpvCatalog {
 
 export const STREAMED_API = 'https://streamed.pk';
 export const SPORTSRC_API = 'https://api.sportsrc.org';
-export const DADDYLIVE_EVENTS_API = 'https://daddylive.app/api/events';
 
 const STALE_BEFORE_MS = 12 * 60 * 60 * 1000;
 const LIVE_WINDOW_BEFORE_MS = 15 * 60 * 1000;
@@ -383,93 +382,14 @@ async function loadSportSrcEmbeds(event: PpvEvent, request: FetchLike): Promise<
   }
 }
 
-function normalizeTitle(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 /*
- * Promotion and card words are shared by every event a promotion runs, so they
- * can never establish identity on their own.
- */
-const PPV_GENERIC_TOKENS = new Set([
-  'fight', 'fights', 'night', 'live', 'stream', 'streams', 'event', 'events',
-  'boxing', 'ufc', 'wwe', 'aew', 'mma', 'ppv', 'main', 'card', 'prelims',
-  'early', 'preliminary', 'wrestling', 'championship', 'title', 'round',
-  'full', 'show', 'raw', 'smackdown', 'the', 'and', 'vs',
-]);
-
-export function ppvIdentityTokens(value: string): string[] {
-  return normalizeTitle(value)
-    .split(' ')
-    .filter((token) => token.length >= 3 && !PPV_GENERIC_TOKENS.has(token));
-}
-
-/*
- * A wrong stream is worse than no stream, so the fallback only claims a match
- * on event-specific evidence: both named participants, or several specific
- * title tokens plus promotion agreement.
- */
-export function isLikelyPpvEventMatch(event: PpvEvent, candidateTitle: string): boolean {
-  const candidate = normalizeTitle(candidateTitle);
-  if (!candidate) return false;
-  const candidateTokens = new Set(ppvIdentityTokens(candidateTitle));
-  if (!candidateTokens.size) return false;
-
-  const participants = (event.participants ?? [])
-    .map((name) => ppvIdentityTokens(name))
-    .filter((tokens) => tokens.length);
-
-  // Named fighters are the strongest signal, and order does not matter.
-  if (participants.length >= 2) {
-    return participants.every((tokens) => tokens.some((token) => candidateTokens.has(token)));
-  }
-
-  const shared = ppvIdentityTokens(event.title).filter((token) => candidateTokens.has(token));
-  if (shared.length < 2) return false;
-
-  const promotion = event.promotion?.toLowerCase();
-  if (promotion && !candidate.includes(promotion)) return false;
-  return true;
-}
-
-async function loadDaddyLiveEmbeds(event: PpvEvent, request: FetchLike): Promise<PpvEmbed[]> {
-  try {
-    const payload = (await fetchJson(DADDYLIVE_EVENTS_API, request)) as {
-      categories?: Record<string, { event?: string; channels?: { channel_name?: string; url?: string }[] }[]>;
-    };
-    const categories = payload.categories ?? {};
-    const embeds: PpvEmbed[] = [];
-    for (const rows of Object.values(categories)) {
-      if (!Array.isArray(rows)) continue;
-      for (const row of rows) {
-        const title = asString(row.event);
-        if (!isLikelyPpvEventMatch(event, title)) continue;
-        for (const channel of row.channels ?? []) {
-          const url = asString(channel.url);
-          if (!isHostedEmbedUrl(url)) continue;
-          embeds.push({
-            provider: 'daddylive',
-            id: asString(channel.channel_name) || undefined,
-            source: 'daddylive',
-            url,
-          });
-        }
-      }
-    }
-    return embeds;
-  } catch {
-    return [];
-  }
-}
-
-/*
- * Primary and backup discovery run together and are individually bounded, so a
- * slow Streamed lookup can no longer stop SportSRC from ever being attempted.
- * Every call settles into success, empty, timeout or failure.
+ * Streamed and SportSRC are the only embed discovery paths. They run together
+ * and are individually bounded, so a slow Streamed lookup cannot stop SportSRC
+ * from being attempted, and an empty result costs one provider window rather
+ * than two. Every call settles into success, empty, timeout or failure.
+ *
+ * DaddyLive is not currently supported because no approved embed origin is
+ * configured, so it is not requested at all.
  */
 export async function loadPpvEmbeds(event: PpvEvent, request: FetchLike = fetch): Promise<PpvEmbed[]> {
   const [streamed, sportsrc] = await Promise.all([
@@ -477,9 +397,7 @@ export async function loadPpvEmbeds(event: PpvEvent, request: FetchLike = fetch)
     loadSportSrcEmbeds(event, request).catch(() => [] as PpvEmbed[]),
   ]);
 
-  const embeds = mergePpvEmbeds([...streamed, ...sportsrc]);
-  if (embeds.length) return embeds;
-  return mergePpvEmbeds(await loadDaddyLiveEmbeds(event, request));
+  return mergePpvEmbeds([...streamed, ...sportsrc]);
 }
 
 export function formatPpvStart(startsAt: string): string {

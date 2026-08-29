@@ -1,4 +1,13 @@
-import { isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
+import { inspectPpvEmbedUrl, isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
+import {
+  PPV_CROSS_PROVIDER_ID_NOTE,
+  emptyEventDiagnostics,
+  emptyProviderDiagnostics,
+  type PpvCatalogDiagnostics,
+  type PpvEventDiagnostics,
+  type PpvProviderDiagnostics,
+  type PpvRequestStatus,
+} from './ppvDiagnostics';
 
 export type PpvCategory = 'boxing' | 'mma' | 'wrestling' | 'other';
 export type PpvStatus = 'upcoming' | 'live' | 'ended';
@@ -31,6 +40,8 @@ export interface PpvCatalog {
   events: PpvEvent[];
   source: 'streamed';
   loadedAt: string;
+  /* Sanitized counts only; see ppvDiagnostics. */
+  diagnostics?: PpvCatalogDiagnostics;
 }
 
 export const STREAMED_API = 'https://streamed.pk';
@@ -182,6 +193,13 @@ export function mergePpvEmbeds(embeds: PpvEmbed[]): PpvEmbed[] {
 export const PPV_REQUEST_TIMEOUT_MS = 8000;
 export const PPV_CATALOG_TIMEOUT_MS = 10000;
 
+export class PpvHttpError extends Error {
+  constructor(readonly httpStatus: number) {
+    super(`Request failed (${httpStatus})`);
+    this.name = 'PpvHttpError';
+  }
+}
+
 export class PpvTimeoutError extends Error {
   constructor(url: string) {
     super(`PPV request timed out: ${url}`);
@@ -209,10 +227,69 @@ async function fetchJson(url: string, request: FetchLike, timeoutMs = PPV_REQUES
       request(url, { headers: { Accept: 'application/json' }, signal: controller.signal }),
       deadline,
     ]);
-    if (!response.ok) throw new Error(`Request failed (${response.status})`);
+    if (!response.ok) throw new PpvHttpError(response.status);
     return await Promise.race([response.json(), deadline]);
   } finally {
     if (timer) clearTimeout(timer);
+  }
+}
+
+export type PpvRequestOutcome =
+  | { status: 'success'; data: unknown }
+  | { status: 'http_error'; httpStatus: number }
+  | { status: 'timeout' }
+  | { status: 'network_or_cors_error' }
+  | { status: 'malformed' };
+
+/*
+ * A browser fetch rejection is not proof of CORS specifically - it can also be
+ * DNS, TLS or offline - so it is reported as network_or_cors_error rather than
+ * being asserted as one cause.
+ */
+export function classifyPpvRequestError(reason: unknown): Exclude<PpvRequestOutcome, { status: 'success' }> {
+  if (reason instanceof PpvTimeoutError) return { status: 'timeout' };
+  if (reason instanceof PpvHttpError) return { status: 'http_error', httpStatus: reason.httpStatus };
+  if (reason instanceof SyntaxError) return { status: 'malformed' };
+  return { status: 'network_or_cors_error' };
+}
+
+export function ppvOutcomeStatus(outcome: PpvRequestOutcome): PpvRequestStatus {
+  return outcome.status;
+}
+
+async function requestJson(
+  url: string,
+  request: FetchLike,
+  timeoutMs = PPV_REQUEST_TIMEOUT_MS,
+): Promise<PpvRequestOutcome> {
+  try {
+    return { status: 'success', data: await fetchJson(url, request, timeoutMs) };
+  } catch (reason) {
+    return classifyPpvRequestError(reason);
+  }
+}
+
+function recordFailure(diagnostics: PpvProviderDiagnostics, outcome: PpvRequestOutcome): void {
+  if (outcome.status === 'timeout') diagnostics.timeoutCount += 1;
+  else if (outcome.status === 'network_or_cors_error') diagnostics.networkErrorCount += 1;
+  else if (outcome.status === 'malformed') diagnostics.malformedResponseCount += 1;
+  else if (outcome.status === 'http_error') {
+    diagnostics.httpErrorCount += 1;
+    if (!diagnostics.httpStatuses.includes(outcome.httpStatus)) {
+      diagnostics.httpStatuses.push(outcome.httpStatus);
+    }
+  }
+}
+
+/* Records hostname and reason only - never the path or query. */
+function recordRejection(diagnostics: PpvProviderDiagnostics, url: string): void {
+  const inspection = inspectPpvEmbedUrl(url);
+  diagnostics.rejectedEmbedCount += 1;
+  if (inspection.hostname && !diagnostics.rejectedHosts.includes(inspection.hostname)) {
+    diagnostics.rejectedHosts.push(inspection.hostname);
+  }
+  if (!diagnostics.rejectionReasons.includes(inspection.reason)) {
+    diagnostics.rejectionReasons.push(inspection.reason);
   }
 }
 
@@ -270,6 +347,7 @@ export function mergeStreamedMatches(base: StreamedMatch, next: StreamedMatch): 
 }
 
 export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCatalog> {
+  const startedAt = Date.now();
   const [fight, live, today] = await Promise.all([
     fetchJson(`${STREAMED_API}/api/matches/fight`, request, PPV_CATALOG_TIMEOUT_MS),
     fetchJson(`${STREAMED_API}/api/matches/live`, request, PPV_CATALOG_TIMEOUT_MS).catch(() => []),
@@ -307,6 +385,17 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
     events,
     source: 'streamed',
     loadedAt: new Date().toISOString(),
+    diagnostics: {
+      stage: 'catalog',
+      startedAt,
+      completedAt: Date.now(),
+      status: events.length ? 'success' : 'empty_success',
+      httpStatus: null,
+      fightRows: asMatchList(fight).length,
+      liveRows: liveMatches.length,
+      todayRows: asMatchList(today).length,
+      normalizedEvents: events.length,
+    },
   };
 }
 
@@ -331,9 +420,16 @@ function mapStreamedStreams(rows: unknown, fallbackSource?: string): PpvEmbed[] 
 
 /*
  * Each source is bounded and settled independently: one hung or failing source
- * must never discard the sources that did answer.
+ * must never discard the sources that did answer. Per-source outcomes are
+ * recorded so a real-device run can tell "every request failed" apart from
+ * "requests succeeded but were empty" and "embeds returned but policy refused
+ * them".
  */
-async function loadStreamedEmbeds(event: PpvEvent, request: FetchLike): Promise<PpvEmbed[]> {
+async function loadStreamedEmbeds(
+  event: PpvEvent,
+  request: FetchLike,
+  diagnostics: PpvProviderDiagnostics,
+): Promise<PpvEmbed[]> {
   const seenRefs = new Set<string>();
   const refs = event.sourceRefs.filter((ref) => {
     const key = `${ref.source}|${ref.id}`.toLowerCase();
@@ -342,44 +438,112 @@ async function loadStreamedEmbeds(event: PpvEvent, request: FetchLike): Promise<
     return true;
   });
 
-  const results = await Promise.allSettled(
+  diagnostics.requestCount = refs.length;
+
+  const results = await Promise.all(
     refs.map(async (ref) => {
-      const rows = await fetchJson(
+      const outcome = await requestJson(
         `${STREAMED_API}/api/stream/${encodeURIComponent(ref.source)}/${encodeURIComponent(ref.id)}`,
         request,
       );
-      return mapStreamedStreams(rows, ref.source);
+      if (outcome.status !== 'success') {
+        recordFailure(diagnostics, outcome);
+        return [] as PpvEmbed[];
+      }
+
+      diagnostics.completedRequests += 1;
+      if (!Array.isArray(outcome.data)) {
+        diagnostics.malformedResponseCount += 1;
+        return [] as PpvEmbed[];
+      }
+
+      diagnostics.returnedSourceCount += outcome.data.length;
+      const accepted: PpvEmbed[] = [];
+      for (const row of outcome.data) {
+        const url = asString((row as StreamedStream)?.embedUrl);
+        if (!url) {
+          diagnostics.malformedRowCount += 1;
+          continue;
+        }
+        if (!isHostedEmbedUrl(url)) {
+          recordRejection(diagnostics, url);
+          continue;
+        }
+        accepted.push(...mapStreamedStreams([row], ref.source));
+      }
+      diagnostics.acceptedEmbedCount += accepted.length;
+      return accepted;
     }),
   );
 
-  return results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+  return results.flat();
 }
 
-async function loadSportSrcEmbeds(event: PpvEvent, request: FetchLike): Promise<PpvEmbed[]> {
-  try {
-    const payload = (await fetchJson(
-      `${SPORTSRC_API}/?data=detail&category=fight&id=${encodeURIComponent(event.providerEventId)}`,
-      request,
-    )) as { success?: boolean; data?: { sources?: StreamedStream[] } };
-    const sources = payload?.data?.sources;
-    if (!Array.isArray(sources)) return [];
-    return sources.flatMap((stream) => {
-      const url = asString(stream.embedUrl);
-      if (!isHostedEmbedUrl(url)) return [];
-      return [
-        {
-          provider: 'sportsrc' as const,
-          id: asString(stream.id) || undefined,
-          source: asString(stream.source) || undefined,
-          language: asString(stream.language) || undefined,
-          hd: typeof stream.hd === 'boolean' ? stream.hd : undefined,
-          url,
-        },
-      ];
-    });
-  } catch {
+const SPORTSRC_CATEGORY = 'fight';
+
+/*
+ * Behaviour is unchanged: this still sends the Streamed event identifier. That
+ * assumption is recorded in diagnostics rather than acted on, because provider
+ * ID equivalence has never been established.
+ */
+async function loadSportSrcEmbeds(
+  event: PpvEvent,
+  request: FetchLike,
+  diagnostics: PpvProviderDiagnostics,
+): Promise<PpvEmbed[]> {
+  diagnostics.requestCount = 1;
+  diagnostics.requestedCategory = SPORTSRC_CATEGORY;
+  diagnostics.crossProviderIdAssumption = true;
+  diagnostics.crossProviderIdNote = PPV_CROSS_PROVIDER_ID_NOTE;
+  diagnostics.responseSuccessFlag = null;
+  diagnostics.hasData = false;
+  diagnostics.hasSources = false;
+
+  const outcome = await requestJson(
+    `${SPORTSRC_API}/?data=detail&category=${SPORTSRC_CATEGORY}&id=${encodeURIComponent(event.providerEventId)}`,
+    request,
+  );
+  if (outcome.status !== 'success') {
+    recordFailure(diagnostics, outcome);
     return [];
   }
+
+  diagnostics.completedRequests = 1;
+  const payload = outcome.data as { success?: boolean; data?: { sources?: StreamedStream[] } } | null;
+  diagnostics.responseSuccessFlag = typeof payload?.success === 'boolean' ? payload.success : null;
+  diagnostics.hasData = Boolean(payload?.data);
+
+  const sources = payload?.data?.sources;
+  if (!Array.isArray(sources)) {
+    diagnostics.malformedResponseCount += 1;
+    return [];
+  }
+
+  diagnostics.hasSources = true;
+  diagnostics.returnedSourceCount = sources.length;
+
+  const accepted: PpvEmbed[] = [];
+  for (const stream of sources) {
+    const url = asString(stream?.embedUrl);
+    if (!url) {
+      diagnostics.malformedRowCount += 1;
+      continue;
+    }
+    if (!isHostedEmbedUrl(url)) {
+      recordRejection(diagnostics, url);
+      continue;
+    }
+    accepted.push({
+      provider: 'sportsrc' as const,
+      id: asString(stream.id) || undefined,
+      source: asString(stream.source) || undefined,
+      language: asString(stream.language) || undefined,
+      hd: typeof stream.hd === 'boolean' ? stream.hd : undefined,
+      url,
+    });
+  }
+  diagnostics.acceptedEmbedCount = accepted.length;
+  return accepted;
 }
 
 /*
@@ -391,13 +555,52 @@ async function loadSportSrcEmbeds(event: PpvEvent, request: FetchLike): Promise<
  * DaddyLive is not currently supported because no approved embed origin is
  * configured, so it is not requested at all.
  */
-export async function loadPpvEmbeds(event: PpvEvent, request: FetchLike = fetch): Promise<PpvEmbed[]> {
+export interface PpvEmbedDiscovery {
+  embeds: PpvEmbed[];
+  diagnostics: PpvEventDiagnostics;
+}
+
+function finalStateFor(diagnostics: PpvEventDiagnostics): PpvEventDiagnostics['finalState'] {
+  if (diagnostics.acceptedEmbedCount > 0) return 'playable_candidate';
+  const providers = [diagnostics.streamed, diagnostics.sportsrc];
+  if (providers.some((entry) => entry.rejectedEmbedCount > 0)) return 'policy_rejected';
+  if (providers.some((entry) => entry.malformedResponseCount > 0 || entry.malformedRowCount > 0)) {
+    return 'malformed';
+  }
+  if (providers.every((entry) => entry.requestCount > 0 && entry.completedRequests === 0)) {
+    return providers.some((entry) => entry.timeoutCount > 0) ? 'timeout' : 'provider_failure';
+  }
+  if (providers.some((entry) => entry.timeoutCount > 0)) return 'timeout';
+  if (providers.some((entry) => entry.httpErrorCount > 0 || entry.networkErrorCount > 0)) {
+    return 'provider_failure';
+  }
+  return 'unavailable';
+}
+
+/*
+ * Same request behaviour as loadPpvEmbeds, but returns the sanitized runtime
+ * diagnostics alongside the embeds so a single real-device run can show where
+ * an event actually failed.
+ */
+export async function discoverPpvEmbeds(
+  event: PpvEvent,
+  request: FetchLike = fetch,
+): Promise<PpvEmbedDiscovery> {
+  const diagnostics = emptyEventDiagnostics(event.providerEventId);
+
   const [streamed, sportsrc] = await Promise.all([
-    loadStreamedEmbeds(event, request).catch(() => [] as PpvEmbed[]),
-    loadSportSrcEmbeds(event, request).catch(() => [] as PpvEmbed[]),
+    loadStreamedEmbeds(event, request, diagnostics.streamed).catch(() => [] as PpvEmbed[]),
+    loadSportSrcEmbeds(event, request, diagnostics.sportsrc).catch(() => [] as PpvEmbed[]),
   ]);
 
-  return mergePpvEmbeds([...streamed, ...sportsrc]);
+  const embeds = mergePpvEmbeds([...streamed, ...sportsrc]);
+  diagnostics.acceptedEmbedCount = embeds.length;
+  diagnostics.finalState = finalStateFor(diagnostics);
+  return { embeds, diagnostics };
+}
+
+export async function loadPpvEmbeds(event: PpvEvent, request: FetchLike = fetch): Promise<PpvEmbed[]> {
+  return (await discoverPpvEmbeds(event, request)).embeds;
 }
 
 export function formatPpvStart(startsAt: string): string {

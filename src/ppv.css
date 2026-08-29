@@ -73,3 +73,73 @@
   font-weight:700;
   cursor:pointer;
 }
+
+/* Runtime diagnostics panel: only rendered with ?ppvdebug=1. */
+.ppv-diag{
+  border-top:1px solid #2b2334;
+  padding:10px 12px 12px;
+  background:#0b0a0e;
+  display:grid;
+  gap:10px;
+  font-size:9px;
+  color:#cfc7db;
+}
+.ppv-diag>header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  flex-wrap:wrap;
+}
+.ppv-diag>header strong{color:#f2ebff;font-size:10px;letter-spacing:.04em}
+.ppv-diag>header button{
+  border:1px solid #4a3a5e;
+  border-radius:7px;
+  background:#1a1424;
+  color:#e6dcf5;
+  padding:6px 9px;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  font-size:8px;
+  font-weight:700;
+  cursor:pointer;
+}
+.ppv-diag>header button svg{width:12px}
+.ppv-diag__group{
+  border:1px solid #241d2e;
+  border-radius:8px;
+  padding:8px 9px;
+  background:#100e15;
+  min-width:0;
+}
+.ppv-diag__group h4{
+  margin:0 0 6px;
+  color:#b871ff;
+  font-size:8px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+}
+.ppv-diag__row{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:10px;
+  padding:2px 0;
+  min-width:0;
+}
+.ppv-diag__row span{color:#8e879b;flex:0 0 auto}
+.ppv-diag__row strong{
+  color:#efe9f8;
+  font-weight:700;
+  text-align:right;
+  min-width:0;
+  overflow-wrap:anywhere;
+}
+.ppv-diag__warn{
+  margin:6px 0 0;
+  color:#e0a33c;
+  font-size:8px;
+  line-height:1.45;
+  overflow-wrap:anywhere;
+}

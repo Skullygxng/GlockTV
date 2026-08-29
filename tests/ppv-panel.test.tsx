@@ -80,7 +80,7 @@ describe('Live tab Channels | PPV', () => {
 });
 
 describe('PPV panel', () => {
-  it('renders catalog events and opens a hosted embed', async () => {
+  it('renders catalog events and mounts a hosted embed iframe', async () => {
     render(<PpvPanel loadCatalog={async () => catalog} />);
 
     expect(
@@ -458,5 +458,92 @@ describe('PPV catalog freshness', () => {
     await act(async () => {
       resolveSecond?.(catalog);
     });
+  });
+});
+
+
+describe('PPV iframe runtime trace and debug mode', () => {
+  const traced: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'traced-event',
+    title: 'Traced Event',
+    category: 'mma',
+    startsAt: '2026-08-29T22:00:00.000Z',
+    status: 'live',
+    sourceRefs: [],
+    embeds: [{ provider: 'streamed', source: 'delta', url: 'https://embed.st/embed/delta/traced/1?token=SECRET' }],
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  function panel(): HTMLElement {
+    return screen.getByLabelText('PPV runtime diagnostics');
+  }
+
+  it('is hidden unless debug mode is on', () => {
+    render(<PpvPlayer event={traced} debug={false} />);
+    expect(screen.queryByLabelText('PPV runtime diagnostics')).not.toBeInTheDocument();
+  });
+
+  it('records the iframe hostname only, never the full URL', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const text = panel().textContent ?? '';
+    expect(text).toContain('embed.st');
+    expect(text).not.toContain('https://');
+    expect(text).not.toContain('token');
+    expect(text).not.toContain('SECRET');
+  });
+
+  it('does not claim playback before a document load event', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/document load event\s*no/i);
+    // The wording must never assert that video is playing.
+    expect(text).not.toMatch(/playback_success|playback works|playing/i);
+    expect(text).toMatch(/not proof of playback/i);
+  });
+
+  it('records the document load event when the frame fires onLoad', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const frame = document.querySelector('iframe') as HTMLIFrameElement;
+    fireEvent.load(frame);
+    expect(panel().textContent ?? '').toMatch(/document load event\s*yes/i);
+  });
+
+  it('clears the previous iframe trace when the event changes', () => {
+    const other: PpvEvent = {
+      ...traced,
+      providerEventId: 'other-event',
+      title: 'Other Event',
+      embeds: [{ provider: 'sportsrc', source: 'echo', url: 'https://embed.streamapi.cc/sport/other/' }],
+    };
+
+    const view = render(<PpvPlayer event={traced} debug />);
+    fireEvent.load(document.querySelector('iframe') as HTMLIFrameElement);
+    expect(panel().textContent ?? '').toMatch(/document load event\s*yes/i);
+
+    view.rerender(<PpvPlayer event={other} debug />);
+    const text = panel().textContent ?? '';
+    expect(text).toContain('embed.streamapi.cc');
+    expect(text).not.toContain('embed.st/');
+    expect(text).toMatch(/document load event\s*no/i);
+  });
+
+  it('copies a sanitized payload with no complete URLs', () => {
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    try {
+      render(<PpvPlayer event={traced} debug />);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+      expect(writeText).toHaveBeenCalledTimes(1);
+      const payload = writeText.mock.calls[0][0];
+      expect(payload).not.toContain('https://');
+      expect(payload).not.toContain('http://');
+      expect(payload).not.toContain('SECRET');
+      expect(payload).not.toContain('token=');
+      expect(payload).toContain('embed.st');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

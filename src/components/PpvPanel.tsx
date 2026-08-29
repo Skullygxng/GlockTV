@@ -11,6 +11,7 @@ import {
   type PpvStatus,
 } from '../lib/ppv';
 import { PpvPlayer } from './PpvPlayer';
+import { isPpvDebugEnabled } from '../lib/ppvDiagnostics';
 import '../ppv.css';
 
 interface PpvPanelProps {
@@ -21,6 +22,8 @@ interface PpvPanelProps {
    * in here rather than in Live TV's channel state.
    */
   onWatchingChange?: (watching: boolean) => void;
+  /* Off by default; enabled per-session with ?ppvdebug=1. */
+  debug?: boolean;
 }
 
 /* Countdown ticks once a minute; the catalog itself refreshes far less often. */
@@ -46,7 +49,7 @@ function freshStatus(event: PpvEvent, now: number): PpvStatus {
   return derivePpvStatus(startsAt, now);
 }
 
-export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: PpvPanelProps) {
+export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug }: PpvPanelProps) {
   const [catalog, setCatalog] = useState<PpvCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -150,7 +153,7 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange }: Ppv
     <div className="live-tv-layout" aria-label="PPV events">
       <section className="live-tv-content">
         {selected ? (
-          <PpvPlayer event={{ ...selected, status: freshStatus(selected, now) }} />
+          <PpvPlayer event={{ ...selected, status: freshStatus(selected, now) }} debug={debug ?? isPpvDebugEnabled()} />
         ) : (
           <div className="live-player live-player--idle" aria-label="No PPV event selected">
             <div className="live-player__video live-player__video--idle">

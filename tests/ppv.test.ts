@@ -113,6 +113,17 @@ describe('PPV playback URL safety', () => {
 });
 
 describe('PPV catalog fetch', () => {
+  /*
+   * The fixture dates are fixed points, and status derivation uses the real
+   * clock, so this pins system time. Without it the test passes only until the
+   * fixtures age past the live window and then fails permanently.
+   */
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(now));
+  });
+  afterEach(() => vi.useRealTimers());
+
   it('loads fight events from Streamed-shaped JSON and ignores non-combat today rows', async () => {
     const request = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

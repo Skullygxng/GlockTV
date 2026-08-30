@@ -44,6 +44,30 @@ function client(overrides: Partial<TmdbClient> = {}): TmdbClient {
   };
 }
 
+/* jsdom has no matchMedia; tests opt into the mobile breakpoint explicitly. */
+function stubBreakpoint(mobile: boolean) {
+  const listeners = new Set<() => void>();
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    // A getter, so a stored MediaQueryList reflects later breakpoint changes
+    // the way a real one does.
+    get matches() {
+      return mobile && query.includes('700px');
+    },
+    media: query,
+    addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+    removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+  return {
+    set(next: boolean) {
+      mobile = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
 function searchBox(): HTMLElement {
   return screen.getByRole('combobox', { name: 'Search' });
 }
@@ -53,7 +77,10 @@ async function ready() {
 }
 
 describe('Discover as-you-type search suggestions', () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 
   it('suggests matching titles while typing, without submitting', async () => {
     const api = client();
@@ -234,6 +261,7 @@ describe('Discover as-you-type search suggestions', () => {
   });
 
   it('mounts only one suggestion list when the mobile search bar is open', async () => {
+    stubBreakpoint(true);
     render(<App client={client()} />);
     await ready();
 
@@ -262,5 +290,221 @@ describe('Discover as-you-type search suggestions', () => {
     );
     expect(screen.queryByText('Search is unavailable right now.')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Heat' })).toBeInTheDocument();
+  });
+});
+
+
+describe('Discover search suggestion hardening', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('drops results of a previous query the moment the query changes', async () => {
+    let resolveSpider: ((value: MediaItem[]) => void) | undefined;
+    let call = 0;
+    const search = vi.fn(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve(spiderResults);
+      return new Promise<MediaItem[]>((resolve) => { resolveSpider = resolve; });
+    });
+    render(<App client={client({ search: search as never })} />);
+    await ready();
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider' } });
+    await screen.findAllByRole('option');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await waitFor(() => expect(input).toHaveAttribute('aria-activedescendant'));
+
+    // Typing a new query must retire the old results immediately, before the
+    // debounce for the new one has even started.
+    fireEvent.change(input, { target: { value: 'batman' } });
+
+    expect(screen.queryByText('Spider-Man: No Way Home')).not.toBeInTheDocument();
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+
+    // Enter must not resurrect the retired highlight.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(screen.queryByRole('heading', { name: 'Spider-Man' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Heat' })).toBeInTheDocument();
+
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolveSpider?.([media(42, 'Batman Begins')]);
+    });
+    expect(await screen.findByText('Batman Begins')).toBeInTheDocument();
+  });
+
+  it('keeps suggestion options out of the tab order', async () => {
+    render(<App client={client()} />);
+    await ready();
+
+    fireEvent.change(searchBox(), { target: { value: 'spider man' } });
+    const options = await screen.findAllByRole('option');
+
+    for (const option of options) {
+      expect(option).toHaveAttribute('tabindex', '-1');
+    }
+  });
+
+  it('closes the popup on Tab without swallowing the keypress', async () => {
+    render(<App client={client()} />);
+    await ready();
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    await screen.findAllByRole('option');
+
+    const tab = fireEvent.keyDown(input, { key: 'Tab' });
+    // Not prevented, so the browser still moves focus onward.
+    expect(tab).toBe(true);
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('hands popup ownership to the desktop bar when the viewport leaves mobile', async () => {
+    const breakpoint = stubBreakpoint(true);
+    render(<App client={client()} />);
+    await ready();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Search titles' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search movies and TV shows' }), {
+      target: { value: 'spider man' },
+    });
+    await screen.findAllByRole('option');
+    expect(screen.getAllByRole('listbox', { name: 'Search suggestions' })).toHaveLength(1);
+    expect(screen.getByRole('listbox', { name: 'Search suggestions' })).toHaveAttribute(
+      'id',
+      'search-suggestions-mobile',
+    );
+
+    // Rotate to a wide viewport: the mobile bar is gone and the visible
+    // desktop combobox must own the popup rather than being suppressed.
+    await act(async () => {
+      breakpoint.set(false);
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('combobox', { name: 'Search movies and TV shows' }),
+      ).not.toBeInTheDocument(),
+    );
+    const lists = screen.getAllByRole('listbox', { name: 'Search suggestions' });
+    expect(lists).toHaveLength(1);
+    expect(lists[0]).toHaveAttribute('id', 'search-suggestions-desktop');
+    expect(searchBox()).toHaveAttribute('aria-controls', 'search-suggestions-desktop');
+  });
+
+  it('cancels a scheduled lookup when the query is submitted first', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = client();
+    render(<App client={api} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    // Submit inside the debounce window.
+    fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+
+    // The scheduled autocomplete request must never reach the provider.
+    expect(api.search).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes on Escape while the popup is still loading', async () => {
+    let resolveSearch: ((value: MediaItem[]) => void) | undefined;
+    const search = vi.fn(() => new Promise<MediaItem[]>((resolve) => { resolveSearch = resolve; }));
+    render(<App client={client({ search: search as never })} />);
+    await ready();
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    expect(await screen.findByText('Searching...')).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument(),
+    );
+
+    // The abandoned response must not reopen the popup.
+    await act(async () => {
+      resolveSearch?.(spiderResults);
+    });
+    expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Heat' })).toBeInTheDocument();
+  });
+
+  it('restores suggestions on refocus of an unchanged query', async () => {
+    const api = client();
+    render(<App client={api} />);
+    await ready();
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    await screen.findAllByRole('option');
+    expect(api.search).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument(),
+    );
+
+    fireEvent.focus(input);
+
+    // Served from cache: the same query costs no extra provider traffic.
+    expect(await screen.findByText('Spider-Man: No Way Home')).toBeInTheDocument();
+    expect(api.search).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches once on refocus when the dismissal cancelled the lookup', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = client();
+    render(<App client={api} />);
+    await screen.findByRole('heading', { name: 'Heat' });
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    expect(api.search).not.toHaveBeenCalled();
+
+    fireEvent.focus(input);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+
+    expect(api.search).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('Spider-Man: No Way Home')).toBeInTheDocument();
+  });
+
+  it('exposes a truthful combobox contract', async () => {
+    render(<App client={client()} />);
+    await ready();
+
+    const input = searchBox();
+    expect(input).toHaveAttribute('aria-expanded', 'false');
+    expect(input).not.toHaveAttribute('aria-controls');
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    await screen.findAllByRole('option');
+
+    expect(input).toHaveAttribute('aria-expanded', 'true');
+    expect(input).toHaveAttribute('aria-controls', 'search-suggestions-desktop');
+    expect(input).not.toHaveAttribute('aria-activedescendant');
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await waitFor(() => {
+      const target = input.getAttribute('aria-activedescendant');
+      expect(target).toBeTruthy();
+      expect(document.getElementById(target as string)).toBeInTheDocument();
+    });
   });
 });

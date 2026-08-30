@@ -43,6 +43,9 @@ export function SearchSuggestions({
             key={`${item.mediaType}:${item.id}`}
             id={optionId(id, index)}
             type="button"
+            // activedescendant model: the input keeps focus, so options must
+            // stay out of the Tab order.
+            tabIndex={-1}
             role="option"
             aria-selected={index === activeIndex}
             className={index === activeIndex ? 'active' : ''}

@@ -1,5 +1,5 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
 import type { TmdbClient } from '../src/lib/tmdb';
@@ -30,6 +30,8 @@ const fakeClient: TmdbClient = {
 };
 
 describe('GlockTV app', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it('loads a discovery feed and exposes the mockup-defined controls', async () => {
     render(<App client={fakeClient} />);
 
@@ -64,6 +66,18 @@ describe('GlockTV app', () => {
   });
 
   it('lets mobile viewers search titles from the discovery controls', async () => {
+    // The app asks matchMedia which bar owns the screen, and jsdom does not
+    // implement it, so this mobile-only flow has to declare its viewport.
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('700px'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
+
     const exactMatch = { ...item, id: 1399, mediaType: 'tv' as const, title: 'Game of Thrones' };
     vi.mocked(fakeClient.search).mockResolvedValueOnce([
       { ...item, id: 94997, mediaType: 'tv' as const, title: 'House of the Dragon' },

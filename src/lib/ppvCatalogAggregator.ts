@@ -30,6 +30,8 @@ import {
   type PpvCatalogProviderId,
   type PpvRequestStatus,
 } from './ppvDiagnostics';
+import { isAllowedOfficialWatchUrl } from './ppvOfficialWatch';
+import { mergePpvPlaybackSources } from './ppvProviders';
 import {
   settleCatalogProvider,
   type PpvCatalogProvider,
@@ -210,6 +212,49 @@ interface CacheEntry {
   events: PpvEvent[];
 }
 
+/*
+ * Cached events are JSON that left our control. They are re-validated on the
+ * way back in rather than trusted: anything that reaches an href or a src has
+ * to pass the same policy it passed the first time, and a row missing the
+ * fields the UI reads is dropped instead of rendered half-formed.
+ */
+function sanitizeCachedEvent(value: unknown): PpvEvent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Partial<PpvEvent>;
+  if (typeof row.providerEventId !== 'string' || !row.providerEventId) return null;
+  if (typeof row.title !== 'string' || !row.title) return null;
+  if (typeof row.startsAt !== 'string' || !Number.isFinite(Date.parse(row.startsAt))) return null;
+  if (row.status !== 'live' && row.status !== 'upcoming' && row.status !== 'ended') return null;
+  if (
+    row.category !== 'mma' &&
+    row.category !== 'boxing' &&
+    row.category !== 'wrestling' &&
+    row.category !== 'other'
+  ) {
+    return null;
+  }
+
+  const poster = typeof row.poster === 'string' && row.poster.startsWith('https://')
+    ? row.poster
+    : undefined;
+  const official =
+    typeof row.officialWatchUrl === 'string' && isAllowedOfficialWatchUrl(row.officialWatchUrl)
+      ? row.officialWatchUrl
+      : undefined;
+
+  return {
+    ...(row as PpvEvent),
+    provider: row.provider ?? 'streamed',
+    sourceRefs: Array.isArray(row.sourceRefs) ? row.sourceRefs : [],
+    embeds: [],
+    playbackSources: mergePpvPlaybackSources(
+      Array.isArray(row.playbackSources) ? row.playbackSources : [],
+    ),
+    poster,
+    officialWatchUrl: official,
+  };
+}
+
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
 function defaultStorage(): StorageLike | null {
@@ -254,7 +299,9 @@ export function readPpvCatalogCache(
     entry = null;
   }
   const savedAt = typeof entry?.savedAt === 'number' ? entry.savedAt : NaN;
-  const events = Array.isArray(entry?.events) ? entry.events : null;
+  const events = Array.isArray(entry?.events)
+    ? entry.events.map(sanitizeCachedEvent).filter((row): row is PpvEvent => Boolean(row))
+    : null;
   const ageMs = now - savedAt;
   if (!events || !Number.isFinite(savedAt) || ageMs < 0 || ageMs > PPV_CATALOG_CACHE_MAX_AGE_MS) {
     try {

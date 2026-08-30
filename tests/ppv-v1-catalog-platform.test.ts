@@ -249,6 +249,49 @@ describe('C-E. total catalog failure', () => {
     expect(catalog.events).toHaveLength(1);
   });
 
+  it('re-validates cached events on the way back in', () => {
+    const storage = memoryStorage();
+    const now = Date.now();
+    storage.setItem(
+      PPV_CATALOG_CACHE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        events: [
+          /* Tampered destinations must not survive a round trip. */
+          {
+            ...event(),
+            poster: 'javascript:alert(1)',
+            officialWatchUrl: 'https://evil.example/steal',
+            embeds: [{ provider: 'streamed', url: 'https://evil.example/frame' }],
+            playbackSources: [
+              { providerId: 'youtube', label: 'x', kind: 'authorized_embed', url: 'https://evil.example/x' },
+            ],
+          },
+          /* Rows missing what the UI reads are dropped, not half-rendered. */
+          { providerEventId: 'no-title', startsAt: new Date(SOON).toISOString() },
+          { ...event({ providerEventId: 'bad-date' }), startsAt: 'whenever' },
+          null,
+        ],
+      }),
+    );
+
+    const cached = readPpvCatalogCache(now, storage);
+    expect(cached?.events).toHaveLength(1);
+    expect(cached?.events[0].poster).toBeUndefined();
+    expect(cached?.events[0].officialWatchUrl).toBeUndefined();
+    expect(cached?.events[0].embeds).toEqual([]);
+    expect(cached?.events[0].playbackSources).toEqual([]);
+  });
+
+  it('keeps a legitimate official destination through a cache round trip', () => {
+    const storage = memoryStorage();
+    const now = Date.now();
+    writePpvCatalogCache([event({ officialWatchUrl: 'https://www.ufc.com/events' })], now, storage);
+    expect(readPpvCatalogCache(now, storage)?.events[0].officialWatchUrl).toBe(
+      'https://www.ufc.com/events',
+    );
+  });
+
   it('rejects a corrupt cache entry instead of rendering it', () => {
     const storage = memoryStorage();
     storage.setItem(PPV_CATALOG_CACHE_KEY, '{not json');

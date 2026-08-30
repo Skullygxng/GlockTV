@@ -170,3 +170,20 @@
   overscroll-behavior:contain;
   -webkit-overflow-scrolling:touch;
 }
+/* Shown only when an event has no inline source but does have a validated
+   official destination. Opening it is always a user action. */
+.ppv-player__official{
+  margin-top:8px;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  border:1px solid #4a3a5e;
+  border-radius:999px;
+  background:#1a1424;
+  color:#e6dcf5;
+  padding:7px 14px;
+  font-size:9px;
+  font-weight:700;
+  letter-spacing:.04em;
+  text-decoration:none;
+}

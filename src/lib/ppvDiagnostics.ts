@@ -9,7 +9,25 @@
  * or copied.
  */
 
-export type PpvDiagnosticStage = 'catalog' | 'streamed' | 'sportsrc' | 'policy' | 'iframe';
+export type PpvDiagnosticStage =
+  | 'catalog'
+  | 'catalog_provider'
+  | 'streamed'
+  | 'sportsrc'
+  | 'youtube'
+  | 'twitch'
+  | 'policy'
+  | 'iframe'
+  | 'failover';
+
+/*
+ * Catalog and playback are separate provider populations with separate failure
+ * modes. A catalog provider answering "no events" says nothing about whether a
+ * stream can be played, and a playback provider failing says nothing about
+ * whether the event exists - so they never share an identifier space.
+ */
+export type PpvCatalogProviderId = 'streamed' | 'thesportsdb';
+export type PpvPlaybackProviderId = 'streamed' | 'sportsrc' | 'youtube' | 'twitch';
 
 export type PpvCatalogFeed = 'fight' | 'live' | 'today';
 
@@ -24,6 +42,12 @@ export type PpvCatalogFeed = 'fight' | 'live' | 'today';
 export interface PpvEventCatalogProvenance {
   feeds: PpvCatalogFeed[];
   upstreamCategories: string[];
+  /*
+   * Which catalog providers contributed this event. Set by the aggregator, so
+   * a single-provider load leaves it absent rather than asserting a merge that
+   * never happened.
+   */
+  providers?: PpvCatalogProviderId[];
 }
 
 /*
@@ -43,7 +67,10 @@ export function sanitizeUpstreamCategory(value: unknown): string {
  * A backup provider we never had a native identity for was not requested at
  * all. That is not a provider failure and must never be reported as one.
  */
-export type PpvProviderLookupState = 'not_attempted_unmapped' | 'attempted';
+export type PpvProviderLookupState =
+  | 'not_attempted_unmapped'
+  | 'not_attempted_unsupported'
+  | 'attempted';
 
 export type PpvRequestStatus =
   | 'success'
@@ -62,6 +89,46 @@ export interface PpvCatalogEndpointDiagnostics {
   status: PpvRequestStatus;
   httpStatus: number | null;
   rowCount: number;
+  /* Short enum-ish label for the endpoint, never a URL. */
+  name?: string;
+}
+
+/*
+ * One entry per catalog provider. The aggregator needs to be able to say
+ * "thesportsdb answered, streamed did not" - a single overall status cannot,
+ * and that ambiguity is what made a total PPV failure unreadable.
+ */
+export interface PpvCatalogProviderDiagnostics {
+  stage: 'catalog_provider';
+  providerId: PpvCatalogProviderId;
+  status: PpvRequestStatus;
+  endpoints: PpvCatalogEndpointDiagnostics[];
+  requestCount: number;
+  completedRequests: number;
+  httpStatuses: number[];
+  /* Rows the provider returned, before combat-only admission. */
+  returnedRowCount: number;
+  admittedEvents: number;
+  rejectedNonCombat: number;
+  malformedRowCount: number;
+}
+
+export function emptyCatalogProviderDiagnostics(
+  providerId: PpvCatalogProviderId,
+): PpvCatalogProviderDiagnostics {
+  return {
+    stage: 'catalog_provider',
+    providerId,
+    status: 'empty_success',
+    endpoints: [],
+    requestCount: 0,
+    completedRequests: 0,
+    httpStatuses: [],
+    returnedRowCount: 0,
+    admittedEvents: 0,
+    rejectedNonCombat: 0,
+    malformedRowCount: 0,
+  };
 }
 
 export interface PpvCatalogDiagnostics {
@@ -73,10 +140,22 @@ export interface PpvCatalogDiagnostics {
   today: PpvCatalogEndpointDiagnostics;
   normalizedEvents: number;
   overallStatus: PpvRequestStatus;
+  /*
+   * Aggregate fields. Optional so a single-provider load (loadPpvCatalog) can
+   * keep reporting exactly what it always did; the aggregator fills them in.
+   */
+  providers?: PpvCatalogProviderDiagnostics[];
+  contributingProviders?: PpvCatalogProviderId[];
+  failedProviders?: PpvCatalogProviderId[];
+  mergedDuplicates?: number;
+  /* True when nothing on the network answered and a cached catalog was used. */
+  fromCache?: boolean;
+  stale?: boolean;
+  cacheAgeMs?: number | null;
 }
 
 export interface PpvProviderDiagnostics {
-  stage: 'streamed' | 'sportsrc';
+  stage: PpvPlaybackProviderId;
   provider: string;
   requestCount: number;
   completedRequests: number;
@@ -113,6 +192,12 @@ export interface PpvProviderDiagnostics {
 
 export type PpvEventFinalState =
   | 'playable_candidate'
+  /*
+   * No inline source resolved, but the event carries a validated official
+   * provider link. That is a real outcome, not an error - it must never be
+   * reported as an embed failure.
+   */
+  | 'official_only'
   | 'unavailable'
   | 'provider_failure'
   | 'policy_rejected'
@@ -123,9 +208,59 @@ export interface PpvEventDiagnostics {
   eventId: string;
   acceptedEmbedCount: number;
   finalState: PpvEventFinalState;
+  /* The two original providers, kept as named fields for existing callers. */
   streamed: PpvProviderDiagnostics;
   sportsrc: PpvProviderDiagnostics;
+  /*
+   * Every playback provider that was consulted, in registry order. streamed
+   * and sportsrc appear here too - they are the same objects, not copies - so
+   * the registry can grow without the panel needing a new named field each
+   * time.
+   */
+  providers?: PpvProviderDiagnostics[];
+  officialWatchAvailable?: boolean;
 }
+
+/*
+ * Why the player moved off a source. Only signals a cross-origin frame can
+ * actually produce: an error event, the absence of any load event inside the
+ * deadline, or an explicit user action. Nothing here is a playback signal.
+ */
+export type PpvAdvanceReason =
+  | 'iframe_error_event'
+  | 'no_load_event_within_deadline'
+  | 'user_requested';
+
+export interface PpvSourceAttemptDiagnostics {
+  index: number;
+  providerId: string;
+  /* Hostname only. */
+  hostname: string;
+  documentLoaded: boolean;
+  advanced: boolean;
+  advanceReason: PpvAdvanceReason | null;
+}
+
+export interface PpvFailoverDiagnostics {
+  stage: 'failover';
+  sourceCount: number;
+  currentIndex: number;
+  attempts: PpvSourceAttemptDiagnostics[];
+  /* Every source has been mounted once and none produced a load event. */
+  exhausted: boolean;
+}
+
+export function emptyFailoverDiagnostics(): PpvFailoverDiagnostics {
+  return { stage: 'failover', sourceCount: 0, currentIndex: 0, attempts: [], exhausted: false };
+}
+
+/*
+ * How long a source is given to produce a document load event before the
+ * player moves on. Long enough for a slow mobile network to answer, short
+ * enough that a dead source does not strand the viewer. Absence of a load
+ * event is the only load failure a cross-origin frame reliably exposes.
+ */
+export const PPV_SOURCE_LOAD_DEADLINE_MS = 12_000;
 
 /*
  * A cross-origin iframe load event only proves the frame document loaded. It
@@ -139,6 +274,8 @@ export interface PpvIframeDiagnostics {
   mountedAt: number | null;
   loadEventAt: number | null;
   iframeDocumentLoaded: boolean;
+  /* The frame fired an error event. Still not a playback signal either way. */
+  loadErrorEvent: boolean;
   presentAfterProbe: boolean | null;
   unmountedBeforeProbe: boolean;
 }
@@ -146,7 +283,7 @@ export interface PpvIframeDiagnostics {
 export const PPV_IFRAME_PROBE_MS = 5000;
 
 export function emptyProviderDiagnostics(
-  stage: 'streamed' | 'sportsrc',
+  stage: PpvPlaybackProviderId,
   provider: string,
 ): PpvProviderDiagnostics {
   return {
@@ -169,12 +306,14 @@ export function emptyProviderDiagnostics(
 }
 
 export function emptyEventDiagnostics(eventId: string): PpvEventDiagnostics {
+  const streamed = emptyProviderDiagnostics('streamed', 'streamed');
+  const sportsrc = emptyProviderDiagnostics('sportsrc', 'sportsrc');
   return {
     eventId,
     acceptedEmbedCount: 0,
     finalState: 'unavailable',
-    streamed: emptyProviderDiagnostics('streamed', 'streamed'),
-    sportsrc: emptyProviderDiagnostics('sportsrc', 'sportsrc'),
+    streamed,
+    sportsrc,
   };
 }
 
@@ -186,6 +325,7 @@ export function emptyIframeDiagnostics(): PpvIframeDiagnostics {
     mountedAt: null,
     loadEventAt: null,
     iframeDocumentLoaded: false,
+    loadErrorEvent: false,
     presentAfterProbe: null,
     unmountedBeforeProbe: false,
   };

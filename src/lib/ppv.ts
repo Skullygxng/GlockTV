@@ -3,6 +3,7 @@ import {
   emptyEventDiagnostics,
   emptyProviderDiagnostics,
   sanitizeUpstreamCategory,
+  type PpvCatalogProviderId,
   type PpvCatalogFeed,
   type PpvEventCatalogProvenance,
   type PpvCatalogDiagnostics,
@@ -14,7 +15,12 @@ import {
 
 export type PpvCategory = 'boxing' | 'mma' | 'wrestling' | 'other';
 export type PpvStatus = 'upcoming' | 'live' | 'ended';
-export type PpvProviderId = 'streamed' | 'sportsrc';
+/*
+ * Every provider that can appear on an event, catalog or playback. Kept as one
+ * union because PpvEmbed.provider and PpvEvent.provider predate the split and
+ * are read by existing callers.
+ */
+export type PpvProviderId = 'streamed' | 'sportsrc' | 'thesportsdb' | 'youtube' | 'twitch';
 
 export interface PpvEmbed {
   provider: PpvProviderId;
@@ -34,6 +40,29 @@ export interface PpvEmbed {
 export interface PpvEventProviderRefs {
   streamed?: { eventId: string };
   sportsrc?: { eventId: string; category?: string };
+  thesportsdb?: { eventId: string; leagueId?: string };
+  /* Set only when a catalog provider supplied a documented video identifier. */
+  youtube?: { videoId: string };
+  twitch?: { channel: string };
+}
+
+/*
+ * A playback source after normalization. The player never sees provider
+ * response shapes: it sees this, in registry order, and is agnostic to which
+ * resolver produced any entry.
+ *
+ *   hosted_embed     - a third-party hosted player from a stream provider
+ *   authorized_embed - a documented first-party embed (YouTube, Twitch)
+ */
+export interface PpvPlaybackSource {
+  providerId: PpvProviderId;
+  /* Human-readable label for the source selector. Never a URL. */
+  label: string;
+  kind: 'hosted_embed' | 'authorized_embed';
+  url: string;
+  sourceName?: string;
+  language?: string;
+  hd?: boolean;
 }
 
 export interface PpvEvent {
@@ -52,11 +81,27 @@ export interface PpvEvent {
   poster?: string;
   sourceRefs: { source: string; id: string }[];
   embeds: PpvEmbed[];
+  /*
+   * Inline sources already known at catalog time. Almost always empty: sources
+   * are resolved on demand. An event with zero playback sources is a complete,
+   * displayable event - never an error - which is the whole point of keeping
+   * the catalog and the playback registry apart.
+   */
+  playbackSources?: PpvPlaybackSource[];
+  /*
+   * Validated HTTPS link to where the event can be watched legitimately. Set
+   * only from the official-watch allowlist; see ppvOfficialWatch.
+   */
+  officialWatchUrl?: string;
 }
 
 export interface PpvCatalog {
   events: PpvEvent[];
-  source: 'streamed';
+  /*
+   * Which catalog provider produced this result. 'aggregate' means more than
+   * one provider was consulted; the per-provider breakdown is in diagnostics.
+   */
+  source: PpvCatalogProviderId | 'aggregate';
   loadedAt: string;
   /* Sanitized counts only; see ppvDiagnostics. */
   diagnostics?: PpvCatalogDiagnostics;
@@ -119,6 +164,95 @@ export function classifyPpvCategory(title: string, id = ''): PpvCategory {
     return 'mma';
   }
   return 'other';
+}
+
+/*
+ * Combat-only admission.
+ *
+ * Upstream category labels that are unambiguously combat sports. A provider
+ * saying so is accepted at face value: that is the provider's own
+ * classification of its own row.
+ */
+const COMBAT_CATEGORY_LABELS = new Set([
+  'fight',
+  'fighting',
+  'fights',
+  'mma',
+  'ufc',
+  'boxing',
+  'wrestling',
+  'combat sports',
+  'martial arts',
+]);
+
+/*
+ * Upstream labels that are unambiguously not combat sports. A title-derived
+ * guess never overrides one of these: a title is provider free text, the
+ * category is provider structured data, and trusting the free text over the
+ * structured field is how a college-football card reached a fight list.
+ */
+const NON_COMBAT_CATEGORY_LABELS = new Set([
+  'football',
+  'american football',
+  'american-football',
+  'soccer',
+  'basketball',
+  'baseball',
+  'hockey',
+  'ice hockey',
+  'tennis',
+  'golf',
+  'cricket',
+  'rugby',
+  'motor sports',
+  'motorsport',
+  'racing',
+  'darts',
+  'billiards',
+  'afl',
+  'nfl',
+  'nba',
+  'mlb',
+  'nhl',
+  'other',
+]);
+
+/*
+ * Combat evidence in a title, beyond the promotion names classifyPpvCategory
+ * knows. Deliberately excludes the bare token "ppv": every provider uses it as
+ * a generic pay-per-view marker across all sports, so an id or title carrying
+ * it is not evidence of a fight. Admitting on it is precisely why a football
+ * event with a ppv- prefixed id was appearing in the PPV list.
+ */
+const COMBAT_TITLE_TERMS =
+  /\b(fight night|fight card|title fight|prizefight|boxing|kickboxing|muay thai|bare ?knuckle|grappling|jiu ?jitsu|mma|wrestling|championship boxing|undisputed|middleweight|heavyweight|welterweight|lightweight|featherweight|bantamweight|flyweight|cruiserweight|catchweight)\b/i;
+
+export function isCombatCategoryLabel(value: unknown): boolean {
+  const label = sanitizeUpstreamCategory(value);
+  return Boolean(label) && COMBAT_CATEGORY_LABELS.has(label);
+}
+
+export function isNonCombatCategoryLabel(value: unknown): boolean {
+  const label = sanitizeUpstreamCategory(value);
+  return Boolean(label) && NON_COMBAT_CATEGORY_LABELS.has(label);
+}
+
+/* Title-only. Identifiers are provider slugs, not descriptions of the event. */
+export function hasCombatTitleEvidence(title: string): boolean {
+  if (!title) return false;
+  return classifyPpvCategory(title) !== 'other' || COMBAT_TITLE_TERMS.test(title);
+}
+
+/*
+ * The single admission gate every catalog provider normalizes through. A row
+ * is admitted when the provider itself calls it a combat sport, or when the
+ * title carries combat evidence and the provider has not called it something
+ * else.
+ */
+export function isCombatPpvRow(title: string, upstreamCategory: unknown): boolean {
+  if (isCombatCategoryLabel(upstreamCategory)) return true;
+  if (isNonCombatCategoryLabel(upstreamCategory)) return false;
+  return hasCombatTitleEvidence(title);
 }
 
 export function inferPromotion(title: string): string | undefined {
@@ -280,7 +414,12 @@ export function ppvOutcomeStatus(outcome: PpvRequestOutcome): PpvRequestStatus {
   return outcome.status;
 }
 
-async function requestJson(
+/*
+ * Shared by every provider adapter so they all classify failures identically:
+ * a provider that reports its own timeouts differently is a provider whose
+ * diagnostics cannot be compared with the others'.
+ */
+export async function requestJson(
   url: string,
   request: FetchLike,
   timeoutMs = PPV_REQUEST_TIMEOUT_MS,
@@ -453,10 +592,11 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
   const merged = new Map<string, StreamedMatch>();
 
   /*
-   * Admission is unchanged from production. Narrowing it needs evidence about
-   * which feed actually introduces a wrongly-admitted event, and the row counts
-   * reported so far cannot answer that - so this pass records provenance and
-   * changes no behaviour.
+   * Admission runs through the shared combat-only gate, the same one every
+   * catalog provider uses. It is narrower than the rule this feed shipped with:
+   * a bare "ppv" token in an id or title is no longer combat evidence, and an
+   * explicit non-combat upstream category is no longer overridable by a title
+   * guess. Provider-declared combat categories are unchanged.
    */
   const provenance = new Map<string, PpvEventCatalogProvenance>();
   const feeds: Array<[PpvCatalogFeed, StreamedMatch[]]> = [
@@ -473,11 +613,7 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
       const title = asString(match?.title);
       if (!id || !title) continue;
       const category = asString(match?.category);
-      const combat =
-        category === 'fight' ||
-        classifyPpvCategory(title, id) !== 'other' ||
-        /\bppv\b|fight/i.test(`${id} ${title}`);
-      if (!combat) continue;
+      if (!isCombatPpvRow(title, category)) continue;
 
       // Only a row that was actually admitted counts as having contributed.
       const trail = provenance.get(id) ?? { feeds: [], upstreamCategories: [] };
@@ -547,7 +683,7 @@ function mapStreamedStreams(rows: unknown, fallbackSource?: string): PpvEmbed[] 
  * "requests succeeded but were empty" and "embeds returned but policy refused
  * them".
  */
-async function loadStreamedEmbeds(
+export async function loadStreamedEmbeds(
   event: PpvEvent,
   request: FetchLike,
   diagnostics: PpvProviderDiagnostics,
@@ -610,7 +746,7 @@ const SPORTSRC_CATEGORY = 'fight';
  * to ask about, so no request is made and the diagnostics say so rather than
  * inventing a provider failure.
  */
-async function loadSportSrcEmbeds(
+export async function loadSportSrcEmbeds(
   event: PpvEvent,
   request: FetchLike,
   diagnostics: PpvProviderDiagnostics,

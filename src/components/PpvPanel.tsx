@@ -5,12 +5,12 @@ import {
   derivePpvStatus,
   formatPpvCountdown,
   formatPpvStart,
-  loadPpvCatalog,
   type PpvCatalog,
   type PpvCategory,
   type PpvEvent,
   type PpvStatus,
 } from '../lib/ppv';
+import { loadPpvPlatformCatalog } from '../lib/ppvCatalogAggregator';
 import { PpvPlayer } from './PpvPlayer';
 import { PpvDiagnosticsPanel } from './PpvDiagnosticsPanel';
 import {
@@ -21,7 +21,7 @@ import {
 import '../ppv.css';
 
 interface PpvPanelProps {
-  loadCatalog?: typeof loadPpvCatalog;
+  loadCatalog?: typeof loadPpvPlatformCatalog;
   /*
    * Lets Live TV know a PPV event is being watched. The mobile layout hides the
    * player column unless the stage is in watching mode, and PPV selection lives
@@ -65,7 +65,11 @@ function freshStatus(event: PpvEvent, now: number): PpvStatus {
   return derivePpvStatus(startsAt, now);
 }
 
-export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug }: PpvPanelProps) {
+export function PpvPanel({
+  loadCatalog = loadPpvPlatformCatalog,
+  onWatchingChange,
+  debug,
+}: PpvPanelProps) {
   const [catalog, setCatalog] = useState<PpvCatalog | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -169,7 +173,20 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
     [onWatchingChange],
   );
 
+  /*
+   * Two ways to be stale, and they read differently to the viewer: a refresh
+   * that failed over a catalog already on screen, and a catalog served from the
+   * local cache because no provider answered at all. Neither is an empty list.
+   */
+  const cacheAgeMinutes =
+    catalog?.diagnostics?.stale && catalog.diagnostics.cacheAgeMs != null
+      ? Math.max(1, Math.round(catalog.diagnostics.cacheAgeMs / 60_000))
+      : 0;
   const staleNotice = error && catalog ? error : '';
+  const cachedNotice =
+    !staleNotice && catalog?.diagnostics?.fromCache
+      ? `No catalog provider answered. Showing the cached list from ${cacheAgeMinutes}m ago.`
+      : '';
 
   return (
     <div className="live-tv-layout" aria-label="PPV events">
@@ -187,16 +204,16 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
                 <Swords />
                 <strong>Choose a PPV event</strong>
                 <span>
-                  Live and upcoming fight cards from Streamed. Hosted player availability varies by
-                  event.
+                  Live and upcoming fight cards. Hosted player availability varies by event; some
+                  events link to the official provider instead.
                 </span>
               </div>
             </div>
           </div>
         )}
         <div className="live-tv-disclaimer">
-          PPV listings come from Streamed.pk. Hosted player availability varies by event and can
-          change without notice. Existing Live TV channels are unchanged.
+          PPV listings come from TheSportsDB and Streamed.pk. Hosted player availability varies by
+          event and can change without notice. Existing Live TV channels are unchanged.
         </div>
       </section>
 
@@ -229,6 +246,15 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
           <div className="ppv-stale" role="status">
             <WifiOff />
             <span>Showing the last loaded fight cards. {staleNotice}</span>
+            <button type="button" onClick={() => refresh()}>
+              Retry
+            </button>
+          </div>
+        )}
+        {cachedNotice && (
+          <div className="ppv-stale" role="status">
+            <WifiOff />
+            <span>{cachedNotice}</span>
             <button type="button" onClick={() => refresh()}>
               Retry
             </button>

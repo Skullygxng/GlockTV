@@ -1,5 +1,5 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
 import type { TmdbClient } from '../src/lib/tmdb';
@@ -30,6 +30,8 @@ const fakeClient: TmdbClient = {
 };
 
 describe('GlockTV app', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   it('loads a discovery feed and exposes the mockup-defined controls', async () => {
     render(<App client={fakeClient} />);
 
@@ -64,6 +66,18 @@ describe('GlockTV app', () => {
   });
 
   it('lets mobile viewers search titles from the discovery controls', async () => {
+    // The app asks matchMedia which bar owns the screen, and jsdom does not
+    // implement it, so this mobile-only flow has to declare its viewport.
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('700px'),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
+
     const exactMatch = { ...item, id: 1399, mediaType: 'tv' as const, title: 'Game of Thrones' };
     vi.mocked(fakeClient.search).mockResolvedValueOnce([
       { ...item, id: 94997, mediaType: 'tv' as const, title: 'House of the Dragon' },
@@ -73,13 +87,15 @@ describe('GlockTV app', () => {
     await screen.findByRole('heading', { name: 'Heat' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Search titles' }));
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search movies and TV shows' }), {
+    // The input carries an as-you-type suggestion list, so its role is
+    // combobox rather than the bare searchbox it used to be.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search movies and TV shows' }), {
       target: { value: 'Game of Thrones' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Run search' }));
 
     await waitFor(() => expect(fakeClient.search).toHaveBeenCalledWith('Game of Thrones'));
-    expect(screen.queryByRole('searchbox', { name: 'Search movies and TV shows' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Search movies and TV shows' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Game of Thrones' })).toBeInTheDocument();
   });
 });

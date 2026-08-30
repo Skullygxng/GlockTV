@@ -1,4 +1,4 @@
-import { FormEvent, lazy, Suspense, type TouchEvent, type WheelEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { FormEvent, lazy, Suspense, type KeyboardEvent as ReactKeyboardEvent, type TouchEvent, type WheelEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clapperboard,
@@ -6,6 +6,7 @@ import {
   SlidersHorizontal, Sparkles, Star, Users, X, Zap,
 } from 'lucide-react';
 import { MediaCard } from './components/MediaCard';
+import { SearchSuggestions, optionId } from './components/SearchSuggestions';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { composeDiscoverFeed } from './lib/feed';
@@ -90,6 +91,11 @@ function LoadingState() {
   );
 }
 
+/* Two characters is the shortest query worth a provider round trip. */
+const SUGGEST_MIN_CHARS = 2;
+const SUGGEST_DEBOUNCE_MS = 250;
+const SUGGEST_LIMIT = 6;
+
 export function App({ client, partyService, playbackConfig, partyPlaybackConfig }: AppProps) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
@@ -118,6 +124,10 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<MediaItem[]>([]);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
+  const [suggestIndex, setSuggestIndex] = useState(-1);
   const [session, dispatch] = useReducer(sessionReducer, undefined, loadSession);
 
   const contextCache = useRef(new Map<string, TitleContext>());
@@ -125,6 +135,7 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   const previewCache = useRef(new Map<string, PreviewContext>());
   const previewRequests = useRef(new Map<string, Promise<PreviewContext>>());
   const feedRequestVersion = useRef(0);
+  const suggestVersion = useRef(0);
 const modalContextVersion = useRef(0);
 const touchStartY = useRef<number | null>(null);
 const wheelLockedUntil = useRef(0);
@@ -427,8 +438,101 @@ const wheelLockedUntil = useRef(0);
     void loadDiscovery(next, 'That vibe is taking a break. Try another.');
   };
 
+  const closeSuggestions = useCallback(() => {
+    // Bump the version so a request already in flight cannot reopen the list.
+    suggestVersion.current += 1;
+    setSuggestOpen(false);
+    setSuggestIndex(-1);
+    setSuggestions([]);
+    setSuggestLoading(false);
+  }, []);
+
+  /*
+   * As-you-type suggestions. Debounced so a fast typist costs one request
+   * rather than one per keystroke, and versioned so a slow earlier response
+   * can never replace the results for what is now in the box.
+   */
+  useEffect(() => {
+    const term = query.trim();
+    if (term.length < SUGGEST_MIN_CHARS) {
+      suggestVersion.current += 1;
+      setSuggestions([]);
+      setSuggestLoading(false);
+      setSuggestIndex(-1);
+      return;
+    }
+
+    const requestVersion = ++suggestVersion.current;
+    setSuggestLoading(true);
+
+    const timer = setTimeout(() => {
+      void api
+        .search(term)
+        .then((results) => {
+          if (requestVersion !== suggestVersion.current) return;
+          setSuggestions(results.slice(0, SUGGEST_LIMIT));
+          setSuggestIndex(-1);
+        })
+        .catch(() => {
+          if (requestVersion !== suggestVersion.current) return;
+          // A failed suggestion is not worth an error banner; the box just
+          // stays quiet and submitting still reports properly.
+          setSuggestions([]);
+        })
+        .finally(() => {
+          if (requestVersion === suggestVersion.current) setSuggestLoading(false);
+        });
+    }, SUGGEST_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [api, query]);
+
+  /* Show the picked title first, with the rest of its matches behind it. */
+  const pickSuggestion = (picked: MediaItem) => {
+    const rest = suggestions.filter(
+      (item) => !(item.id === picked.id && item.mediaType === picked.mediaType),
+    );
+
+    feedRequestVersion.current += 1;
+    setItems([picked, ...rest]);
+    setActiveIndex(0);
+    setView('discover');
+    setError('');
+    setLoading(false);
+    setMobileSearchOpen(false);
+    closeSuggestions();
+  };
+
+  const onSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (!suggestOpen || !suggestions.length) return;
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const step = event.key === 'ArrowDown' ? 1 : -1;
+      setSuggestIndex((current) => {
+        const next = current + step;
+        if (next < 0) return suggestions.length - 1;
+        if (next >= suggestions.length) return 0;
+        return next;
+      });
+      return;
+    }
+
+    if (event.key === 'Enter' && suggestIndex >= 0) {
+      event.preventDefault();
+      pickSuggestion(suggestions[suggestIndex]);
+      return;
+    }
+
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeSuggestions();
+    }
+  };
+
   const search = async (event: FormEvent) => {
     event.preventDefault();
+    closeSuggestions();
 
     const term = query.trim();
     if (!term) return;
@@ -502,10 +606,35 @@ const wheelLockedUntil = useRef(0);
           <Search size={17} />
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSuggestOpen(true);
+            }}
+            onFocus={() => setSuggestOpen(true)}
+            onBlur={() => setSuggestOpen(false)}
+            onKeyDown={onSearchKeyDown}
             placeholder="Search movies, shows, people..."
             aria-label="Search"
+            role="combobox"
+            aria-expanded={suggestOpen && (suggestLoading || suggestions.length > 0)}
+            aria-controls="search-suggestions-desktop"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              suggestIndex >= 0 ? optionId('search-suggestions-desktop', suggestIndex) : undefined
+            }
           />
+          {/* The topbar is display:none on phones, but a hidden duplicate list
+              still reaches assistive tech, so only one is ever mounted. */}
+          {suggestOpen && !mobileSearchOpen && (
+            <SearchSuggestions
+              id="search-suggestions-desktop"
+              items={suggestions}
+              loading={suggestLoading}
+              activeIndex={suggestIndex}
+              onPick={pickSuggestion}
+              onHover={setSuggestIndex}
+            />
+          )}
         </form>
 
         <button className="topbar__icon" aria-label="Notifications"><Bell size={18} /></button>
@@ -606,14 +735,43 @@ const wheelLockedUntil = useRef(0);
                     autoFocus
                     type="search"
                     value={query}
-                    onChange={(event) => setQuery(event.target.value)}
+                    onChange={(event) => {
+                      setQuery(event.target.value);
+                      setSuggestOpen(true);
+                    }}
+                    onFocus={() => setSuggestOpen(true)}
+                    onKeyDown={onSearchKeyDown}
                     placeholder="Search titles..."
                     aria-label="Search movies and TV shows"
+                    role="combobox"
+                    aria-expanded={suggestOpen && (suggestLoading || suggestions.length > 0)}
+                    aria-controls="search-suggestions-mobile"
+                    aria-autocomplete="list"
+                    aria-activedescendant={
+                      suggestIndex >= 0 ? optionId('search-suggestions-mobile', suggestIndex) : undefined
+                    }
                   />
                   <button type="submit" aria-label="Run search"><Search /></button>
-                  <button type="button" aria-label="Close search" onClick={() => setMobileSearchOpen(false)}>
+                  <button
+                    type="button"
+                    aria-label="Close search"
+                    onClick={() => {
+                      closeSuggestions();
+                      setMobileSearchOpen(false);
+                    }}
+                  >
                     <X />
                   </button>
+                  {suggestOpen && (
+                    <SearchSuggestions
+                      id="search-suggestions-mobile"
+                      items={suggestions}
+                      loading={suggestLoading}
+                      activeIndex={suggestIndex}
+                      onPick={pickSuggestion}
+                      onHover={setSuggestIndex}
+                    />
+                  )}
                 </form>
               ) : (
                 <>

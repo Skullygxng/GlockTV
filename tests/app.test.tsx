@@ -73,13 +73,15 @@ describe('GlockTV app', () => {
     await screen.findByRole('heading', { name: 'Heat' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Search titles' }));
-    fireEvent.change(screen.getByRole('searchbox', { name: 'Search movies and TV shows' }), {
+    // The input carries an as-you-type suggestion list, so its role is
+    // combobox rather than the bare searchbox it used to be.
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search movies and TV shows' }), {
       target: { value: 'Game of Thrones' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Run search' }));
 
     await waitFor(() => expect(fakeClient.search).toHaveBeenCalledWith('Game of Thrones'));
-    expect(screen.queryByRole('searchbox', { name: 'Search movies and TV shows' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Search movies and TV shows' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Game of Thrones' })).toBeInTheDocument();
   });
 });

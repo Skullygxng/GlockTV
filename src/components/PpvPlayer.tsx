@@ -47,10 +47,28 @@ interface PpvPlayerProps {
 const UNAVAILABLE_HINT = 'No compatible hosted player was returned.';
 /*
  * Zero inline sources is a normal outcome, not a failure: most fight cards are
- * simply not available as a hosted embed. When we can name where the event is
- * legitimately watchable, that is what the viewer is told.
+ * simply not available as a hosted embed. What the viewer is told depends on
+ * what we actually know. A watch destination is somewhere a provider says the
+ * event can be watched; an information page is the promotion's own page and is
+ * never described as a way to watch.
  */
-const OFFICIAL_HINT = 'No inline source for this event. It can be watched at the official provider.';
+const OFFICIAL_WATCH_HINT =
+  'No inline source for this event. It can be watched at the official provider.';
+const OFFICIAL_INFO_HINT =
+  'No inline source for this event. The official page has the event details.';
+/*
+ * Every source was mounted and none produced a document load event. That is a
+ * load failure, and it is all it is: a cross-origin frame cannot tell us
+ * whether video would have played, so the wording never says it did not.
+ */
+const EXHAUSTED_TITLE = 'No source loaded';
+const EXHAUSTED_HINT = 'None of the available sources could be loaded.';
+
+function zeroSourceHint(event: PpvEvent): string {
+  if (event.officialWatchUrl) return OFFICIAL_WATCH_HINT;
+  if (event.officialInfoUrl) return OFFICIAL_INFO_HINT;
+  return UNAVAILABLE_HINT;
+}
 
 function inlineSourcesFor(event: PpvEvent): PpvPlaybackSource[] {
   return mergePpvPlaybackSources([
@@ -77,6 +95,7 @@ export function PpvPlayer({
 
   const debugEnabled = debug ?? isPpvDebugEnabled();
   const officialWatchUrl = event.officialWatchUrl ?? '';
+  const officialInfoUrl = event.officialInfoUrl ?? '';
 
   /*
    * Resolution order: an explicit registry, then the legacy discovery props,
@@ -127,14 +146,12 @@ export function PpvPlayer({
           setDiagnostics(result.diagnostics);
           setIndex(0);
           setFailover({ ...emptyFailoverDiagnostics(), sourceCount: result.sources.length });
-          if (!result.sources.length) {
-            setError(target.officialWatchUrl ? OFFICIAL_HINT : UNAVAILABLE_HINT);
-          }
+          if (!result.sources.length) setError(zeroSourceHint(target));
         })
         .catch(() => {
           if (generation.current !== ticket) return;
           setSources([]);
-          setError(target.officialWatchUrl ? OFFICIAL_HINT : UNAVAILABLE_HINT);
+          setError(zeroSourceHint(target));
         })
         .finally(() => {
           if (generation.current !== ticket) return;
@@ -305,14 +322,40 @@ export function PpvPlayer({
     setIndex((current) => (current + 1) % sources.length);
   };
 
-  const showOfficial = !source && !loading && Boolean(officialWatchUrl);
+  /*
+   * Exhaustion is a user-visible state, not a diagnostics-only flag. Leaving
+   * the last failed frame mounted told the viewer nothing at all, which made
+   * the claim that they are told when sources run out simply untrue.
+   */
+  const exhausted = failover.exhausted && sources.length > 0;
+  const idle = !source || exhausted;
+  const showWatch = idle && !loading && Boolean(officialWatchUrl);
+  const showInfo = idle && !loading && !showWatch && Boolean(officialInfoUrl);
+
+  const retrySources = () => runLoad(eventRef.current);
+
+  const idleTitle = loading
+    ? 'Loading hosted embed'
+    : exhausted
+      ? EXHAUSTED_TITLE
+      : showWatch
+        ? 'Watch on official provider'
+        : showInfo
+          ? 'Official event information'
+          : 'Embed unavailable';
+
+  const idleHint = loading
+    ? 'Looking for a hosted player.'
+    : exhausted
+      ? EXHAUSTED_HINT
+      : error;
 
   return (
     <div className="live-player" aria-label="PPV player">
       {/* One aspect-ratio viewport. Loading, official-provider and unavailable
           states render inside it rather than creating a second 16:9 box. */}
-      <div className={`live-player__video${source ? '' : ' live-player__video--idle'}`}>
-        {source ? (
+      <div className={`live-player__video${idle ? ' live-player__video--idle' : ''}`}>
+        {!idle && source ? (
           <iframe
             key={source.url}
             ref={frameRef}
@@ -340,25 +383,43 @@ export function PpvPlayer({
           />
         ) : (
           <div className="live-player__idle-message">
-            {loading ? <LoaderCircle className="spin" /> : showOfficial ? <ExternalLink /> : <Tv />}
-            <strong>
-              {loading
-                ? 'Loading hosted embed'
-                : showOfficial
-                  ? 'Watch on official provider'
-                  : 'Embed unavailable'}
-            </strong>
-            <span>{loading ? 'Looking for a hosted player.' : error}</span>
-            {showOfficial && (
-              <a
-                className="ppv-player__official"
-                href={officialWatchUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Open official provider
-              </a>
+            {loading ? (
+              <LoaderCircle className="spin" />
+            ) : showWatch || showInfo ? (
+              <ExternalLink />
+            ) : (
+              <Tv />
             )}
+            <strong>{idleTitle}</strong>
+            <span>{idleHint}</span>
+            <div className="ppv-player__idle-actions">
+              {exhausted && (
+                <button type="button" onClick={retrySources} aria-label="Retry PPV sources">
+                  <RotateCw />
+                  Retry sources
+                </button>
+              )}
+              {showWatch && (
+                <a
+                  className="ppv-player__official"
+                  href={officialWatchUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open official provider
+                </a>
+              )}
+              {showInfo && (
+                <a
+                  className="ppv-player__official"
+                  href={officialInfoUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open official page
+                </a>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -397,6 +458,7 @@ export function PpvPlayer({
           eventId={event.providerEventId}
           provenance={event.catalogProvenance ?? null}
           officialWatchAvailable={Boolean(officialWatchUrl)}
+          officialInfoAvailable={Boolean(officialInfoUrl)}
           sourceIndex={sources.length ? index + 1 : 0}
           sourceCount={sources.length}
         />

@@ -217,7 +217,7 @@ export interface PpvPlaybackResult {
  */
 export function finalPlaybackState(
   diagnostics: PpvEventDiagnostics,
-  officialWatchAvailable: boolean,
+  official: { watch: boolean; info: boolean },
 ): PpvEventDiagnostics['finalState'] {
   if (diagnostics.acceptedEmbedCount > 0) return 'playable_candidate';
   const providers = diagnostics.providers ?? [diagnostics.streamed, diagnostics.sportsrc];
@@ -230,8 +230,13 @@ export function finalPlaybackState(
   if (attempted.some((entry) => entry.httpErrorCount > 0 || entry.networkErrorCount > 0)) {
     return 'provider_failure';
   }
-  /* Nothing inline, but a validated official destination is a real outcome. */
-  if (officialWatchAvailable) return 'official_only';
+  /*
+   * Nothing inline, but a validated official destination is a real outcome.
+   * A watch destination and an information page are reported separately: only
+   * the first means the event can actually be watched there.
+   */
+  if (official.watch) return 'official_only';
+  if (official.info) return 'official_info_only';
   return 'unavailable';
 }
 
@@ -241,7 +246,10 @@ export async function resolvePpvPlayback(
   providers: readonly PpvPlaybackProvider[] = PPV_PLAYBACK_PROVIDERS,
 ): Promise<PpvPlaybackResult> {
   const diagnostics = emptyEventDiagnostics(event.providerEventId);
-  const officialWatchAvailable = Boolean(event.officialWatchUrl);
+  const official = {
+    watch: Boolean(event.officialWatchUrl),
+    info: Boolean(event.officialInfoUrl),
+  };
 
   const resolutions = await Promise.all(
     providers.map(async (provider) => {
@@ -267,7 +275,8 @@ export async function resolvePpvPlayback(
     ...resolutions.flatMap((entry) => entry.sources),
   ]);
   diagnostics.acceptedEmbedCount = sources.length;
-  diagnostics.officialWatchAvailable = officialWatchAvailable;
-  diagnostics.finalState = finalPlaybackState(diagnostics, officialWatchAvailable);
+  diagnostics.officialWatchAvailable = official.watch;
+  diagnostics.officialInfoAvailable = official.info;
+  diagnostics.finalState = finalPlaybackState(diagnostics, official);
   return { sources, diagnostics };
 }

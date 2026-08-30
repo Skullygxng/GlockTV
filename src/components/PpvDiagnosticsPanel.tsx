@@ -28,6 +28,7 @@ interface PpvDiagnosticsPanelProps {
   eventId?: string;
   provenance?: PpvEventCatalogProvenance | null;
   officialWatchAvailable?: boolean;
+  officialInfoAvailable?: boolean;
   sourceIndex?: number;
   sourceCount?: number;
 }
@@ -70,6 +71,7 @@ function CatalogProviderRows({ provider }: { provider: PpvCatalogProviderDiagnos
     <div className="ppv-diag__group">
       <h4>Catalog · {provider.providerId}</h4>
       <Row label="status" value={provider.status} />
+      <Row label="coverage" value={provider.coverage} />
       <Row label="requests" value={provider.requestCount} />
       <Row label="completed" value={provider.completedRequests} />
       <Row label="http statuses" value={provider.httpStatuses.join(', ') || 'none'} />
@@ -123,6 +125,7 @@ export function PpvDiagnosticsPanel({
   eventId,
   provenance,
   officialWatchAvailable,
+  officialInfoAvailable,
   sourceIndex = 0,
   sourceCount = 0,
 }: PpvDiagnosticsPanelProps) {
@@ -149,6 +152,7 @@ export function PpvDiagnosticsPanel({
       iframe: iframe ?? null,
       failover: failover ?? null,
       officialWatchAvailable: officialWatchAvailable ?? false,
+      officialInfoAvailable: officialInfoAvailable ?? false,
       sourceIndex,
       sourceCount,
     });
@@ -196,6 +200,7 @@ export function PpvDiagnosticsPanel({
             />
             <Row label="providers failed" value={(catalog.failedProviders ?? []).join(', ') || 'none'} />
             <Row label="merged duplicates" value={catalog.mergedDuplicates ?? 0} />
+            <Row label="partial coverage" value={catalog.partialCoverage ?? false} />
             <Row label="served from cache" value={catalog.fromCache ?? false} />
             <Row label="stale" value={catalog.stale ?? false} />
             <Row
@@ -225,8 +230,12 @@ export function PpvDiagnosticsPanel({
             <Row label="final state" value={event?.finalState ?? 'pending'} />
             <Row label="accepted embeds" value={event?.acceptedEmbedCount ?? 0} />
             <Row
-              label="official provider link"
+              label="official watch link"
               value={officialWatchAvailable ?? event?.officialWatchAvailable ?? false}
+            />
+            <Row
+              label="official info link"
+              value={officialInfoAvailable ?? event?.officialInfoAvailable ?? false}
             />
             <Row
               label="catalog providers"

@@ -15,6 +15,19 @@
  * URL discloses the viewer's IP and user agent to that host, and the existing
  * poster pass-through is already a known open item; this provider does not add
  * a second one.
+ *
+ * Also deliberately not read: strVideo. TheSportsDB documents that field as
+ * YouTube *highlights* for an event - a recap, not a live stream. Turning it
+ * into a playback source would offer a viewer a highlight reel as the way to
+ * watch a fight that has not happened yet. Nothing here infers live playback
+ * from a highlight field, a generic YouTube link, or a search result.
+ *
+ * Coverage caveat: the free Schedule Day endpoint caps how many events a
+ * single day query returns (the free tier's per-request result limit, which is
+ * a separate thing from its 30-requests-per-minute rate limit). PPV V1's
+ * catalog completeness from this provider is therefore bounded by that cap and
+ * has to be validated against real data on a real device. No paid tier is used
+ * and the cap is not worked around.
  */
 
 import {
@@ -33,8 +46,7 @@ import {
   type PpvCatalogEndpointDiagnostics,
   type PpvRequestStatus,
 } from './ppvDiagnostics';
-import { youtubeVideoIdFrom } from './ppvAuthorizedEmbeds';
-import { officialWatchUrlFor } from './ppvOfficialWatch';
+import { officialInfoUrlFor } from './ppvOfficialWatch';
 import type { PpvCatalogProvider, PpvCatalogProviderResult, PpvFetchLike } from './ppvProviders';
 
 export const THESPORTSDB_API = 'https://www.thesportsdb.com/api/v1/json';
@@ -61,7 +73,6 @@ interface SportsDbEvent {
   strTimestamp?: unknown;
   strHomeTeam?: unknown;
   strAwayTeam?: unknown;
-  strVideo?: unknown;
 }
 
 function asText(value: unknown): string {
@@ -127,7 +138,6 @@ export function mapSportsDbEvent(row: SportsDbEvent, now = Date.now()): PpvEvent
   const away = asText(row?.strAwayTeam);
   const participants = home && away ? [home, away] : undefined;
   const promotion = inferPromotion(`${title} ${league}`);
-  const videoId = youtubeVideoIdFrom(row?.strVideo);
   const leagueId = asText(row?.idLeague);
 
   return {
@@ -135,7 +145,6 @@ export function mapSportsDbEvent(row: SportsDbEvent, now = Date.now()): PpvEvent
     providerEventId: `thesportsdb:${nativeId}`,
     providerRefs: {
       thesportsdb: { eventId: nativeId, ...(leagueId ? { leagueId } : {}) },
-      ...(videoId ? { youtube: { videoId } } : {}),
     },
     catalogProvenance: { feeds: [], upstreamCategories: [sport.toLowerCase()].filter(Boolean) },
     title,
@@ -147,7 +156,11 @@ export function mapSportsDbEvent(row: SportsDbEvent, now = Date.now()): PpvEvent
     sourceRefs: [],
     embeds: [],
     playbackSources: [],
-    officialWatchUrl: officialWatchUrlFor({ promotion }),
+    /*
+     * An information page, never a watch destination: see ppvOfficialWatch.
+     * TheSportsDB does not tell us where an event can be watched.
+     */
+    officialInfoUrl: officialInfoUrlFor({ promotion }),
   };
 }
 
@@ -235,6 +248,16 @@ export async function loadTheSportsDbCatalog(
   const admitted = [...events.values()].filter((event) => event.status !== 'ended');
   diagnostics.admittedEvents = admitted.length;
   diagnostics.status = overallStatusFor(diagnostics.endpoints, admitted.length);
+  /*
+   * Answering one day out of five is not the same answer as answering all
+   * five and finding nothing, and the difference decides whether an empty
+   * result may throw away a good cached list.
+   */
+  const answeredDays = diagnostics.endpoints.filter(
+    (entry) => entry.status === 'success' || entry.status === 'empty_success',
+  ).length;
+  diagnostics.coverage =
+    answeredDays === 0 ? 'none' : answeredDays === days.length ? 'complete' : 'partial';
   return { events: admitted, diagnostics };
 }
 

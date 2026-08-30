@@ -179,14 +179,24 @@ export function PpvPanel({
    * local cache because no provider answered at all. Neither is an empty list.
    */
   const cacheAgeMinutes =
-    catalog?.diagnostics?.stale && catalog.diagnostics.cacheAgeMs != null
+    catalog?.diagnostics?.cacheAgeMs != null
       ? Math.max(1, Math.round(catalog.diagnostics.cacheAgeMs / 60_000))
       : 0;
   const staleNotice = error && catalog ? error : '';
-  const cachedNotice =
-    !staleNotice && catalog?.diagnostics?.fromCache
-      ? `No catalog provider answered. Showing the cached list from ${cacheAgeMinutes}m ago.`
-      : '';
+  const catalogDebug = catalog?.diagnostics;
+  const cachedNotice = staleNotice
+    ? ''
+    : catalogDebug?.partialCoverage
+      ? /*
+         * A provider answered only part of the window it was asked about, so
+         * this list is not authoritative about what is missing from it.
+         */
+        catalogDebug.fromCache
+        ? `Some catalog sources did not answer. Showing the last known list from ${cacheAgeMinutes}m ago; some events may be missing.`
+        : 'Some catalog sources did not answer. Some events may be missing.'
+      : catalogDebug?.fromCache
+        ? `No catalog provider answered. Showing the cached list from ${cacheAgeMinutes}m ago.`
+        : '';
 
   return (
     <div className="live-tv-layout" aria-label="PPV events">

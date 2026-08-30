@@ -15,9 +15,11 @@ import {
 } from '../src/lib/ppvAuthorizedEmbeds';
 import { PPV_EMBED_HOSTS, isAllowedPpvEmbedUrl } from '../src/lib/ppvEmbedPolicy';
 import {
-  PPV_OFFICIAL_WATCH_HOSTS,
-  inspectOfficialWatchUrl,
-  isAllowedOfficialWatchUrl,
+  PPV_OFFICIAL_HOSTS,
+  PPV_OFFICIAL_INFO_BY_PROMOTION,
+  inspectOfficialUrl,
+  isAllowedOfficialUrl,
+  officialInfoUrlFor,
   officialWatchUrlFor,
 } from '../src/lib/ppvOfficialWatch';
 import {
@@ -229,41 +231,88 @@ describe('L. Twitch authorized embed', () => {
   });
 });
 
-/* --- M: official watch destinations -------------------------------------- */
+/* --- M: official destinations, watch vs information --------------------- */
 
-describe('M. official watch destinations', () => {
+describe('M. official destinations', () => {
   it('accepts only HTTPS destinations on the explicit allowlist', () => {
-    expect(isAllowedOfficialWatchUrl('https://www.ufc.com/events')).toBe(true);
-    expect(isAllowedOfficialWatchUrl('http://www.ufc.com/events')).toBe(false);
-    expect(isAllowedOfficialWatchUrl('https://evil.example/ufc')).toBe(false);
-    expect(isAllowedOfficialWatchUrl('https://www.ufc.com.evil.example/')).toBe(false);
-    expect(isAllowedOfficialWatchUrl('https://user:pass@www.ufc.com/')).toBe(false);
-    expect(isAllowedOfficialWatchUrl('javascript:alert(1)')).toBe(false);
-    expect(isAllowedOfficialWatchUrl('https://127.0.0.1/')).toBe(false);
-    expect(isAllowedOfficialWatchUrl('')).toBe(false);
+    expect(isAllowedOfficialUrl('https://www.ufc.com/events')).toBe(true);
+    expect(isAllowedOfficialUrl('http://www.ufc.com/events')).toBe(false);
+    expect(isAllowedOfficialUrl('https://evil.example/ufc')).toBe(false);
+    expect(isAllowedOfficialUrl('https://www.ufc.com.evil.example/')).toBe(false);
+    expect(isAllowedOfficialUrl('https://user:pass@www.ufc.com/')).toBe(false);
+    expect(isAllowedOfficialUrl('javascript:alert(1)')).toBe(false);
+    expect(isAllowedOfficialUrl('https://127.0.0.1/')).toBe(false);
+    expect(isAllowedOfficialUrl('')).toBe(false);
   });
 
   it('reports why a destination was refused without keeping its path', () => {
-    const inspection = inspectOfficialWatchUrl('https://evil.example/watch?token=SECRET');
+    const inspection = inspectOfficialUrl('https://evil.example/watch?token=SECRET');
     expect(inspection.allowed).toBe(false);
     expect(inspection.reason).toBe('host_not_allowlisted');
     expect(inspection.hostname).toBe('evil.example');
     expect(JSON.stringify(inspection)).not.toContain('SECRET');
   });
 
-  it('maps a known promotion and refuses an untrusted provider-supplied link', () => {
-    expect(officialWatchUrlFor({ promotion: 'UFC' })).toBe('https://www.ufc.com/events');
-    expect(officialWatchUrlFor({ promotion: 'Unknown Promotion' })).toBeUndefined();
+  it('never turns a promotion into a watch destination', () => {
+    /*
+     * Knowing an event is a UFC event says nothing about where it can be
+     * watched. There is no promotion mapping for watch at all.
+     */
+    for (const promotion of Object.keys(PPV_OFFICIAL_INFO_BY_PROMOTION)) {
+      expect(officialWatchUrlFor({ providedWatchUrl: undefined })).toBeUndefined();
+      expect(officialInfoUrlFor({ promotion })).toBeTruthy();
+    }
+    expect(officialWatchUrlFor({ providedWatchUrl: '' })).toBeUndefined();
+  });
+
+  it('never represents a roster or shows page as a watch destination', () => {
+    const mapped = Object.values(PPV_OFFICIAL_INFO_BY_PROMOTION);
+    /* WWE's roster page must not appear anywhere as a watch destination. */
+    expect(mapped).not.toContain('https://www.wwe.com/superstars');
+    for (const url of mapped) {
+      expect(officialWatchUrlFor({ providedWatchUrl: undefined })).toBeUndefined();
+      /* Each mapped page is reachable only through the info accessor. */
+      expect(isAllowedOfficialUrl(url)).toBe(true);
+    }
+  });
+
+  it('accepts an explicitly provided watch destination that passes the allowlist', () => {
+    expect(officialWatchUrlFor({ providedWatchUrl: 'https://www.dazn.com/en-US/fight/x' })).toBe(
+      'https://www.dazn.com/en-US/fight/x',
+    );
+    expect(officialWatchUrlFor({ providedWatchUrl: 'https://evil.example/stream' })).toBeUndefined();
+    expect(officialWatchUrlFor({ providedWatchUrl: 'http://www.dazn.com/x' })).toBeUndefined();
+  });
+
+  it('maps a known promotion to an information page and refuses an untrusted link', () => {
+    expect(officialInfoUrlFor({ promotion: 'UFC' })).toBe('https://www.ufc.com/events');
+    expect(officialInfoUrlFor({ promotion: 'Unknown Promotion' })).toBeUndefined();
     expect(
-      officialWatchUrlFor({ promotion: 'UFC', providedUrl: 'https://evil.example/stream' }),
+      officialInfoUrlFor({ promotion: 'UFC', providedInfoUrl: 'https://evil.example/info' }),
     ).toBe('https://www.ufc.com/events');
-    expect(
-      officialWatchUrlFor({ providedUrl: 'https://www.dazn.com/' }),
-    ).toBe('https://www.dazn.com/');
   });
 
   it('every mapped destination is itself on the allowlist', () => {
-    for (const host of PPV_OFFICIAL_WATCH_HOSTS) expect(host).not.toContain('/');
+    for (const host of PPV_OFFICIAL_HOSTS) expect(host).not.toContain('/');
+    for (const url of Object.values(PPV_OFFICIAL_INFO_BY_PROMOTION)) {
+      expect(isAllowedOfficialUrl(url)).toBe(true);
+    }
+  });
+
+  it('reports watch and information availability as separate playback outcomes', async () => {
+    const watch = await resolvePpvPlayback(
+      event({ officialWatchUrl: 'https://www.dazn.com/en-US/fight/x' }),
+      failingFetch,
+    );
+    expect(watch.diagnostics.finalState).toBe('official_only');
+
+    const info = await resolvePpvPlayback(
+      event({ officialInfoUrl: 'https://www.ufc.com/events' }),
+      failingFetch,
+    );
+    expect(info.diagnostics.finalState).toBe('official_info_only');
+    expect(info.diagnostics.officialWatchAvailable).toBe(false);
+    expect(info.diagnostics.officialInfoAvailable).toBe(true);
   });
 });
 
@@ -367,15 +416,14 @@ describe('N. multi-source failover', () => {
     );
   });
 
-  it('never wraps around past the last source', () => {
+  it('never wraps around past the last source, and says so', () => {
     const single = event({
       embeds: [{ provider: 'streamed', source: 'delta', url: 'https://embed.st/embed/delta/a/1' }],
     });
     render(<PpvPlayer event={single} debug />);
     fireEvent.error(document.querySelector('iframe') as HTMLIFrameElement);
-    expect((document.querySelector('iframe') as HTMLIFrameElement).getAttribute('src')).toBe(
-      'https://embed.st/embed/delta/a/1',
-    );
+    expect(document.querySelector('iframe')).toBeNull();
+    expect(screen.getByText('No source loaded')).toBeInTheDocument();
     expect(screen.getByLabelText('PPV runtime diagnostics').textContent ?? '').toMatch(
       /exhausted\s*true/i,
     );

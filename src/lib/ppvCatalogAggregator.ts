@@ -30,7 +30,7 @@ import {
   type PpvCatalogProviderId,
   type PpvRequestStatus,
 } from './ppvDiagnostics';
-import { isAllowedOfficialWatchUrl } from './ppvOfficialWatch';
+import { isAllowedOfficialUrl } from './ppvOfficialWatch';
 import { mergePpvPlaybackSources } from './ppvProviders';
 import {
   settleCatalogProvider,
@@ -84,6 +84,17 @@ export const streamedCatalogProvider: PpvCatalogProvider = {
       diagnostics.status = catalog.events.length
         ? 'success'
         : (feeds?.overallStatus ?? 'empty_success');
+      /*
+       * live and today degrade gracefully, so the fight feed can succeed while
+       * the others never answered. That is a partial view of the window, not a
+       * complete one.
+       */
+      diagnostics.coverage =
+        diagnostics.completedRequests === 0
+          ? 'none'
+          : diagnostics.completedRequests === diagnostics.endpoints.length
+            ? 'complete'
+            : 'partial';
       return { events: catalog.events, diagnostics };
     } catch (reason) {
       const feeds = reason instanceof PpvCatalogError ? reason.diagnostics : null;
@@ -98,6 +109,7 @@ export const streamedCatalogProvider: PpvCatalogProvider = {
         }
       }
       diagnostics.status = feeds?.fight.status ?? 'network_or_cors_error';
+      diagnostics.coverage = 'none';
       return { events: [], diagnostics };
     }
   },
@@ -185,6 +197,7 @@ export function mergePpvEvents(base: PpvEvent, next: PpvEvent): PpvEvent {
     status: base.status === 'live' || next.status === 'live' ? 'live' : base.status,
     poster: base.poster ?? next.poster,
     officialWatchUrl: base.officialWatchUrl ?? next.officialWatchUrl,
+    officialInfoUrl: base.officialInfoUrl ?? next.officialInfoUrl,
     providerRefs: { ...next.providerRefs, ...base.providerRefs },
     sourceRefs,
     embeds: base.embeds.length ? base.embeds : next.embeds,
@@ -237,9 +250,13 @@ function sanitizeCachedEvent(value: unknown): PpvEvent | null {
   const poster = typeof row.poster === 'string' && row.poster.startsWith('https://')
     ? row.poster
     : undefined;
-  const official =
-    typeof row.officialWatchUrl === 'string' && isAllowedOfficialWatchUrl(row.officialWatchUrl)
+  const watch =
+    typeof row.officialWatchUrl === 'string' && isAllowedOfficialUrl(row.officialWatchUrl)
       ? row.officialWatchUrl
+      : undefined;
+  const info =
+    typeof row.officialInfoUrl === 'string' && isAllowedOfficialUrl(row.officialInfoUrl)
+      ? row.officialInfoUrl
       : undefined;
 
   return {
@@ -251,7 +268,8 @@ function sanitizeCachedEvent(value: unknown): PpvEvent | null {
       Array.isArray(row.playbackSources) ? row.playbackSources : [],
     ),
     poster,
-    officialWatchUrl: official,
+    officialWatchUrl: watch,
+    officialInfoUrl: info,
   };
 }
 
@@ -401,12 +419,27 @@ export async function aggregatePpvCatalog(
     }
   }
 
-  const events = [...merged.values()]
-    .filter((event) => event.status !== 'ended')
-    .sort((left, right) => {
-      if (left.status !== right.status) return left.status === 'live' ? -1 : 1;
-      return Date.parse(left.startsAt) - Date.parse(right.startsAt);
-    });
+  const sortEvents = (rows: PpvEvent[]): PpvEvent[] =>
+    [...rows]
+      .filter((event) => event.status !== 'ended')
+      .sort((left, right) => {
+        if (left.status !== right.status) return left.status === 'live' ? -1 : 1;
+        return Date.parse(left.startsAt) - Date.parse(right.startsAt);
+      });
+
+  const events = sortEvents([...merged.values()]);
+
+  /*
+   * A contributing provider that only answered part of the window it was
+   * asked about has not told us what is missing - only what it happened to
+   * see. A provider that failed outright is different: it contributed nothing
+   * and says nothing about coverage, so a complete answer from the other
+   * provider is still a complete answer.
+   */
+  const partialCoverage = providerDiagnostics.some(
+    (provider) =>
+      contributing.includes(provider.providerId) && provider.coverage === 'partial',
+  );
 
   const base = {
     stage: 'catalog' as const,
@@ -419,45 +452,81 @@ export async function aggregatePpvCatalog(
     contributingProviders: contributing,
     failedProviders: failed,
     mergedDuplicates,
+    partialCoverage,
   };
 
+  const cached = useCache ? readPpvCatalogCache(now, storage) : null;
+
   /*
-   * At least one provider answered: that is a catalog, even if it is empty.
-   * The other provider's failure is recorded, not promoted into an error.
+   * Complete coverage from at least one provider: this is the catalog, even if
+   * it is empty. An empty answer that every expected request contributed to is
+   * a real "nothing is scheduled", and it must not be overridden by yesterday's
+   * cache. The other provider's failure is recorded, not promoted to an error.
    */
-  if (contributing.length) {
+  if (contributing.length && !partialCoverage) {
     if (events.length) writePpvCatalogCache(events, now, storage);
-    const diagnostics: PpvCatalogDiagnostics = {
-      ...base,
-      normalizedEvents: events.length,
-      overallStatus: aggregateStatus(providerDiagnostics, events.length),
-      fromCache: false,
-      stale: false,
-      cacheAgeMs: null,
-    };
     return {
       events,
       source: contributing.length > 1 ? 'aggregate' : contributing[0],
       loadedAt: new Date(now).toISOString(),
-      diagnostics,
+      diagnostics: {
+        ...base,
+        normalizedEvents: events.length,
+        overallStatus: aggregateStatus(providerDiagnostics, events.length),
+        fromCache: false,
+        stale: false,
+        cacheAgeMs: null,
+      },
     };
   }
 
-  const cached = useCache ? readPpvCatalogCache(now, storage) : null;
-  if (cached?.events.length) {
-    const diagnostics: PpvCatalogDiagnostics = {
-      ...base,
-      normalizedEvents: cached.events.length,
-      overallStatus: aggregateStatus(providerDiagnostics, 0),
-      fromCache: true,
-      stale: true,
-      cacheAgeMs: cached.ageMs,
-    };
+  /*
+   * Partial coverage. The fresh events are real and are kept - a partial
+   * answer is not a reason to erase events it did find - but they are unioned
+   * with the last known good list rather than replacing it, because absence
+   * from a partial answer is not evidence of absence. Fresh wins on a
+   * collision. The cache is deliberately NOT rewritten: a partial result must
+   * never become the new last-known-good.
+   */
+  if (contributing.length && partialCoverage) {
+    const union = new Map<string, PpvEvent>();
+    for (const event of cached?.events ?? []) union.set(ppvIdentityKey(event), event);
+    for (const event of events) {
+      const key = ppvIdentityKey(event);
+      const existing = union.get(key);
+      union.set(key, existing ? mergePpvEvents(event, existing) : event);
+    }
+    const combined = sortEvents([...union.values()]);
+    const usedCache = Boolean(cached?.events.length);
     return {
-      events: cached.events.filter((event) => event.status !== 'ended'),
+      events: combined,
+      source: contributing.length > 1 ? 'aggregate' : contributing[0],
+      loadedAt: new Date(now).toISOString(),
+      diagnostics: {
+        ...base,
+        normalizedEvents: combined.length,
+        overallStatus: aggregateStatus(providerDiagnostics, combined.length),
+        fromCache: usedCache,
+        stale: true,
+        cacheAgeMs: usedCache ? (cached?.ageMs ?? null) : null,
+      },
+    };
+  }
+
+  /* Nothing answered at all. The cache is the last thing standing. */
+  if (cached?.events.length) {
+    return {
+      events: sortEvents(cached.events),
       source: 'aggregate',
       loadedAt: new Date(now - cached.ageMs).toISOString(),
-      diagnostics,
+      diagnostics: {
+        ...base,
+        normalizedEvents: cached.events.length,
+        overallStatus: aggregateStatus(providerDiagnostics, 0),
+        fromCache: true,
+        stale: true,
+        cacheAgeMs: cached.ageMs,
+      },
     };
   }
 

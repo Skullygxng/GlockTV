@@ -87,7 +87,10 @@ export async function settleCatalogProvider(
   try {
     return await provider.load(request, now);
   } catch {
-    return { events: [], diagnostics: { ...fallback, status: 'network_or_cors_error' } };
+    return {
+      events: [],
+      diagnostics: { ...fallback, status: 'network_or_cors_error', coverage: 'none' },
+    };
   }
 }
 

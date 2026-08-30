@@ -79,6 +79,7 @@ function stubProvider(
         stage: 'catalog_provider',
         providerId: id,
         status,
+        coverage: status === 'success' ? 'complete' : 'none',
         endpoints: [],
         requestCount: 1,
         completedRequests: status === 'success' ? 1 : 0,
@@ -262,6 +263,7 @@ describe('C-E. total catalog failure', () => {
             ...event(),
             poster: 'javascript:alert(1)',
             officialWatchUrl: 'https://evil.example/steal',
+            officialInfoUrl: 'https://evil.example/info',
             embeds: [{ provider: 'streamed', url: 'https://evil.example/frame' }],
             playbackSources: [
               { providerId: 'youtube', label: 'x', kind: 'authorized_embed', url: 'https://evil.example/x' },
@@ -279,6 +281,7 @@ describe('C-E. total catalog failure', () => {
     expect(cached?.events).toHaveLength(1);
     expect(cached?.events[0].poster).toBeUndefined();
     expect(cached?.events[0].officialWatchUrl).toBeUndefined();
+    expect(cached?.events[0].officialInfoUrl).toBeUndefined();
     expect(cached?.events[0].embeds).toEqual([]);
     expect(cached?.events[0].playbackSources).toEqual([]);
   });
@@ -286,8 +289,8 @@ describe('C-E. total catalog failure', () => {
   it('keeps a legitimate official destination through a cache round trip', () => {
     const storage = memoryStorage();
     const now = Date.now();
-    writePpvCatalogCache([event({ officialWatchUrl: 'https://www.ufc.com/events' })], now, storage);
-    expect(readPpvCatalogCache(now, storage)?.events[0].officialWatchUrl).toBe(
+    writePpvCatalogCache([event({ officialInfoUrl: 'https://www.ufc.com/events' })], now, storage);
+    expect(readPpvCatalogCache(now, storage)?.events[0].officialInfoUrl).toBe(
       'https://www.ufc.com/events',
     );
   });
@@ -358,14 +361,14 @@ describe('F. normalized identity and dedupe', () => {
     const rich = event({
       promotion: 'UFC',
       participants: ['Jon Jones', 'Tom Aspinall'],
-      officialWatchUrl: 'https://www.ufc.com/events',
+      officialInfoUrl: 'https://www.ufc.com/events',
       sourceRefs: [{ source: 'delta', id: 'a' }],
     });
     const thin = event({ title: 'UFC 400', promotion: undefined, participants: undefined });
     const merged = mergePpvEvents(rich, thin);
     expect(merged.promotion).toBe('UFC');
     expect(merged.participants).toEqual(['Jon Jones', 'Tom Aspinall']);
-    expect(merged.officialWatchUrl).toBe('https://www.ufc.com/events');
+    expect(merged.officialInfoUrl).toBe('https://www.ufc.com/events');
     expect(merged.sourceRefs).toHaveLength(1);
   });
 
@@ -438,7 +441,12 @@ describe('H. TheSportsDB normalization', () => {
     expect(mapped?.category).toBe('mma');
     expect(mapped?.promotion).toBe('UFC');
     expect(mapped?.participants).toEqual(['Jon Jones', 'Tom Aspinall']);
-    expect(mapped?.officialWatchUrl).toBe('https://www.ufc.com/events');
+    /*
+     * An information page, never a watch destination. TheSportsDB does not
+     * tell us where an event can be watched.
+     */
+    expect(mapped?.officialInfoUrl).toBe('https://www.ufc.com/events');
+    expect(mapped?.officialWatchUrl).toBeUndefined();
     /* Events display with no playback sources at all. That is not an error. */
     expect(mapped?.playbackSources).toEqual([]);
     expect(mapped?.embeds).toEqual([]);

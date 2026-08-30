@@ -89,10 +89,18 @@ export interface PpvEvent {
    */
   playbackSources?: PpvPlaybackSource[];
   /*
-   * Validated HTTPS link to where the event can be watched legitimately. Set
-   * only from the official-watch allowlist; see ppvOfficialWatch.
+   * Validated HTTPS link to somewhere a provider explicitly identifies as a
+   * place to WATCH this event. Never derived from a promotion: knowing an
+   * event is a UFC event says nothing about where it can be watched.
    */
   officialWatchUrl?: string;
+  /*
+   * Validated HTTPS link to the promotion's own public page for the event -
+   * information, not a broadcast. An events listing or a promotion home page
+   * belongs here and must never be presented as a way to watch.
+   * See ppvOfficialWatch.
+   */
+  officialInfoUrl?: string;
 }
 
 export interface PpvCatalog {

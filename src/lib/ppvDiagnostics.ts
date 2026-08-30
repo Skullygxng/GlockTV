@@ -98,10 +98,25 @@ export interface PpvCatalogEndpointDiagnostics {
  * "thesportsdb answered, streamed did not" - a single overall status cannot,
  * and that ambiguity is what made a total PPV failure unreadable.
  */
+/*
+ * How much of the window a provider was asked about actually came back.
+ *
+ *   complete - every expected request answered
+ *   partial  - some answered, some did not
+ *   none     - nothing answered
+ *
+ * This is separate from status on purpose. A provider that answered one day of
+ * a five-day window and failed the other four still reports empty_success for
+ * the day it saw, and treating that as authoritative evidence that the whole
+ * upcoming catalog is empty is how a good cached list got thrown away.
+ */
+export type PpvCatalogCoverage = 'complete' | 'partial' | 'none';
+
 export interface PpvCatalogProviderDiagnostics {
   stage: 'catalog_provider';
   providerId: PpvCatalogProviderId;
   status: PpvRequestStatus;
+  coverage: PpvCatalogCoverage;
   endpoints: PpvCatalogEndpointDiagnostics[];
   requestCount: number;
   completedRequests: number;
@@ -120,6 +135,7 @@ export function emptyCatalogProviderDiagnostics(
     stage: 'catalog_provider',
     providerId,
     status: 'empty_success',
+    coverage: 'complete',
     endpoints: [],
     requestCount: 0,
     completedRequests: 0,
@@ -148,7 +164,13 @@ export interface PpvCatalogDiagnostics {
   contributingProviders?: PpvCatalogProviderId[];
   failedProviders?: PpvCatalogProviderId[];
   mergedDuplicates?: number;
-  /* True when nothing on the network answered and a cached catalog was used. */
+  /*
+   * At least one contributing provider answered only part of the window it was
+   * asked about, so this result is not authoritative about what does not
+   * appear in it.
+   */
+  partialCoverage?: boolean;
+  /* True when a cached catalog contributed events to this result. */
   fromCache?: boolean;
   stale?: boolean;
   cacheAgeMs?: number | null;
@@ -198,6 +220,12 @@ export type PpvEventFinalState =
    * reported as an embed failure.
    */
   | 'official_only'
+  /*
+   * No inline source and no watch destination, but the event does carry the
+   * promotion's own information page. Distinct from official_only: an
+   * information page is not somewhere the event can be watched.
+   */
+  | 'official_info_only'
   | 'unavailable'
   | 'provider_failure'
   | 'policy_rejected'
@@ -218,7 +246,13 @@ export interface PpvEventDiagnostics {
    * time.
    */
   providers?: PpvProviderDiagnostics[];
+  /*
+   * Whether the event carries a destination the provider explicitly calls a
+   * place to watch, and separately whether it carries a promotion information
+   * page. They are not interchangeable and are never collapsed into one flag.
+   */
   officialWatchAvailable?: boolean;
+  officialInfoAvailable?: boolean;
 }
 
 /*

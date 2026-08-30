@@ -165,15 +165,15 @@ export function LiveTvRoute({
           <h1>Live TV</h1>
           <p>
             {pane === 'ppv'
-              ? 'Live and upcoming fight cards from Streamed. Hosted player availability varies by event.'
+              ? 'Live and upcoming fight cards. Hosted player availability varies by event.'
               : 'Public live channels from IPTV-org, filtered for browser-compatible HTTPS streams.'}
           </p>
         </div>
         <div className="live-tv-hero__actions">
           <div className="live-tv-source">
             <Tv />
-            <strong>{pane === 'ppv' ? 'Streamed.pk' : 'IPTV-org'}</strong>
-            <small>{pane === 'ppv' ? 'PPV hosted embeds' : 'United States catalog'}</small>
+            <strong>{pane === 'ppv' ? 'TheSportsDB' : 'IPTV-org'}</strong>
+            <small>{pane === 'ppv' ? 'Fight card catalog' : 'United States catalog'}</small>
           </div>
           {onClose && (
             <button type="button" className="live-tv-close" aria-label="Close Live TV" onClick={onClose}>

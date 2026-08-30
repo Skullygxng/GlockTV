@@ -182,7 +182,7 @@ export function PpvPlayer({
           <div className="live-player__idle-message">
             {loading ? <LoaderCircle className="spin" /> : <Tv />}
             <strong>{loading ? 'Loading hosted embed' : 'Embed unavailable'}</strong>
-            <span>{loading ? 'Asking Streamed and SportSRC for a player URL.' : error}</span>
+            <span>{loading ? 'Looking for a hosted player.' : error}</span>
           </div>
         )}
       </div>
@@ -218,6 +218,7 @@ export function PpvPlayer({
           event={diagnostics ?? emptyEventDiagnostics(event.providerEventId)}
           iframe={iframeTrace}
           eventId={event.providerEventId}
+          provenance={event.catalogProvenance ?? null}
           sourceIndex={embeds.length ? index + 1 : 0}
           sourceCount={embeds.length}
         />

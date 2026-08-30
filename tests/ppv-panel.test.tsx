@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LiveTvRoute } from '../src/components/LiveTvRoute';
 import { PpvPanel } from '../src/components/PpvPanel';
 import { PpvPlayer } from '../src/components/PpvPlayer';
-import { PpvCatalogError, type PpvCatalog, type PpvEvent } from '../src/lib/ppv';
+import { PpvCatalogError, discoverPpvEmbeds, type PpvCatalog, type PpvEvent } from '../src/lib/ppv';
 import type { PpvCatalogDiagnostics } from '../src/lib/ppvDiagnostics';
 import { PPV_IFRAME_REFERRER_POLICY, PPV_IFRAME_SANDBOX } from '../src/lib/ppvEmbedPolicy';
 import type { LiveTvCatalog } from '../src/lib/iptvOrg';
@@ -660,6 +660,35 @@ describe('PPV catalog diagnostics in debug mode', () => {
     expect(text).not.toMatch(/document load event/i);
   });
 
+  it('reports an unmapped backup as skipped rather than failed', async () => {
+    const unmapped: PpvEvent = {
+      provider: 'streamed',
+      providerEventId: 'true-grit',
+      providerRefs: { streamed: { eventId: 'true-grit' } },
+      title: 'True Grit Wrestling New Grit Rising',
+      category: 'wrestling',
+      startsAt: '2026-08-29T22:00:00.000Z',
+      status: 'live',
+      sourceRefs: [{ source: 'delta', id: 'd1' }],
+      embeds: [],
+    };
+    // Streamed answers with nothing; SportSRC has no native identity to use.
+    const request = (async () =>
+      new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof fetch;
+
+    render(
+      <PpvPlayer event={unmapped} debug discoverEmbeds={(target) => discoverPpvEmbeds(target, request)} />,
+    );
+
+    await screen.findByText('Embed unavailable');
+    const text = panel().textContent ?? '';
+    expect(text).toMatch(/lookup state\s*not_attempted_unmapped/i);
+    expect(text).toMatch(/provider-native id\s*false/i);
+    expect(text).toMatch(/not a provider failure/i);
+    // A skipped backup must not turn into provider_failure.
+    expect(text).toMatch(/final state\s*unavailable/i);
+  });
+
   it('shows catalog, provider and iframe diagnostics once an event is selected', async () => {
     render(
       <PpvPanel debug loadCatalog={(() => Promise.resolve({ ...catalog, diagnostics: loadedDiagnostics })) as never} />,
@@ -740,5 +769,57 @@ describe('PPV diagnostics copy states', () => {
 
     await waitFor(() => expect(copyButton().textContent).toContain('Copy failed'));
     expect(screen.getByLabelText('Diagnostics text')).toBeInTheDocument();
+  });
+});
+
+
+describe('PPV catalog provenance in the debug panel', () => {
+  const traced: PpvEvent = {
+    provider: 'streamed',
+    providerEventId: 'ufc-320',
+    providerRefs: { streamed: { eventId: 'ufc-320' } },
+    catalogProvenance: { feeds: ['fight', 'today'], upstreamCategories: ['fight'] },
+    title: 'UFC 320',
+    category: 'mma',
+    startsAt: '2026-08-29T22:00:00.000Z',
+    status: 'live',
+    sourceRefs: [],
+    embeds: [{ provider: 'streamed', source: 'delta', url: 'https://embed.st/embed/delta/320/1?token=SECRET' }],
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('stays invisible in normal mode', () => {
+    render(<PpvPlayer event={traced} debug={false} />);
+    expect(screen.queryByLabelText('PPV runtime diagnostics')).not.toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/catalog feeds/i);
+  });
+
+  it('shows the contributing feeds and upstream categories for the selected event', () => {
+    render(<PpvPlayer event={traced} debug />);
+    const text = screen.getByLabelText('PPV runtime diagnostics').textContent ?? '';
+    expect(text).toMatch(/catalog feeds\s*fight, today/i);
+    expect(text).toMatch(/upstream categories\s*fight/i);
+  });
+
+  it('reports unknown provenance rather than inventing a feed', () => {
+    render(<PpvPlayer event={{ ...traced, catalogProvenance: undefined }} debug />);
+    const text = screen.getByLabelText('PPV runtime diagnostics').textContent ?? '';
+    expect(text).toMatch(/catalog feeds\s*unknown/i);
+  });
+
+  it('includes provenance in the copied payload, still sanitized', async () => {
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+
+    render(<PpvPlayer event={traced} debug />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy diagnostics' }));
+
+    const payload = writeText.mock.calls[0][0];
+    expect(payload).toContain('catalogProvenance');
+    expect(payload).toContain('today');
+    expect(payload).not.toContain('https://');
+    expect(payload).not.toContain('token=');
+    expect(payload).not.toContain('SECRET');
   });
 });

@@ -317,20 +317,50 @@ describe('PPV SportSRC discovery diagnostics', () => {
   beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
   afterEach(() => vi.useRealTimers());
 
+  /* Only an event carrying a SportSRC-native identity reaches SportSRC at all. */
+  const mapped: PpvEvent = {
+    ...event,
+    providerRefs: {
+      streamed: { eventId: 'ufc-320' },
+      sportsrc: { eventId: 'sportsrc-native-9001', category: 'fight' },
+    },
+  };
+
   async function sportsrcRun(responder: (url: string) => Promise<Response>) {
     const request = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/stream/')) return json([]);
       return responder(url);
     });
-    return discoverPpvEmbeds(event, request as unknown as typeof fetch);
+    return discoverPpvEmbeds(mapped, request as unknown as typeof fetch);
   }
 
-  it('always surfaces the unverified cross-provider ID assumption', async () => {
+  it('reports an attempted lookup with the provider-native identity', async () => {
     const { diagnostics } = await sportsrcRun(async () => json({ success: true, data: { sources: [] } }));
-    expect(diagnostics.sportsrc.crossProviderIdAssumption).toBe(true);
-    expect(diagnostics.sportsrc.crossProviderIdNote).toMatch(/has not been independently established/);
+    expect(diagnostics.sportsrc.lookupState).toBe('attempted');
+    expect(diagnostics.sportsrc.providerNativeIdentityAvailable).toBe(true);
+    expect(diagnostics.sportsrc.requestCount).toBe(1);
     expect(diagnostics.sportsrc.requestedCategory).toBe('fight');
+  });
+
+  it('does not request SportSRC at all when no native identity exists', async () => {
+    const request = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/stream/')) return json([]);
+      throw new Error('SportSRC must not be requested for an unmapped event');
+    });
+
+    // The base event carries Streamed identity only.
+    const { diagnostics } = await discoverPpvEmbeds(event, request as unknown as typeof fetch);
+    expect(diagnostics.sportsrc.lookupState).toBe('not_attempted_unmapped');
+    expect(diagnostics.sportsrc.providerNativeIdentityAvailable).toBe(false);
+    expect(diagnostics.sportsrc.requestCount).toBe(0);
+    // A skipped lookup invents no failure counters.
+    expect(diagnostics.sportsrc.httpErrorCount).toBe(0);
+    expect(diagnostics.sportsrc.httpStatuses).toEqual([]);
+    expect(diagnostics.sportsrc.networkErrorCount).toBe(0);
+    expect(diagnostics.sportsrc.timeoutCount).toBe(0);
+    expect(diagnostics.sportsrc.malformedResponseCount).toBe(0);
+    expect(diagnostics.finalState).toBe('unavailable');
   });
 
   it('records an HTTP status', async () => {
@@ -343,7 +373,7 @@ describe('PPV SportSRC discovery diagnostics', () => {
       if (String(input).includes('/stream/')) return Promise.resolve(json([]));
       return new Promise<Response>(() => {});
     });
-    const pending = discoverPpvEmbeds(event, request as unknown as typeof fetch);
+    const pending = discoverPpvEmbeds(mapped, request as unknown as typeof fetch);
     await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
     const { diagnostics } = await pending;
     expect(diagnostics.sportsrc.timeoutCount).toBe(1);
@@ -517,7 +547,19 @@ describe('PPV provider contract fixtures', () => {
       return json(sportsrcDetail);
     });
 
-    const { embeds, diagnostics } = await discoverPpvEmbeds(event, request as unknown as typeof fetch);
+    // Both providers only run for an event that carries both identities.
+    const bothMapped: PpvEvent = {
+      ...event,
+      providerRefs: {
+        streamed: { eventId: event.providerEventId },
+        sportsrc: { eventId: 'sportsrc-native-fixture', category: 'fight' },
+      },
+    };
+
+    const { embeds, diagnostics } = await discoverPpvEmbeds(
+      bothMapped,
+      request as unknown as typeof fetch,
+    );
     expect(embeds.map((embed) => embed.provider).sort()).toEqual(['sportsrc', 'streamed']);
     expect(diagnostics.streamed.acceptedEmbedCount).toBe(1);
     expect(diagnostics.sportsrc.acceptedEmbedCount).toBe(1);

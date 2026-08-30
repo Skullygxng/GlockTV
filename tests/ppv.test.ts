@@ -260,6 +260,15 @@ describe('PPV request timeouts and failover', () => {
     embeds: [],
   };
 
+  /* SportSRC only runs for an event that carries a SportSRC-native identity. */
+  const mappedEvent: PpvEvent = {
+    ...event,
+    providerRefs: {
+      streamed: { eventId: 'ufc-320' },
+      sportsrc: { eventId: 'sportsrc-native-320', category: 'fight' },
+    },
+  };
+
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
@@ -291,7 +300,7 @@ describe('PPV request timeouts and failover', () => {
       return Promise.resolve(json({}));
     });
 
-    const pending = loadPpvEmbeds(event, request as unknown as typeof fetch);
+    const pending = loadPpvEmbeds(mappedEvent, request as unknown as typeof fetch);
     await vi.advanceTimersByTimeAsync(PPV_REQUEST_TIMEOUT_MS + 50);
     expect((await pending).map((embed) => embed.url)).toEqual(['https://embed.streamapi.cc/sport/b/']);
   });
@@ -328,7 +337,7 @@ describe('PPV request timeouts and failover', () => {
       return Promise.resolve(json({}));
     });
 
-    expect((await loadPpvEmbeds(event, request as unknown as typeof fetch)).map((e) => e.url)).toEqual([
+    expect((await loadPpvEmbeds(mappedEvent, request as unknown as typeof fetch)).map((e) => e.url)).toEqual([
       'https://embed.streamapi.cc/sport/b/',
     ]);
     expect(request.mock.calls.some(([url]) => String(url).includes('daddylive.app'))).toBe(false);

@@ -5,6 +5,7 @@ import {
   serializePpvDiagnostics,
   type PpvCatalogDiagnostics,
   type PpvCatalogEndpointDiagnostics,
+  type PpvEventCatalogProvenance,
   type PpvEventDiagnostics,
   type PpvIframeDiagnostics,
 } from '../lib/ppvDiagnostics';
@@ -20,6 +21,7 @@ interface PpvDiagnosticsPanelProps {
   iframe?: PpvIframeDiagnostics | null;
   /* Present only when an event is selected; gates the playback sections. */
   eventId?: string;
+  provenance?: PpvEventCatalogProvenance | null;
   sourceIndex?: number;
   sourceCount?: number;
 }
@@ -57,6 +59,7 @@ export function PpvDiagnosticsPanel({
   event,
   iframe,
   eventId,
+  provenance,
   sourceIndex = 0,
   sourceCount = 0,
 }: PpvDiagnosticsPanelProps) {
@@ -78,6 +81,7 @@ export function PpvDiagnosticsPanel({
   const onCopy = () => {
     const payload = serializePpvDiagnostics({
       catalog: catalog ?? null,
+      catalogProvenance: provenance ?? null,
       event: event ?? null,
       iframe: iframe ?? null,
       sourceIndex,
@@ -137,6 +141,11 @@ export function PpvDiagnosticsPanel({
             <Row label="event" value={eventId ?? 'none'} />
             <Row label="final state" value={event?.finalState ?? 'pending'} />
             <Row label="accepted embeds" value={event?.acceptedEmbedCount ?? 0} />
+            <Row label="catalog feeds" value={(provenance?.feeds ?? []).join(', ') || 'unknown'} />
+            <Row
+              label="upstream categories"
+              value={(provenance?.upstreamCategories ?? []).join(', ') || 'none'}
+            />
           </div>
 
           <div className="ppv-diag__group">
@@ -157,6 +166,12 @@ export function PpvDiagnosticsPanel({
 
           <div className="ppv-diag__group">
             <h4>SportSRC</h4>
+            <Row label="lookup state" value={sportsrc?.lookupState ?? 'pending'} />
+            <Row
+              label="provider-native id"
+              value={sportsrc?.providerNativeIdentityAvailable ?? false}
+            />
+            <Row label="requests" value={sportsrc?.requestCount ?? 0} />
             <Row label="category" value={sportsrc?.requestedCategory ?? 'n/a'} />
             <Row label="completed" value={sportsrc?.completedRequests ?? 0} />
             <Row label="timeouts" value={sportsrc?.timeoutCount ?? 0} />
@@ -171,8 +186,11 @@ export function PpvDiagnosticsPanel({
             <Row label="accepted" value={sportsrc?.acceptedEmbedCount ?? 0} />
             <Row label="rejected" value={sportsrc?.rejectedEmbedCount ?? 0} />
             <Row label="rejected hosts" value={(sportsrc?.rejectedHosts ?? []).join(', ') || 'none'} />
-            {sportsrc?.crossProviderIdAssumption && (
-              <p className="ppv-diag__warn">{sportsrc.crossProviderIdNote}</p>
+            {sportsrc?.lookupState === 'not_attempted_unmapped' && (
+              <p className="ppv-diag__warn">
+                Not requested: no SportSRC-native event identity for this event. This is a skipped
+                lookup, not a provider failure.
+              </p>
             )}
           </div>
 

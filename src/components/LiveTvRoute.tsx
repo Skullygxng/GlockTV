@@ -165,7 +165,7 @@ export function LiveTvRoute({
           <h1>Live TV</h1>
           <p>
             {pane === 'ppv'
-              ? 'Live and upcoming fight cards with hosted embeds from Streamed and SportSRC.'
+              ? 'Live and upcoming fight cards from Streamed. Hosted player availability varies by event.'
               : 'Public live channels from IPTV-org, filtered for browser-compatible HTTPS streams.'}
           </p>
         </div>

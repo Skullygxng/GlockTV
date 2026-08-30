@@ -186,15 +186,18 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
               <div className="live-player__idle-message">
                 <Swords />
                 <strong>Choose a PPV event</strong>
-                <span>Live and upcoming fight cards from Streamed, with SportSRC embed backup.</span>
+                <span>
+                  Live and upcoming fight cards from Streamed. Hosted player availability varies by
+                  event.
+                </span>
               </div>
             </div>
           </div>
         )}
         {debugEnabled && !selected && <PpvDiagnosticsPanel catalog={catalogDiagnostics} />}
         <div className="live-tv-disclaimer">
-          PPV listings come from Streamed.pk. Embeds are hosted player URLs from Streamed and SportSRC.
-          Availability changes without notice. Existing Live TV channels are unchanged.
+          PPV listings come from Streamed.pk. Hosted player availability varies by event and can
+          change without notice. Existing Live TV channels are unchanged.
         </div>
       </section>
 

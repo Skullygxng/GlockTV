@@ -1,8 +1,10 @@
 import { inspectPpvEmbedUrl, isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
 import {
-  PPV_CROSS_PROVIDER_ID_NOTE,
   emptyEventDiagnostics,
   emptyProviderDiagnostics,
+  sanitizeUpstreamCategory,
+  type PpvCatalogFeed,
+  type PpvEventCatalogProvenance,
   type PpvCatalogDiagnostics,
   type PpvCatalogEndpointDiagnostics,
   type PpvEventDiagnostics,
@@ -23,9 +25,24 @@ export interface PpvEmbed {
   url: string;
 }
 
+/*
+ * Identifiers are provider-native. An ID issued by one provider is not
+ * evidence that another provider knows the same event by it - real-device runs
+ * showed a Streamed ID 404ing at SportSRC for some events and coincidentally
+ * resolving for others - so each provider only ever gets its own.
+ */
+export interface PpvEventProviderRefs {
+  streamed?: { eventId: string };
+  sportsrc?: { eventId: string; category?: string };
+}
+
 export interface PpvEvent {
   provider: PpvProviderId;
+  /* Streamed's identifier. Retained for catalog keys and existing callers. */
   providerEventId: string;
+  providerRefs?: PpvEventProviderRefs;
+  /* Which catalog feeds contributed this event. Sanitized labels only. */
+  catalogProvenance?: PpvEventCatalogProvenance;
   title: string;
   category: PpvCategory;
   promotion?: string;
@@ -139,7 +156,12 @@ function participantsFrom(match: StreamedMatch, title: string): string[] | undef
   return vs.length === 2 ? vs : undefined;
 }
 
-export function mapStreamedMatch(match: StreamedMatch, liveIds?: Set<string>, now = Date.now()): PpvEvent | null {
+export function mapStreamedMatch(
+  match: StreamedMatch,
+  liveIds?: Set<string>,
+  now = Date.now(),
+  catalogProvenance?: PpvEventCatalogProvenance,
+): PpvEvent | null {
   const id = asString(match.id);
   const title = asString(match.title);
   const date = asNumber(match.date);
@@ -153,6 +175,8 @@ export function mapStreamedMatch(match: StreamedMatch, liveIds?: Set<string>, no
   return {
     provider: 'streamed',
     providerEventId: id,
+    providerRefs: { streamed: { eventId: id } },
+    catalogProvenance,
     title,
     category: classifyPpvCategory(title, id),
     promotion: inferPromotion(title),
@@ -165,14 +189,12 @@ export function mapStreamedMatch(match: StreamedMatch, liveIds?: Set<string>, no
   };
 }
 
-function sourceRank(source?: string): number {
-  const value = (source ?? '').toLowerCase();
-  if (value === 'admin') return 80;
-  if (value === 'delta' || value === 'echo') return 10;
-  if (value === 'golf' || value === 'alpha' || value === 'bravo') return 20;
-  return 40;
-}
-
+/*
+ * Provider order, deduped on first occurrence. There is no quality ranking by
+ * source name: a real-device run played an `admin` source successfully while a
+ * `golf` source returned a player error, so the names carry no health signal
+ * and no documented provider contract defines an ordering.
+ */
 export function mergePpvEmbeds(embeds: PpvEmbed[]): PpvEmbed[] {
   const seen = new Set<string>();
   const next: PpvEmbed[] = [];
@@ -183,7 +205,7 @@ export function mergePpvEmbeds(embeds: PpvEmbed[]): PpvEmbed[] {
     seen.add(key);
     next.push(embed);
   }
-  return next.sort((left, right) => sourceRank(left.source) - sourceRank(right.source));
+  return next;
 }
 
 /*
@@ -430,22 +452,47 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
   const liveIds = new Set(liveMatches.map((match) => asString(match.id)).filter(Boolean));
   const merged = new Map<string, StreamedMatch>();
 
-  for (const match of [...asMatchList(fight), ...liveMatches, ...asMatchList(today)]) {
-    const id = asString(match.id);
-    const title = asString(match.title);
-    if (!id || !title) continue;
-    const category = asString(match.category);
-    const combat =
-      category === 'fight' ||
-      classifyPpvCategory(title, id) !== 'other' ||
-      /\bppv\b|fight/i.test(`${id} ${title}`);
-    if (!combat) continue;
-    const existing = merged.get(id);
-    merged.set(id, existing ? mergeStreamedMatches(existing, match) : match);
+  /*
+   * Admission is unchanged from production. Narrowing it needs evidence about
+   * which feed actually introduces a wrongly-admitted event, and the row counts
+   * reported so far cannot answer that - so this pass records provenance and
+   * changes no behaviour.
+   */
+  const provenance = new Map<string, PpvEventCatalogProvenance>();
+  const feeds: Array<[PpvCatalogFeed, StreamedMatch[]]> = [
+    ['fight', asMatchList(fight)],
+    ['live', liveMatches],
+    ['today', asMatchList(today)],
+  ];
+
+  for (const [feed, rows] of feeds) {
+    for (const match of rows) {
+      // A feed can carry a null or non-object row; reading through it threw and
+      // took the whole catalog down with it.
+      const id = asString(match?.id);
+      const title = asString(match?.title);
+      if (!id || !title) continue;
+      const category = asString(match?.category);
+      const combat =
+        category === 'fight' ||
+        classifyPpvCategory(title, id) !== 'other' ||
+        /\bppv\b|fight/i.test(`${id} ${title}`);
+      if (!combat) continue;
+
+      // Only a row that was actually admitted counts as having contributed.
+      const trail = provenance.get(id) ?? { feeds: [], upstreamCategories: [] };
+      if (!trail.feeds.includes(feed)) trail.feeds.push(feed);
+      const label = sanitizeUpstreamCategory(category);
+      if (label && !trail.upstreamCategories.includes(label)) trail.upstreamCategories.push(label);
+      provenance.set(id, trail);
+
+      const existing = merged.get(id);
+      merged.set(id, existing ? mergeStreamedMatches(existing, match) : match);
+    }
   }
 
-  const events = [...merged.values()]
-    .map((match) => mapStreamedMatch(match, liveIds))
+  const events = [...merged.entries()]
+    .map(([id, match]) => mapStreamedMatch(match, liveIds, Date.now(), provenance.get(id)))
     .filter((event): event is PpvEvent => Boolean(event))
     .filter((event) => event.status !== 'ended')
     .sort((left, right) => {
@@ -557,25 +604,42 @@ async function loadStreamedEmbeds(
 const SPORTSRC_CATEGORY = 'fight';
 
 /*
- * Behaviour is unchanged: this still sends the Streamed event identifier. That
- * assumption is recorded in diagnostics rather than acted on, because provider
- * ID equivalence has never been established.
+ * Runs only when the event carries a SportSRC-native identifier. Sending the
+ * Streamed ID here was an assumption, not a mapping: it 404'd for some events
+ * and coincidentally resolved for others. With no native ID there is nothing
+ * to ask about, so no request is made and the diagnostics say so rather than
+ * inventing a provider failure.
  */
 async function loadSportSrcEmbeds(
   event: PpvEvent,
   request: FetchLike,
   diagnostics: PpvProviderDiagnostics,
 ): Promise<PpvEmbed[]> {
+  const ref = event.providerRefs?.sportsrc;
+  const nativeEventId = asString(ref?.eventId);
+  if (!nativeEventId) {
+    diagnostics.providerNativeIdentityAvailable = false;
+    diagnostics.lookupState = 'not_attempted_unmapped';
+    diagnostics.requestCount = 0;
+    return [];
+  }
+
+  /*
+   * Defence in depth for a value that is dormant today: the category must look
+   * like a plain provider label before it is used, and it is encoded on the way
+   * into the URL regardless.
+   */
+  const category = sanitizeUpstreamCategory(ref?.category) || SPORTSRC_CATEGORY;
+  diagnostics.providerNativeIdentityAvailable = true;
+  diagnostics.lookupState = 'attempted';
   diagnostics.requestCount = 1;
-  diagnostics.requestedCategory = SPORTSRC_CATEGORY;
-  diagnostics.crossProviderIdAssumption = true;
-  diagnostics.crossProviderIdNote = PPV_CROSS_PROVIDER_ID_NOTE;
+  diagnostics.requestedCategory = category;
   diagnostics.responseSuccessFlag = null;
   diagnostics.hasData = false;
   diagnostics.hasSources = false;
 
   const outcome = await requestJson(
-    `${SPORTSRC_API}/?data=detail&category=${SPORTSRC_CATEGORY}&id=${encodeURIComponent(event.providerEventId)}`,
+    `${SPORTSRC_API}/?data=detail&category=${encodeURIComponent(category)}&id=${encodeURIComponent(nativeEventId)}`,
     request,
   );
   if (outcome.status !== 'success') {
@@ -635,8 +699,9 @@ async function loadSportSrcEmbeds(
 /*
  * Streamed and SportSRC are the only embed discovery paths. They run together
  * and are individually bounded, so a slow Streamed lookup cannot stop SportSRC
- * from being attempted, and an empty result costs one provider window rather
- * than two. Every call settles into success, empty, timeout or failure.
+ * from being attempted when the event carries a SportSRC-native identifier,
+ * and an empty result costs one provider window rather than two. Every call
+ * settles into success, empty, timeout or failure.
  *
  * DaddyLive is not currently supported because no approved embed origin is
  * configured, so it is not requested at all.
@@ -653,11 +718,15 @@ function finalStateFor(diagnostics: PpvEventDiagnostics): PpvEventDiagnostics['f
   if (providers.some((entry) => entry.malformedResponseCount > 0 || entry.malformedRowCount > 0)) {
     return 'malformed';
   }
-  if (providers.every((entry) => entry.requestCount > 0 && entry.completedRequests === 0)) {
-    return providers.some((entry) => entry.timeoutCount > 0) ? 'timeout' : 'provider_failure';
-  }
-  if (providers.some((entry) => entry.timeoutCount > 0)) return 'timeout';
-  if (providers.some((entry) => entry.httpErrorCount > 0 || entry.networkErrorCount > 0)) {
+  /*
+   * Only providers we actually asked can have failed. A backup skipped for want
+   * of a native identity is not a provider failure - reporting it as one is how
+   * "no sources exist for this event" got mistaken for "the backup is broken".
+   */
+  const attempted = providers.filter((entry) => entry.requestCount > 0);
+  if (!attempted.length) return 'unavailable';
+  if (attempted.some((entry) => entry.timeoutCount > 0)) return 'timeout';
+  if (attempted.some((entry) => entry.httpErrorCount > 0 || entry.networkErrorCount > 0)) {
     return 'provider_failure';
   }
   return 'unavailable';

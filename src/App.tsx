@@ -511,8 +511,15 @@ const wheelLockedUntil = useRef(0);
   useEffect(() => {
     cancelSuggestTimer();
 
+    /*
+     * The generation is claimed before any early return. A request already in
+     * flight for a different query must be retired even when the query we are
+     * moving to is served from cache - otherwise that request lands later and
+     * overwrites the cache with results for a term nobody is looking at.
+     */
+    const requestVersion = ++suggestVersion.current;
+
     if (searchTerm.length < SUGGEST_MIN_CHARS) {
-      suggestVersion.current += 1;
       setSuggestLoading(false);
       return;
     }
@@ -522,7 +529,6 @@ const wheelLockedUntil = useRef(0);
       return;
     }
 
-    const requestVersion = ++suggestVersion.current;
     setSuggestLoading(true);
 
     suggestTimer.current = setTimeout(() => {
@@ -538,11 +544,12 @@ const wheelLockedUntil = useRef(0);
         })
         .catch(() => {
           if (requestVersion !== suggestVersion.current) return;
-          // A failed suggestion is not worth an error banner; the box stays
-          // quiet and submitting still reports properly.
-          suggestTermRef.current = searchTerm;
-          setSuggestionsForTerm(searchTerm);
-          setSuggestions([]);
+          /*
+           * A failed suggestion is not worth an error banner, so the box just
+           * goes quiet. The term is deliberately left uncached: a provider
+           * failure is not a valid empty result, and caching it as one would
+           * make the query permanently unretryable.
+           */
         })
         .finally(() => {
           if (requestVersion === suggestVersion.current) setSuggestLoading(false);

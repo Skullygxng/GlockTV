@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
 import type { TmdbClient } from '../src/lib/tmdb';
+import appCss from '../src/styles.css?raw';
 
 function media(id: number, title: string, over: Partial<MediaItem> = {}): MediaItem {
   return {
@@ -506,5 +507,108 @@ describe('Discover search suggestion hardening', () => {
       expect(target).toBeTruthy();
       expect(document.getElementById(target as string)).toBeInTheDocument();
     });
+  });
+});
+
+
+describe('Discover search final hardening', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('cannot let an already-started request for an abandoned query mutate the cache', async () => {
+    let resolveBatman: ((value: MediaItem[]) => void) | undefined;
+    const calls: string[] = [];
+    const search = vi.fn((term: string) => {
+      calls.push(term);
+      if (term === 'spider') return Promise.resolve(spiderResults);
+      return new Promise<MediaItem[]>((resolve) => { resolveBatman = resolve; });
+    });
+    render(<App client={client({ search: search as never })} />);
+    await ready();
+
+    const input = searchBox();
+
+    // 1. Spider resolves and is cached.
+    fireEvent.change(input, { target: { value: 'spider' } });
+    expect(await screen.findByText('Spider-Man: No Way Home')).toBeInTheDocument();
+
+    // 2. Batman: let the debounce elapse so the request genuinely starts.
+    fireEvent.change(input, { target: { value: 'batman' } });
+    await waitFor(() => expect(calls).toContain('batman'));
+    expect(resolveBatman).toBeTypeOf('function');
+
+    // 3. Back to Spider while Batman is still in flight - served from cache.
+    fireEvent.change(input, { target: { value: 'spider' } });
+    expect(await screen.findByText('Spider-Man: No Way Home')).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    await waitFor(() => expect(input).toHaveAttribute('aria-activedescendant'));
+    const highlighted = input.getAttribute('aria-activedescendant');
+
+    // 4. Batman lands late. It must not touch anything.
+    await act(async () => {
+      resolveBatman?.([media(42, 'Batman Begins')]);
+    });
+
+    expect(screen.getByText('Spider-Man: No Way Home')).toBeInTheDocument();
+    expect(screen.queryByText('Batman Begins')).not.toBeInTheDocument();
+    expect(screen.getByRole('listbox', { name: 'Search suggestions' })).toBeInTheDocument();
+    expect(input).toHaveAttribute('aria-activedescendant', highlighted as string);
+    expect(document.getElementById(highlighted as string)).toBeInTheDocument();
+  });
+
+  it('does not cache a provider failure as an empty result, and retries once on refocus', async () => {
+    let attempt = 0;
+    const search = vi.fn(() => {
+      attempt += 1;
+      if (attempt === 1) return Promise.reject(new Error('tmdb down'));
+      return Promise.resolve(spiderResults);
+    });
+    render(<App client={client({ search: search as never })} />);
+    await ready();
+
+    const input = searchBox();
+    fireEvent.change(input, { target: { value: 'spider man' } });
+    await waitFor(() => expect(search).toHaveBeenCalledTimes(1));
+
+    // Quiet failure: no banner, no list, feed untouched.
+    await waitFor(() =>
+      expect(screen.queryByRole('listbox', { name: 'Search suggestions' })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Search is unavailable right now.')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Heat' })).toBeInTheDocument();
+
+    // The failed term stayed uncached, so refocusing retries it exactly once.
+    fireEvent.focus(input);
+    expect(await screen.findByText('Spider-Man: No Way Home')).toBeInTheDocument();
+    expect(search).toHaveBeenCalledTimes(2);
+
+    // No uncontrolled retry loop while focus stays put.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(search).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps search-control button styling off the suggestion options', () => {
+    const css = appCss;
+
+    // Descendant selectors here would style every suggestion row as a 32px
+    // circular icon button, and would restyle the last option as the close
+    // control. Both must stay direct-child scoped.
+    expect(css).toContain('.mobile-searchbar>button{');
+    expect(css).toContain('.mobile-searchbar>button[type=submit]{');
+    expect(css).not.toMatch(/\.mobile-searchbar button\{/);
+    expect(css).not.toMatch(/\.mobile-searchbar button\[type=submit\]/);
+    expect(css).not.toMatch(/\.mobile-searchbar button:last-child/);
+  });
+
+  it('gives suggestion options their own row sizing', () => {
+    const css = appCss;
+
+    // The poster art is 50px tall, so nothing may pin the row to 32px.
+    expect(css).toContain('.search-suggestions__art{');
+    expect(css).toMatch(/\.search-suggestions button\{[^}]*padding:7px 8px/);
+    expect(css).not.toMatch(/\.search-suggestions button\{[^}]*height:32px/);
   });
 });

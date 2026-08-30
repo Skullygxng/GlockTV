@@ -467,10 +467,12 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
 
   for (const [feed, rows] of feeds) {
     for (const match of rows) {
-      const id = asString(match.id);
-      const title = asString(match.title);
+      // A feed can carry a null or non-object row; reading through it threw and
+      // took the whole catalog down with it.
+      const id = asString(match?.id);
+      const title = asString(match?.title);
       if (!id || !title) continue;
-      const category = asString(match.category);
+      const category = asString(match?.category);
       const combat =
         category === 'fight' ||
         classifyPpvCategory(title, id) !== 'other' ||
@@ -698,7 +700,8 @@ async function loadSportSrcEmbeds(
  * Streamed and SportSRC are the only embed discovery paths. They run together
  * and are individually bounded, so a slow Streamed lookup cannot stop SportSRC
  * from being attempted when the event carries a SportSRC-native identifier,
- * and an empty result costs one provider window rather than two. Every call settles into success, empty, timeout or failure.
+ * and an empty result costs one provider window rather than two. Every call
+ * settles into success, empty, timeout or failure.
  *
  * DaddyLive is not currently supported because no approved embed origin is
  * configured, so it is not requested at all.

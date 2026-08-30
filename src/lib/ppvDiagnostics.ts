@@ -13,9 +13,6 @@ export type PpvDiagnosticStage = 'catalog' | 'streamed' | 'sportsrc' | 'policy' 
 
 export type PpvCatalogFeed = 'fight' | 'live' | 'today';
 
-/* Deterministic feed order for provenance reporting. */
-export const PPV_CATALOG_FEEDS: readonly PpvCatalogFeed[] = ['fight', 'live', 'today'];
-
 /*
  * Which catalog feeds actually contributed a normalized event, and the
  * upstream category labels they carried. Recorded because the diagnostics so

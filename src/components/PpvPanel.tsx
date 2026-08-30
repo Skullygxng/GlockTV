@@ -186,7 +186,10 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
               <div className="live-player__idle-message">
                 <Swords />
                 <strong>Choose a PPV event</strong>
-                <span>Live and upcoming fight cards from Streamed. Hosted player availability varies by event.</span>
+                <span>
+                  Live and upcoming fight cards from Streamed. Hosted player availability varies by
+                  event.
+                </span>
               </div>
             </div>
           </div>

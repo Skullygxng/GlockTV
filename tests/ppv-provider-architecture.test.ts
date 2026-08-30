@@ -162,6 +162,52 @@ describe('PPV catalog provenance', () => {
     ).toEqual({ feeds: ['today'], upstreamCategories: ['fight'] });
   });
 
+  it('survives a null or non-object row instead of discarding the whole catalog', async () => {
+    // Reading through a null row threw, and the rejection took every other
+    // event with it. Present on main before this change.
+    const request = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/api/matches/fight')
+        ? json([null, 'not-an-object', 42, row('ufc-320', 'UFC 320')])
+        : json([]),
+    ) as unknown as typeof fetch;
+
+    const catalog = await loadPpvCatalog(request);
+    expect(catalog.events.map((event) => event.providerEventId)).toEqual(['ufc-320']);
+    expect(catalog.events[0].catalogProvenance).toEqual({
+      feeds: ['fight'],
+      upstreamCategories: ['fight'],
+    });
+  });
+
+  it('keeps hostile upstream category values out of provenance entirely', async () => {
+    const hostile = [
+      { id: 'a', title: 'UFC fight', category: { evil: true }, date: SOON },
+      { id: 'b', title: 'UFC fight', category: '<script>alert(1)</script>', date: SOON },
+      { id: 'c', title: 'UFC fight', category: 'https://evil.example/?token=t', date: SOON },
+      { id: 'd', title: 'UFC fight', category: 'x'.repeat(500), date: SOON },
+      { id: 'e', title: 'UFC fight', category: 'FIGHT', date: SOON },
+    ];
+    const request = vi.fn(async (input: RequestInfo | URL) =>
+      String(input).endsWith('/api/matches/fight') ? json(hostile) : json([]),
+    ) as unknown as typeof fetch;
+
+    const catalog = await loadPpvCatalog(request);
+    for (const event of catalog.events) {
+      for (const label of event.catalogProvenance?.upstreamCategories ?? []) {
+        expect(label).toMatch(/^[a-z0-9][a-z0-9 _-]{0,31}$/);
+      }
+    }
+    // An uppercase label normalizes; everything unparseable is dropped, not rendered.
+    expect(
+      catalog.events.find((event) => event.providerEventId === 'e')?.catalogProvenance
+        ?.upstreamCategories,
+    ).toEqual(['fight']);
+    expect(
+      catalog.events.find((event) => event.providerEventId === 'c')?.catalogProvenance
+        ?.upstreamCategories,
+    ).toEqual([]);
+  });
+
   it('gives every catalog event a Streamed-native identity and no foreign one', async () => {
     const catalog = await loadPpvCatalog(catalogFetch({ fight: [row('ufc-320', 'UFC 320')] }));
     expect(catalog.events[0].providerRefs?.streamed?.eventId).toBe('ufc-320');

@@ -31,6 +31,7 @@ import {
   type PpvRequestStatus,
 } from './ppvDiagnostics';
 import { isAllowedOfficialUrl } from './ppvOfficialWatch';
+import { safePpvPosterUrl } from './ppvPosterPolicy';
 import { mergePpvPlaybackSources } from './ppvProviders';
 import {
   settleCatalogProvider,
@@ -81,6 +82,7 @@ export const streamedCatalogProvider: PpvCatalogProvider = {
         }
       }
       diagnostics.admittedEvents = catalog.events.length;
+      diagnostics.rejectedPosters = feeds?.rejectedPosters ?? 0;
       diagnostics.status = catalog.events.length
         ? 'success'
         : (feeds?.overallStatus ?? 'empty_success');
@@ -247,9 +249,13 @@ function sanitizeCachedEvent(value: unknown): PpvEvent | null {
     return null;
   }
 
-  const poster = typeof row.poster === 'string' && row.poster.startsWith('https://')
-    ? row.poster
-    : undefined;
+  /*
+   * A cached poster is provider data that has been sitting in storage: it gets
+   * no more trust on the way back than it did the first time. "It is https" is
+   * not the test - an arbitrary https tracker is exactly what must not become
+   * an <img src> after a reload.
+   */
+  const poster = safePpvPosterUrl(row.poster);
   const watch =
     typeof row.officialWatchUrl === 'string' && isAllowedOfficialUrl(row.officialWatchUrl)
       ? row.officialWatchUrl
@@ -453,6 +459,10 @@ export async function aggregatePpvCatalog(
     failedProviders: failed,
     mergedDuplicates,
     partialCoverage,
+    rejectedPosters: providerDiagnostics.reduce(
+      (total, provider) => total + (provider.rejectedPosters ?? 0),
+      0,
+    ),
   };
 
   const cached = useCache ? readPpvCatalogCache(now, storage) : null;

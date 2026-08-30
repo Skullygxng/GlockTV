@@ -1,4 +1,5 @@
 import { inspectPpvEmbedUrl, isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
+import { isAllowedPpvPosterUrl } from './ppvPosterPolicy';
 import {
   emptyEventDiagnostics,
   emptyProviderDiagnostics,
@@ -282,12 +283,37 @@ export function derivePpvStatus(startsAtMs: number, now = Date.now(), liveIds?: 
   return 'ended';
 }
 
+/* Absolute when it parses on its own; otherwise a path or bare image id. */
+function isAbsoluteUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/*
+ * Builds the poster URL exactly as before, then refuses it unless it resolves
+ * to an approved image origin. An absolute value is a destination the provider
+ * chose, so it is only ever loaded when it lands on the approved origin; a
+ * relative path or bare id is resolved against Streamed's own origin, which is
+ * approved because the catalog request to it has already happened from this
+ * same browser.
+ *
+ * The construction is deliberately unchanged: only the final URL is now gated,
+ * so a poster that worked before still works, and one pointing anywhere else
+ * is simply not rendered.
+ */
 export function streamedPosterUrl(poster: unknown): string | undefined {
   const value = asString(poster);
   if (!value) return undefined;
-  if (value.startsWith('https://')) return value;
-  if (value.startsWith('/')) return `${STREAMED_API}${value}`;
-  return `${STREAMED_API}/api/images/proxy/${value}.webp`;
+  const candidate = isAbsoluteUrl(value)
+    ? value
+    : value.startsWith('/')
+      ? `${STREAMED_API}${value}`
+      : `${STREAMED_API}/api/images/proxy/${value}.webp`;
+  return isAllowedPpvPosterUrl(candidate) ? candidate : undefined;
 }
 
 function participantsFrom(match: StreamedMatch, title: string): string[] | undefined {
@@ -635,8 +661,16 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
     }
   }
 
+  // A poster the provider supplied that the poster policy refused. Counted so
+  // a real-device run can see the policy working without ever recording where
+  // the refused poster pointed.
+  let rejectedPosters = 0;
   const events = [...merged.entries()]
-    .map(([id, match]) => mapStreamedMatch(match, liveIds, Date.now(), provenance.get(id)))
+    .map(([id, match]) => {
+      const event = mapStreamedMatch(match, liveIds, Date.now(), provenance.get(id));
+      if (event && !event.poster && asString(match?.poster)) rejectedPosters += 1;
+      return event;
+    })
     .filter((event): event is PpvEvent => Boolean(event))
     .filter((event) => event.status !== 'ended')
     .sort((left, right) => {
@@ -656,6 +690,7 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
       live: liveEndpoint.diagnostics,
       today: todayEndpoint.diagnostics,
       normalizedEvents: events.length,
+      rejectedPosters,
       overallStatus: events.length
         ? 'success'
         : fightEndpoint.diagnostics.status === 'malformed'

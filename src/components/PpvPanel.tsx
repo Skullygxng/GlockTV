@@ -194,7 +194,6 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
             </div>
           </div>
         )}
-        {debugEnabled && !selected && <PpvDiagnosticsPanel catalog={catalogDiagnostics} />}
         <div className="live-tv-disclaimer">
           PPV listings come from Streamed.pk. Hosted player availability varies by event and can
           change without notice. Existing Live TV channels are unchanged.
@@ -235,6 +234,14 @@ export function PpvPanel({ loadCatalog = loadPpvCatalog, onWatchingChange, debug
             </button>
           </div>
         )}
+        {/*
+         * Diagnostics for the no-selection state live here, not in
+         * .live-tv-content: below 900px that column is display:none until an
+         * event is being watched, and a catalog failure leaves nothing to
+         * select - so the panel explaining the failure was hidden by the
+         * failure itself. This surface stays visible either way.
+         */}
+        {debugEnabled && !selected && <PpvDiagnosticsPanel catalog={catalogDiagnostics} />}
         <div className="live-tv-list">
           {loading ? (
             <div className="live-tv-empty">

@@ -160,3 +160,13 @@
   padding:8px;
   resize:vertical;
 }
+/* In the event-browser column the panel is a flex sibling of the scrolling
+   event list, so it bounds its own height rather than pushing the list out. */
+.live-tv-browser>.ppv-diag{
+  flex:0 1 auto;
+  min-height:0;
+  max-height:min(48vh,340px);
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  -webkit-overflow-scrolling:touch;
+}

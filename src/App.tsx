@@ -1,7 +1,7 @@
 import { FormEvent, lazy, Suspense, type TouchEvent, type WheelEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, Clapperboard,
+  Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, CircleUser, Clapperboard,
   Compass, Film, Filter, LoaderCircle, Play, Search,
   SlidersHorizontal, Sparkles, Star, Users, X, Zap,
 } from 'lucide-react';
@@ -9,6 +9,9 @@ import { MediaCard } from './components/MediaCard';
 import { SearchSuggestions, optionId } from './components/SearchSuggestions';
 import { useMediaSearchSuggestions } from './hooks/useMediaSearchSuggestions';
 import { useDialogBehavior } from './hooks/useDialogBehavior';
+import { AccountPanel } from './components/AccountPanel';
+import { AccountProvider, useAccount } from './components/AccountProvider';
+import type { AccountService } from './lib/accountService';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { composeDiscoverFeed } from './lib/feed';
@@ -34,6 +37,8 @@ export interface AppProps {
   partyService?: WatchPartyService | null;
   playbackConfig?: PlaybackConfig;
   partyPlaybackConfig?: PartyPlaybackConfig;
+  /* Omit for the app's own account layer; pass null to run with no backend. */
+  accountService?: AccountService | null;
 }
 
 type View = 'discover' | 'friends' | 'vibe' | 'list';
@@ -93,7 +98,19 @@ function LoadingState() {
   );
 }
 
-export function App({ client, partyService, playbackConfig, partyPlaybackConfig }: AppProps) {
+/*
+ * The account layer wraps the whole shell, so identity and entitlements are
+ * owned here rather than fetched again by each feature that needs them.
+ */
+export function App({ accountService, ...props }: AppProps) {
+  return (
+    <AccountProvider service={accountService}>
+      <AppShell {...props} />
+    </AccountProvider>
+  );
+}
+
+function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig }: Omit<AppProps, 'accountService'>) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
@@ -121,6 +138,7 @@ export function App({ client, partyService, playbackConfig, partyPlaybackConfig 
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [isMobileView, setIsMobileView] = useState(false);
   const [session, dispatch] = useReducer(sessionReducer, undefined, loadSession);
 
@@ -603,7 +621,7 @@ const wheelLockedUntil = useRef(0);
         </form>
 
         <button className="topbar__icon" aria-label="Notifications"><Bell size={18} /></button>
-        <div className="avatar">G</div>
+        <AccountButton onOpen={() => setAccountOpen(true)} />
       </header>
 
       <aside className={`sidebar ${view === 'friends' ? 'sidebar--hidden' : ''}`}>
@@ -903,6 +921,9 @@ const wheelLockedUntil = useRef(0);
         >
           <Bookmark /><span>My List</span>
         </button>
+        {/* The topbar is hidden on phones, so the account needs its own way in
+            here or it is unreachable below the breakpoint. */}
+        <MobileAccountButton onOpen={() => setAccountOpen(true)} />
       </nav>
 
       <AnimatePresence>
@@ -959,10 +980,61 @@ const wheelLockedUntil = useRef(0);
         )}
       </AnimatePresence>
 
+      {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} />}
+
       <footer className="credits">
         Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.
       </footer>
     </div>
+  );
+}
+
+/*
+ * The account entry point. It says what the account is at a glance - a guest
+ * initial, an email initial, or the Premium mark - and opens the one account
+ * surface.
+ */
+function AccountButton({ onOpen }: { onOpen: () => void }) {
+  const { account, entitlements } = useAccount();
+  const isGuest = !account || account.isAnonymous;
+  const isPremium = entitlements.tier === 'premium';
+  const initial = account?.email?.trim()?.[0]?.toUpperCase() ?? 'G';
+
+  return (
+    <button
+      type="button"
+      className="avatar topbar__account"
+      aria-label={
+        isPremium
+          ? 'Your account, Premium'
+          : isGuest ? 'Your account, guest' : `Your account, ${account?.email}`
+      }
+      onClick={onOpen}
+    >
+      {isPremium ? <Sparkles size={15} /> : initial}
+    </button>
+  );
+}
+
+/* The same account, reached from the mobile tab bar. */
+function MobileAccountButton({ onOpen }: { onOpen: () => void }) {
+  const { account, entitlements } = useAccount();
+  const isPremium = entitlements.tier === 'premium';
+  const isGuest = !account || account.isAnonymous;
+
+  return (
+    <button
+      type="button"
+      aria-label={
+        isPremium
+          ? 'Your account, Premium'
+          : isGuest ? 'Your account, guest' : `Your account, ${account?.email}`
+      }
+      onClick={onOpen}
+    >
+      {isPremium ? <Sparkles /> : <CircleUser />}
+      <span>{isPremium ? 'Premium' : isGuest ? 'Guest' : 'Account'}</span>
+    </button>
   );
 }
 

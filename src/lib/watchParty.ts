@@ -1,4 +1,5 @@
-import { createClient, type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
+import { type RealtimeChannel, type SupabaseClient } from '@supabase/supabase-js';
+import { getSupabaseClient } from './supabaseClient';
 
 export type PlaybackState = 'playing' | 'paused';
 export type SyncStatus = 'connecting' | 'synced' | 'drifting' | 'limited';
@@ -39,7 +40,6 @@ export interface PartyMember {
 }
 
 export interface BannedPartyMember { userId: string; nickname: string; createdAt: string }
-export interface PartyAccount { id: string; email: string | null; isAnonymous: boolean }
 export interface PartyPresence { syncStatus: SyncStatus; syncOffsetSeconds?: number | null; serverId?: string | null }
 
 export interface PartyMessage {
@@ -113,9 +113,6 @@ export interface WatchPartyService {
   blockUser(roomId: string, userId: string, blocked: boolean): Promise<void>;
   getBlockedUsers(): Promise<string[]>;
   reportMessage(messageId: string, reason: 'spam' | 'abuse' | 'spoiler' | 'other'): Promise<void>;
-  getAccount(): Promise<PartyAccount | null>;
-  linkEmail(email: string): Promise<void>;
-  sendSignInLink(email: string): Promise<void>;
 }
 
 interface RoomRow {
@@ -438,32 +435,10 @@ class SupabaseWatchPartyService implements WatchPartyService {
     if (error) throw new Error(error.message);
   }
 
-  async getAccount(): Promise<PartyAccount | null> {
-    const { data, error } = await this.client.auth.getUser();
-    if (error || !data.user) return null;
-    return {
-      id: data.user.id,
-      email: data.user.email ?? null,
-      isAnonymous: (data.user as typeof data.user & { is_anonymous?: boolean }).is_anonymous === true,
-    };
-  }
-
-  async linkEmail(email: string) {
-    await this.ensureUser();
-    const { error } = await this.client.auth.updateUser({ email: email.trim() });
-    if (error) throw new Error(error.message);
-  }
-
-  async sendSignInLink(email: string) {
-    const redirect = `${window.location.origin}${import.meta.env.BASE_URL}`;
-    const { error } = await this.client.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: redirect } });
-    if (error) throw new Error(error.message);
-  }
 }
 
 export function createWatchPartyService(config: { url?: string; publishableKey?: string } = {}): WatchPartyService | null {
-  const url = config.url ?? import.meta.env.VITE_SUPABASE_URL;
-  const publishableKey = config.publishableKey ?? import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-  if (!url || !publishableKey) return null;
-  return new SupabaseWatchPartyService(createClient(url, publishableKey));
+  /* The shared client, so parties and the account layer are one auth session. */
+  const client = getSupabaseClient(config);
+  return client ? new SupabaseWatchPartyService(client) : null;
 }

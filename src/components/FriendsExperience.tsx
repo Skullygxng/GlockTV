@@ -1,9 +1,9 @@
 import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { Ban, ChevronDown, Copy, Crown, DoorOpen, Flag, LoaderCircle, LockKeyhole, Mail, MessageCircle, Play, Radio, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, UserCheck, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
+import { Ban, ChevronDown, Copy, Crown, DoorOpen, Flag, LoaderCircle, LockKeyhole, MessageCircle, Play, Radio, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, UserCheck, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import type { TmdbClient } from '../lib/tmdb';
-import type { BannedPartyMember, OfficialLoungeBallotEntry, PartyAccount, PartyMember, PartyMessage, PartyPresence, PartyRoom, PlaybackState, PublicPartyRoom, WatchPartyService } from '../lib/watchParty';
+import type { BannedPartyMember, OfficialLoungeBallotEntry, PartyMember, PartyMessage, PartyPresence, PartyRoom, PlaybackState, PublicPartyRoom, WatchPartyService } from '../lib/watchParty';
 import { isOfficialLounge, loungeShouldAdvance, officialBallotCandidates, officialBallotTallies, officialBallotWinner, visibleRoomChat } from '../lib/lounge';
 import { EpisodeBrowser } from './EpisodeBrowser';
 import { InviteJoinCard } from './InviteJoinCard';
@@ -12,6 +12,7 @@ import { PartyPlaybackPlayer, type PartyPlaybackConfig } from './PartyPlaybackPl
 import { optionId } from './SearchSuggestions';
 import { SUGGEST_MIN_CHARS, useMediaSearchSuggestions } from '../hooks/useMediaSearchSuggestions';
 import { useDialogBehavior } from '../hooks/useDialogBehavior';
+import { useAccount } from './AccountProvider';
 import '../friends.css';
 
 interface FriendsExperienceProps {
@@ -84,10 +85,8 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
   const [resyncToken, setResyncToken] = useState(0);
   const [resyncNotice, setResyncNotice] = useState('');
-  const [accountOpen, setAccountOpen] = useState(false);
-  const [account, setAccount] = useState<PartyAccount | null>(null);
-  const [accountEmail, setAccountEmail] = useState('');
-  const [accountStatus, setAccountStatus] = useState('');
+  /* Identity is the app's, not the watch party's. Friends reads it. */
+  const { account } = useAccount();
   const [officialBallot, setOfficialBallot] = useState<OfficialLoungeBallotEntry[]>([]);
   const loungeAdvanceKey = useRef('');
   const messageList = useRef<HTMLDivElement>(null);
@@ -110,14 +109,6 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   useEffect(() => {
     blockedUsersRef.current = blockedUsers;
   }, [blockedUsers]);
-
-  useEffect(() => {
-    if (!service) return;
-    service.getAccount?.().then((nextAccount) => {
-      setAccount(nextAccount);
-      if (nextAccount?.email) setAccountEmail(nextAccount.email);
-    }).catch(() => undefined);
-  }, [service]);
 
   useEffect(() => {
     if (!service?.listPublicRooms || room) return;
@@ -530,20 +521,6 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     window.setTimeout(() => setResyncNotice(''), 2400);
   };
 
-  const protectAccount = async () => {
-    if (!service || !accountEmail.trim()) return;
-    setAccountStatus(''); setError('');
-    try { await service.linkEmail(accountEmail.trim()); setAccountStatus('Check your email to finish protecting this account.'); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Account email could not be linked.'); }
-  };
-
-  const emailSignInLink = async () => {
-    if (!service || !accountEmail.trim()) return;
-    setAccountStatus(''); setError('');
-    try { await service.sendSignInLink(accountEmail.trim()); setAccountStatus('Sign-in link sent. Open it on this device.'); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Sign-in link could not be sent.'); }
-  };
-
   const updatePlayback = async (state: PlaybackState, position: number) => {
     if (!service || !room || room.hostId !== userId) return;
     const optimistic = { ...room, playbackState: state, playbackPosition: Math.max(0, position), playbackUpdatedAt: new Date().toISOString() };
@@ -732,15 +709,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         <p>Watch the full movie or episode in sync. The host controls playback while everyone shares the moment.</p>
       </div>
       <div className="friends-entry">
-        <div className="friends-identity-row"><label>Your nickname<input aria-label="Your nickname" maxLength={24} value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="How people see you" /></label><button type="button" aria-label="Open account" onClick={() => setAccountOpen((open) => !open)}><ShieldCheck /> {account?.email ? 'Account saved' : 'Protect account'}</button></div>
-        {accountOpen && <section className="friends-account" aria-label="Optional account">
-          <header><div><Mail /><span>Optional account</span></div><button type="button" aria-label="Close account" onClick={() => setAccountOpen(false)}><X /></button></header>
-          <strong>Keep the same identity across devices</strong>
-          <p>Your rooms stay guest-friendly. Adding email protects this anonymous identity and makes bans, hosting, and future watch history persistent.</p>
-          <input type="email" aria-label="Account email" value={accountEmail} onChange={(event) => setAccountEmail(event.target.value)} placeholder="you@example.com" />
-          <div><button type="button" onClick={() => void protectAccount()} disabled={!accountEmail.trim()}><ShieldCheck /> Protect guest account</button><button type="button" onClick={() => void emailSignInLink()} disabled={!accountEmail.trim()}><Mail /> Email sign-in link</button></div>
-          {accountStatus && <small>{accountStatus}</small>}
-        </section>}
+        <div className="friends-identity-row"><label>Your nickname<input aria-label="Your nickname" maxLength={24} value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="How people see you" /></label>{account?.email ? <p className="friends-identity-note"><ShieldCheck /> Saved to {account.email}</p> : <p className="friends-identity-note"><ShieldCheck /> Playing as a guest. Protect this identity from your account in the top bar.</p>}</div>
         {recentRoom && <section className="resume-room-card" aria-label="Recent watch party">
           <div><small>{recentRoom.wasHost ? 'Your private room' : 'Recent room'}</small><strong>{recentRoom.titleName}</strong><span>Room {recentRoom.code} · pick up where you left off</span></div>
           <button type="button" aria-label={`${recentRoom.wasHost ? 'Resume hosting' : 'Rejoin'} ${recentRoom.titleName}`} onClick={() => void joinCode(recentRoom.code)} disabled={busy || !service || !nickname.trim()}><Play fill="currentColor" /> {recentRoom.wasHost ? 'Resume hosting' : 'Rejoin room'}</button>

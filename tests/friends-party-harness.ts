@@ -139,9 +139,6 @@ export function makePartyService() {
     blockUser: vi.fn().mockResolvedValue(undefined),
     getBlockedUsers: vi.fn().mockResolvedValue([]),
     reportMessage: vi.fn().mockResolvedValue(undefined),
-    getAccount: vi.fn().mockResolvedValue({ id: 'user-1', email: null, isAnonymous: true }),
-    linkEmail: vi.fn().mockResolvedValue(undefined),
-    sendSignInLink: vi.fn().mockResolvedValue(undefined),
     updateEpisode: vi.fn(async (_roomId: string, seasonNumber: number, episodeNumber: number) => commit({ seasonNumber, episodeNumber })),
   };
 }

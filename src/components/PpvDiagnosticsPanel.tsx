@@ -78,6 +78,7 @@ function CatalogProviderRows({ provider }: { provider: PpvCatalogProviderDiagnos
       <Row label="returned rows" value={provider.returnedRowCount} />
       <Row label="admitted events" value={provider.admittedEvents} />
       <Row label="rejected non-combat" value={provider.rejectedNonCombat} />
+      <Row label="rejected posters" value={provider.rejectedPosters ?? 0} />
       <Row label="malformed rows" value={provider.malformedRowCount} />
       {provider.endpoints.map((endpoint, position) => (
         <Row
@@ -201,6 +202,7 @@ export function PpvDiagnosticsPanel({
             <Row label="providers failed" value={(catalog.failedProviders ?? []).join(', ') || 'none'} />
             <Row label="merged duplicates" value={catalog.mergedDuplicates ?? 0} />
             <Row label="partial coverage" value={catalog.partialCoverage ?? false} />
+            <Row label="rejected posters" value={catalog.rejectedPosters ?? 0} />
             <Row label="served from cache" value={catalog.fromCache ?? false} />
             <Row label="stale" value={catalog.stale ?? false} />
             <Row

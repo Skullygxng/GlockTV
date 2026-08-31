@@ -126,6 +126,12 @@ export interface PpvCatalogProviderDiagnostics {
   admittedEvents: number;
   rejectedNonCombat: number;
   malformedRowCount: number;
+  /*
+   * Posters the provider supplied that resolve outside the approved image
+   * origin and are therefore never requested. A count only - the whole point
+   * of refusing them is not to carry their destinations anywhere.
+   */
+  rejectedPosters?: number;
 }
 
 export function emptyCatalogProviderDiagnostics(
@@ -144,6 +150,7 @@ export function emptyCatalogProviderDiagnostics(
     admittedEvents: 0,
     rejectedNonCombat: 0,
     malformedRowCount: 0,
+    rejectedPosters: 0,
   };
 }
 
@@ -156,6 +163,8 @@ export interface PpvCatalogDiagnostics {
   today: PpvCatalogEndpointDiagnostics;
   normalizedEvents: number;
   overallStatus: PpvRequestStatus;
+  /* Posters refused by the poster policy. Count only, never a destination. */
+  rejectedPosters?: number;
   /*
    * Aggregate fields. Optional so a single-provider load (loadPpvCatalog) can
    * keep reporting exactly what it always did; the aggregator fills them in.

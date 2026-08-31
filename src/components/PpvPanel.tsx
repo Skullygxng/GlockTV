@@ -18,6 +18,7 @@ import {
   sanitizeDiagnosticString,
   type PpvCatalogDiagnostics,
 } from '../lib/ppvDiagnostics';
+import { safePpvPosterUrl } from '../lib/ppvPosterPolicy';
 import '../ppv.css';
 
 interface PpvPanelProps {
@@ -330,18 +331,26 @@ function PpvEventRow({
   active: boolean;
   onSelect: () => void;
 }) {
+  /*
+   * The last gate before a provider-supplied URL becomes a request the
+   * browser makes on its own. Mapping and the cache both apply the same
+   * policy; this is here so no future path can reach an <img src> without it.
+   */
+  const poster = safePpvPosterUrl(event.poster);
+  const [posterFailed, setPosterFailed] = useState(false);
+
   return (
     <article className={active ? 'active' : ''} data-ppv-id={event.providerEventId}>
       <button type="button" className="live-tv-channel" onClick={onSelect} aria-label={`Watch ${event.title}`}>
         <span className="live-tv-channel__logo">
-          {event.poster ? (
+          {poster && !posterFailed ? (
             <img
-              src={event.poster}
+              src={poster}
               alt=""
               loading="lazy"
-              onError={(current) => {
-                current.currentTarget.style.display = 'none';
-              }}
+              // Falling back to the icon rather than hiding the image keeps the
+              // row looking intentional instead of leaving an empty square.
+              onError={() => setPosterFailed(true)}
             />
           ) : (
             <Swords />

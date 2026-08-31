@@ -1,4 +1,5 @@
 import { inspectPpvEmbedUrl, isAllowedPpvEmbedUrl } from './ppvEmbedPolicy';
+import { isAllowedPpvPosterUrl } from './ppvPosterPolicy';
 import {
   emptyEventDiagnostics,
   emptyProviderDiagnostics,
@@ -282,12 +283,33 @@ export function derivePpvStatus(startsAtMs: number, now = Date.now(), liveIds?: 
   return 'ended';
 }
 
+/* Absolute when it parses on its own; otherwise a path or bare image id. */
+function isAbsoluteUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/*
+ * Resolves what the poster URL would be, then puts it through the poster
+ * policy. In V1 the policy approves no remote host, so every value - absolute,
+ * relative path, or bare image id - resolves to undefined and no poster
+ * request is ever made on the provider's behalf. A relative Streamed path is
+ * deliberately still resolved first rather than short-circuited, so it is the
+ * policy, not this function, that decides.
+ */
 export function streamedPosterUrl(poster: unknown): string | undefined {
   const value = asString(poster);
   if (!value) return undefined;
-  if (value.startsWith('https://')) return value;
-  if (value.startsWith('/')) return `${STREAMED_API}${value}`;
-  return `${STREAMED_API}/api/images/proxy/${value}.webp`;
+  const candidate = isAbsoluteUrl(value)
+    ? value
+    : value.startsWith('/')
+      ? `${STREAMED_API}${value}`
+      : `${STREAMED_API}/api/images/proxy/${value}.webp`;
+  return isAllowedPpvPosterUrl(candidate) ? candidate : undefined;
 }
 
 function participantsFrom(match: StreamedMatch, title: string): string[] | undefined {
@@ -635,8 +657,16 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
     }
   }
 
+  // A poster the provider supplied that the poster policy refused. Counted so
+  // a real-device run can see the policy working without ever recording where
+  // the refused poster pointed.
+  let rejectedPosters = 0;
   const events = [...merged.entries()]
-    .map(([id, match]) => mapStreamedMatch(match, liveIds, Date.now(), provenance.get(id)))
+    .map(([id, match]) => {
+      const event = mapStreamedMatch(match, liveIds, Date.now(), provenance.get(id));
+      if (event && !event.poster && asString(match?.poster)) rejectedPosters += 1;
+      return event;
+    })
     .filter((event): event is PpvEvent => Boolean(event))
     .filter((event) => event.status !== 'ended')
     .sort((left, right) => {
@@ -656,6 +686,7 @@ export async function loadPpvCatalog(request: FetchLike = fetch): Promise<PpvCat
       live: liveEndpoint.diagnostics,
       today: todayEndpoint.diagnostics,
       normalizedEvents: events.length,
+      rejectedPosters,
       overallStatus: events.length
         ? 'success'
         : fightEndpoint.diagnostics.status === 'malformed'

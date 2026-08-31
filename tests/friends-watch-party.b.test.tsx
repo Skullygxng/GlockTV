@@ -42,6 +42,13 @@ describe('Friends watch party moderation and official lounge', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Room controls' }));
     fireEvent.click(screen.getByRole('button', { name: 'Lock new joins' }));
     await waitFor(() => expect(partyService.setRoomControls).toHaveBeenCalledWith('room-1', { isLocked: true, slowModeSeconds: 0 }));
+    /*
+     * The service call having been made is not the same as the room being
+     * locked on screen. Slow mode is sent alongside the current lock state, so
+     * wait for the control itself to say the room is locked before changing it
+     * - otherwise this asserts a value the UI has not committed to yet.
+     */
+    await screen.findByRole('button', { name: 'Unlock new joins' });
     fireEvent.change(screen.getByLabelText('Chat slow mode'), { target: { value: '10' } });
     await waitFor(() => expect(partyService.setRoomControls).toHaveBeenCalledWith('room-1', { isLocked: true, slowModeSeconds: 10 }));
     fireEvent.click(screen.getByRole('button', { name: 'Clear room chat' }));
@@ -128,7 +135,15 @@ describe('Friends watch party moderation and official lounge', () => {
     await screen.findByRole('region', { name: 'Watch party HEAT95' });
 
     partyService.getMembers.mockResolvedValue([]);
-    onMembersChanged?.();
+    /*
+     * The optional call made a missing subscription a silent no-op: nothing
+     * would happen, and the test would fail a second later on the lobby
+     * assertion, blaming the removal instead of the handler that was never
+     * there. Assert the component actually subscribed, then call it
+     * unconditionally so a missing handler fails here and says so.
+     */
+    await waitFor(() => expect(onMembersChanged).toBeTypeOf('function'));
+    onMembersChanged!();
 
     expect(await screen.findByRole('heading', { name: /Movie night/i })).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('The host removed you from this room.');

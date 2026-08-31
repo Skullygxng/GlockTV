@@ -8,6 +8,7 @@ import {
 import { MediaCard } from './components/MediaCard';
 import { SearchSuggestions, optionId } from './components/SearchSuggestions';
 import { useMediaSearchSuggestions } from './hooks/useMediaSearchSuggestions';
+import { useDialogBehavior } from './hooks/useDialogBehavior';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { composeDiscoverFeed } from './lib/feed';
@@ -983,6 +984,9 @@ function FilterPanel({
       : [...filters.genreIds, id],
   });
 
+  /* A drawer over a full-page scrim behaves as a modal, so it gets the trap. */
+  const dialog = useDialogBehavior<HTMLElement>({ onClose });
+
   return (
     <motion.div
       className="overlay overlay--right"
@@ -991,8 +995,10 @@ function FilterPanel({
       exit={{ opacity: 0 }}
     >
       <motion.aside
+        ref={dialog}
         className="filter-panel"
         role="dialog"
+        aria-modal="true"
         aria-label="Filter your feed"
         initial={{ x: 80 }}
         animate={{ x: 0 }}
@@ -1102,17 +1108,23 @@ function VibePanel({
   onClose: () => void;
   onChoose: (ids: readonly number[]) => void;
 }) {
+  const dialog = useDialogBehavior<HTMLDivElement>({ onClose });
+
   return (
     <motion.div
       className="overlay"
-      role="dialog"
-      aria-label="Choose a vibe"
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
     >
+      {/* The dialog is the panel, not the scrim behind it: aria-modal and the
+          accessible name belong on the thing the user is actually in. */}
       <motion.div
+        ref={dialog}
         className="vibe-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Choose a vibe"
         initial={{ y: 30, scale: .96 }}
         animate={{ y: 0, scale: 1 }}
         exit={{ y: 20, scale: .97 }}
@@ -1161,6 +1173,8 @@ function TitleModal({
       )
     : [];
 
+  const dialog = useDialogBehavior<HTMLDivElement>({ onClose });
+
   return (
     <motion.div
       className="overlay"
@@ -1169,8 +1183,10 @@ function TitleModal({
       exit={{ opacity: 0 }}
     >
       <motion.div
+        ref={dialog}
         className={`title-modal ${mode === 'channel' ? 'title-modal--channel' : ''}`}
         role="dialog"
+        aria-modal="true"
         aria-label={
           mode === 'channel'
             ? 'Channel player'

@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Check, ChevronDown, Film, LoaderCircle, RotateCw, ShieldCheck, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
 import { buildPlaybackUrl, canResumePlaybackServer, getDefaultPlaybackServerId, getPlaybackServers, type PlaybackConfig } from '../lib/playback';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
 import {
   PLAYBACK_FALLBACK_MS,
   PLAYBACK_SLOW_MS,
@@ -195,35 +196,34 @@ export function PlaybackModal({ item, config, client, onClose, onSelect }: Playb
   useEffect(() => {
     const root = document.documentElement;
     const body = document.body;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     root.classList.add('playback-open');
     body.classList.add('playback-open');
-    closeButton.current?.focus();
-
     return () => {
       root.classList.remove('playback-open');
       body.classList.remove('playback-open');
-      previousFocus?.focus();
     };
   }, []);
 
-  useEffect(() => {
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+  /*
+   * Escape peels the server menu first and the player second, as it always
+   * has. Focus entry, focus restoration and Tab containment now come from the
+   * shared dialog contract rather than a private copy of it.
+   */
+  const dialog = useDialogBehavior<HTMLElement>({
+    onClose: () => {
       if (serverOpen) {
         setServerOpen(false);
         return;
       }
       onClose();
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [onClose, serverOpen]);
+    },
+    initialFocus: closeButton,
+  });
 
   const recommendations = context?.recommendations ?? [];
 
   return <motion.div className="overlay playback-overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-    <motion.section className="playback-modal" role="dialog" aria-label={playerName} aria-modal="true" initial={{ y: 26, scale: .985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .99 }}>
+    <motion.section ref={dialog} className="playback-modal" role="dialog" aria-label={playerName} aria-modal="true" initial={{ y: 26, scale: .985 }} animate={{ y: 0, scale: 1 }} exit={{ y: 18, scale: .99 }}>
       <header className="playback-modal__header">
         <div className="playback-brand"><span>GlockTV player</span><small>{item.mediaType === 'movie' ? 'Feature' : `S${season} / E${episode}`} - {item.title}</small></div>
         <div className="playback-modal__actions">

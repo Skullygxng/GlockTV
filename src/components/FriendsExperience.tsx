@@ -11,6 +11,7 @@ import { LoungeBallotPanel } from './LoungeBallotPanel';
 import { PartyPlaybackPlayer, type PartyPlaybackConfig } from './PartyPlaybackPlayer';
 import { optionId } from './SearchSuggestions';
 import { SUGGEST_MIN_CHARS, useMediaSearchSuggestions } from '../hooks/useMediaSearchSuggestions';
+import { useDialogBehavior } from '../hooks/useDialogBehavior';
 import '../friends.css';
 
 interface FriendsExperienceProps {
@@ -100,9 +101,11 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   /* Mirrors `choosing`, so two clicks landing in one React batch cannot both
      read the pre-commit value and start a write. */
   const choosingRef = useRef(false);
-  /* The dialog, and the control that opened it, so focus can go back. */
-  const picker = useRef<HTMLElement>(null);
+  /* The controls that open each panel, so focus goes back to them however the
+     panel was opened. */
   const pickerTrigger = useRef<HTMLButtonElement>(null);
+  const controlsTrigger = useRef<HTMLButtonElement>(null);
+  const rosterTrigger = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     blockedUsersRef.current = blockedUsers;
@@ -573,12 +576,15 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     setQuery('');
     setSearchError('');
     setPickerOpen(false);
-    pickerTrigger.current?.focus();
   }, [suggest]);
 
   const openPicker = () => {
     setQuery('');
     setSearchError('');
+    /* A modal goes on top of the anchored popovers, so they close with it
+       rather than staying open underneath and competing for Escape. */
+    setRosterOpen(false);
+    setControlsOpen(false);
     setPickerOpen(true);
   };
 
@@ -614,19 +620,29 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     suggest.onKeyDown(event);
   };
 
-  /* Nothing inside the dialog is in the tab order behind it, so Tab is wrapped
-     rather than allowed to walk into the room underneath. */
-  const trapPickerTab = (event: ReactKeyboardEvent) => {
-    if (event.key !== 'Tab' || !picker.current) return;
-    const focusable = Array.from(
-      picker.current.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), input:not([disabled])'),
-    );
-    if (!focusable.length) return;
-    const edge = event.shiftKey ? focusable[0] : focusable[focusable.length - 1];
-    if (document.activeElement !== edge) return;
-    event.preventDefault();
-    (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
-  };
+  /* autoFocus stays false: the search box focuses itself, which is the
+     intended entry point here and the one a phone should open a keyboard for. */
+  const picker = useDialogBehavior<HTMLElement>({
+    open: pickerOpen,
+    onClose: closePicker,
+    returnFocus: pickerTrigger,
+    autoFocus: false,
+  });
+
+  /* Anchored popovers over a still-interactive room: Escape and focus, no trap. */
+  const hostingNow = !!room && room.hostId === userId;
+  const controlsPanel = useDialogBehavior<HTMLElement>({
+    open: controlsOpen && hostingNow,
+    onClose: () => setControlsOpen(false),
+    returnFocus: controlsTrigger,
+    containFocus: false,
+  });
+  const rosterPanel = useDialogBehavior<HTMLElement>({
+    open: rosterOpen,
+    onClose: () => setRosterOpen(false),
+    returnFocus: rosterTrigger,
+    containFocus: false,
+  });
 
   const pickerResultsId = 'party-title-suggestions';
   const trimmedQuery = query.trim();
@@ -767,7 +783,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     <header className="watch-party__header">
       <div><span className="live-dot" /> {room.isPublic ? 'Public lounge' : 'Private room'} <strong>{room.code}</strong>{isHost && <em>Host</em>}</div>
       <div className="watch-party__header-actions">
-        {isHost && <button type="button" aria-label="Room controls" onClick={() => void openRoomControls()}><Settings /> Room controls</button>}
+        {isHost && <button ref={controlsTrigger} type="button" aria-label="Room controls" onClick={() => void openRoomControls()}><Settings /> Room controls</button>}
         <button type="button" onClick={() => void copyInvite()}><Copy /> {copied ? 'Copied' : 'Copy invite'}</button>
         {leaveConfirm ? <div className="leave-room-confirm"><button type="button" aria-label="Stay in room" onClick={() => setLeaveConfirm(false)}>Stay</button><button type="button" aria-label="Confirm leave room" onClick={() => void confirmLeaveRoom()}><DoorOpen /> {isHost ? 'Transfer or close' : 'Leave room'}</button></div> : <button type="button" onClick={() => setLeaveConfirm(true)}><DoorOpen /> Leave</button>}
       </div>
@@ -780,17 +796,17 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         {resyncNotice && <p className="party-notice" role="status">{resyncNotice}</p>}{error && <p className="friends-error" role="alert">{error}</p>}
       </section>
       <aside className="party-chat" aria-label="Audience chat">
-        <header><div><MessageCircle /><strong>Audience chat</strong></div>{unreadMessages > 0 && latestVisibleMessage && <button className="party-chat-latest" type="button" aria-label="Jump to latest message" title={`${latestVisibleMessage.nickname}: ${latestVisibleMessage.body}`} onClick={jumpToLatestMessage}><span className="party-chat-latest__pulse" /><strong>{unreadMessages} new</strong><ChevronDown /></button>}<button className="party-audience-button" type="button" aria-label={rosterOpen ? 'Hide people in this room' : 'Show people in this room'} aria-expanded={rosterOpen} onClick={() => setRosterOpen((open) => !open)}><Users /> {members.length}</button></header>
+        <header><div><MessageCircle /><strong>Audience chat</strong></div>{unreadMessages > 0 && latestVisibleMessage && <button className="party-chat-latest" type="button" aria-label="Jump to latest message" title={`${latestVisibleMessage.nickname}: ${latestVisibleMessage.body}`} onClick={jumpToLatestMessage}><span className="party-chat-latest__pulse" /><strong>{unreadMessages} new</strong><ChevronDown /></button>}<button ref={rosterTrigger} className="party-audience-button" type="button" aria-label={rosterOpen ? 'Hide people in this room' : 'Show people in this room'} aria-expanded={rosterOpen} onClick={() => setRosterOpen((open) => !open)}><Users /> {members.length}</button></header>
         <InviteJoinCard code={room.code} titleName={room.titleName} copied={copied} onCopy={() => void copyInvite()} onShare={() => void shareInvite()} />
         {officialLounge && <LoungeBallotPanel candidates={loungeCandidates} tallies={loungeVotes} currentVoteTitleId={currentLoungeVote?.titleId} disabled={chatMuted} onVote={(item) => void voteLoungeTitle(item)} />}
-        {controlsOpen && isHost && <section className="party-controls" role="dialog" aria-label="Room control panel">
+        {controlsOpen && isHost && <section ref={controlsPanel} className="party-controls" role="dialog" aria-label="Room control panel">
           <header><div><Settings /><strong>Room controls</strong></div><button type="button" aria-label="Close room controls" onClick={() => setControlsOpen(false)}><X /></button></header>
           <button type="button" aria-label={room.isLocked ? 'Unlock new joins' : 'Lock new joins'} onClick={() => void changeRoomControls(!room.isLocked, room.slowModeSeconds ?? 0)}>{room.isLocked ? <LockKeyhole /> : <ShieldCheck />}<span><strong>{room.isLocked ? 'Room locked' : 'Lock new joins'}</strong><small>{room.isLocked ? 'Only existing members can return' : 'Stop anyone new from entering'}</small></span></button>
           <label>Chat slow mode<select aria-label="Chat slow mode" value={room.slowModeSeconds ?? 0} onChange={(event) => void changeRoomControls(room.isLocked ?? false, Number(event.target.value))}><option value="0">Off</option><option value="3">3 seconds</option><option value="5">5 seconds</option><option value="10">10 seconds</option><option value="15">15 seconds</option><option value="30">30 seconds</option></select></label>
           {clearChatConfirm ? <div className="party-controls__confirm"><span>Clear every message?</span><button type="button" aria-label="Cancel clear room chat" onClick={() => setClearChatConfirm(false)}>Cancel</button><button type="button" aria-label="Confirm clear room chat" onClick={() => void clearRoomChat()}>Clear</button></div> : <button type="button" aria-label="Clear room chat" onClick={() => setClearChatConfirm(true)}><Trash2 /><span><strong>Clear chat</strong><small>Remove the room conversation</small></span></button>}
           <div className="party-controls__bans"><small>Removed people</small>{bannedMembers.length ? bannedMembers.map((member) => <div key={member.userId}><span><strong>{member.nickname}</strong><small>Blocked from this room</small></span><button type="button" aria-label={`Allow ${member.nickname} to rejoin`} onClick={() => void unbanMember(member)}>Allow back</button></div>) : <p>No one is currently removed.</p>}</div>
         </section>}
-        {rosterOpen && <section className="party-roster" role="dialog" aria-label="People in this room">
+        {rosterOpen && <section ref={rosterPanel} className="party-roster" role="dialog" aria-label="People in this room">
           <header><div><small>Watching now</small><strong>{members.length} {members.length === 1 ? 'person' : 'people'}</strong></div><button type="button" aria-label="Close people list" onClick={() => setRosterOpen(false)}><X /></button></header>
           <ul>{members.map((member) => <li key={member.userId} className={member.isMuted ? 'is-muted' : ''}>
             <span>{member.nickname.slice(0, 1).toUpperCase()}</span>
@@ -823,12 +839,6 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         role="dialog"
         aria-modal="true"
         aria-label="Change watch party title"
-        onKeyDown={(event) => {
-          // The input already prevents default on the keys it consumes, so this
-          // only fires for Escape pressed somewhere else in the dialog.
-          if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closePicker(); }
-          trapPickerTab(event);
-        }}
       >
         <header>
           <div><span>Host controls</span><h2>Choose the full title</h2></div>

@@ -185,9 +185,9 @@ describe('Friends watch party moderation and official lounge', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create private room' }));
 
     fireEvent.click(await screen.findByRole('button', { name: 'Change title' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search watch party titles' }), { target: { value: 'Matrix' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search watch party titles' }), { target: { value: 'Matrix' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search titles' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Choose The Matrix' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Choose The Matrix' }));
 
     await waitFor(() => expect(partyService.updateTitle).toHaveBeenCalledWith('room-1', {
       titleId: 603,

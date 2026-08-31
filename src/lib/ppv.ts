@@ -294,16 +294,12 @@ function isAbsoluteUrl(value: string): boolean {
 }
 
 /*
- * Builds the poster URL exactly as before, then refuses it unless it resolves
- * to an approved image origin. An absolute value is a destination the provider
- * chose, so it is only ever loaded when it lands on the approved origin; a
- * relative path or bare id is resolved against Streamed's own origin, which is
- * approved because the catalog request to it has already happened from this
- * same browser.
- *
- * The construction is deliberately unchanged: only the final URL is now gated,
- * so a poster that worked before still works, and one pointing anywhere else
- * is simply not rendered.
+ * Resolves what the poster URL would be, then puts it through the poster
+ * policy. In V1 the policy approves no remote host, so every value - absolute,
+ * relative path, or bare image id - resolves to undefined and no poster
+ * request is ever made on the provider's behalf. A relative Streamed path is
+ * deliberately still resolved first rather than short-circuited, so it is the
+ * policy, not this function, that decides.
  */
 export function streamedPosterUrl(poster: unknown): string | undefined {
   const value = asString(poster);

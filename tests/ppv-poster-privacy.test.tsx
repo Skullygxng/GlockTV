@@ -117,14 +117,32 @@ describe('A-D. poster policy', () => {
       expect(isAllowedPpvPosterUrl(value)).toBe(false);
     }
     expect(safePpvPosterUrl(TRACKER)).toBeUndefined();
-    expect(safePpvPosterUrl('https://streamed.pk/a.jpg')).toBe('https://streamed.pk/a.jpg');
+    /* Including the catalog provider's own origin: see the V1 policy. */
+    expect(safePpvPosterUrl('https://streamed.pk/a.jpg')).toBeUndefined();
   });
 
-  it('keeps the approved list to explicitly reviewed hosts', () => {
-    expect(PPV_POSTER_HOSTS).toEqual(['streamed.pk']);
-    for (const host of PPV_POSTER_HOSTS) expect(host).not.toContain('*');
+  it('approves no remote host at all in V1', () => {
+    expect(PPV_POSTER_HOSTS).toEqual([]);
     /* Never a rule of the form "any https is fine". */
     expect(posterPolicySource).not.toMatch(/return\s+value\.startsWith\('https:\/\/'\)/);
+  });
+
+  it('rejects the catalog provider own origin too, not just third parties', () => {
+    /*
+     * A catalog request and a poster request are not the same disclosure: the
+     * poster additionally reveals per-card timing and which image was asked
+     * for. Talking to a host for the catalog does not license image loads.
+     */
+    for (const value of [
+      'https://streamed.pk/a.webp',
+      'https://streamed.pk/api/images/proxy/abc.webp',
+      'http://streamed.pk/a.webp',
+      'https://www.thesportsdb.com/a.webp',
+      'https://www.thesportsdb.com/images/media/event/thumb/abc.jpg',
+    ]) {
+      expect(isAllowedPpvPosterUrl(value)).toBe(false);
+      expect(safePpvPosterUrl(value)).toBeUndefined();
+    }
   });
 
   it('never records a refused destination beyond its hostname', () => {
@@ -176,20 +194,20 @@ describe('catalog mapping drops a refused poster and keeps the event', () => {
     expect(entry.catalogProvenance?.feeds).toEqual(['fight']);
   });
 
-  it('still renders a poster served from the approved origin', () => {
-    expect(streamedPosterUrl('/api/images/poster/abc.webp')).toBe(
-      'https://streamed.pk/api/images/poster/abc.webp',
-    );
-    expect(streamedPosterUrl('abc')).toBe('https://streamed.pk/api/images/proxy/abc.webp');
-    expect(streamedPosterUrl('https://streamed.pk/api/images/proxy/abc.webp')).toBe(
+  it('never turns any Streamed poster value into a loadable URL', () => {
+    /* Absolute, relative path, bare image id and protocol-relative alike. */
+    for (const value of [
       'https://streamed.pk/api/images/proxy/abc.webp',
-    );
-    expect(streamedPosterUrl(TRACKER)).toBeUndefined();
-    expect(streamedPosterUrl('')).toBeUndefined();
-    /* A protocol-relative path cannot smuggle in another host. */
-    expect(streamedPosterUrl('//tracker.example/pixel.png')).toBe(
-      'https://streamed.pk//tracker.example/pixel.png',
-    );
+      '/api/images/poster/abc.webp',
+      'abc',
+      '//tracker.example/pixel.png',
+      TRACKER,
+      'http://insecure.example/a.jpg',
+      '',
+      null,
+    ]) {
+      expect(streamedPosterUrl(value)).toBeUndefined();
+    }
   });
 
   it('counts refused posters without recording where they pointed', async () => {
@@ -200,7 +218,7 @@ describe('catalog mapping drops a refused poster and keeps the event', () => {
         { id: 'c', title: 'UFC 402', category: 'fight', date: SOON, poster: 'abc' },
       ]),
     );
-    expect(catalog.diagnostics?.rejectedPosters).toBe(2);
+    expect(catalog.diagnostics?.rejectedPosters).toBe(3);
     expect(JSON.stringify(catalog.diagnostics)).not.toContain('example');
   });
 });
@@ -235,11 +253,20 @@ describe('E. cached posters are re-validated on read', () => {
     expect(readPpvCatalogCache(now, storage)?.events[0].poster).toBeUndefined();
   });
 
-  it('preserves a legitimate cached poster through a round trip', () => {
+  it('drops even a provider-origin cached poster on read, keeping the event', () => {
     const storage = memoryStorage();
     const now = Date.now();
-    writePpvCatalogCache([event({ poster: 'https://streamed.pk/a.webp' })], now, storage);
-    expect(readPpvCatalogCache(now, storage)?.events[0].poster).toBe('https://streamed.pk/a.webp');
+    storage.setItem(
+      PPV_CATALOG_CACHE_KEY,
+      JSON.stringify({
+        savedAt: now,
+        events: [{ ...event(), poster: 'https://streamed.pk/a.webp' }],
+      }),
+    );
+    const cached = readPpvCatalogCache(now, storage);
+    expect(cached?.events).toHaveLength(1);
+    expect(cached?.events[0].title).toBe('UFC 400: Jones vs Aspinall');
+    expect(cached?.events[0].poster).toBeUndefined();
   });
 
   it('an aggregate served from cache carries no refused poster', async () => {
@@ -310,16 +337,30 @@ describe('rendering never requests a refused poster', () => {
     expect(document.querySelectorAll('img')).toHaveLength(0);
   });
 
-  it('renders an approved poster, and falls back to the icon if it fails to load', async () => {
+  it('renders no image element for a provider-origin poster either', async () => {
     render(<PpvPanel loadCatalog={catalogWith([event({ poster: 'https://streamed.pk/a.webp' })])} />);
     await screen.findByText('UFC 400: Jones vs Aspinall');
-    const image = document.querySelector('.live-tv-channel__logo img') as HTMLImageElement;
-    expect(image.getAttribute('src')).toBe('https://streamed.pk/a.webp');
-
-    /* A broken image becomes the icon, not an empty square. */
-    fireEvent.error(image);
     expect(document.querySelector('.live-tv-channel__logo img')).toBeNull();
     expect(document.querySelector('.live-tv-channel__logo svg')).not.toBeNull();
+    expect(document.querySelectorAll('img')).toHaveLength(0);
+  });
+
+  it('renders no provider-controlled image for a whole mixed catalog', async () => {
+    render(
+      <PpvPanel
+        loadCatalog={catalogWith([
+          event({ providerEventId: 'a', poster: TRACKER }),
+          event({ providerEventId: 'b', poster: 'https://streamed.pk/a.webp' }),
+          event({ providerEventId: 'c', poster: '/api/images/proxy/abc.webp' }),
+          event({ providerEventId: 'd', poster: undefined }),
+        ])}
+      />,
+    );
+    await screen.findAllByText('UFC 400: Jones vs Aspinall');
+    expect(document.querySelectorAll('img')).toHaveLength(0);
+    const logos = document.querySelectorAll('.live-tv-channel__logo');
+    expect(logos.length).toBe(4);
+    for (const logo of logos) expect(logo.querySelector('svg')).not.toBeNull();
   });
 });
 

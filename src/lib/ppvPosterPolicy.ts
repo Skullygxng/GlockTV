@@ -1,31 +1,38 @@
 /*
  * PPV poster policy.
  *
- * A poster URL arrives verbatim from a third-party catalog response and ends
- * up in an <img src>, which the browser fetches automatically as soon as the
- * event list renders - before the viewer has chosen anything. That makes the
- * poster field a destination the *provider* picks for a request the *viewer*
- * makes, disclosing IP address, user agent and request timing to whatever host
- * the provider names.
+ * V1 policy: provider-controlled PPV poster images are not automatically
+ * loaded. The event list uses a local fallback, so catalog functionality does
+ * not depend on remote artwork.
  *
- * So a poster is loaded only when it resolves to an image origin GlockTV has
- * deliberately approved. "It is https" is not the test: an arbitrary HTTPS
- * tracker is exactly the case this exists to stop.
+ * Why: a poster URL arrives verbatim from a third-party catalog response and
+ * would end up in an <img src>, which the browser fetches on its own as soon
+ * as the event list renders - before the viewer has chosen anything. That
+ * makes the poster field a destination the *provider* picks for a request the
+ * *viewer* makes.
  *
- * The approved list holds one entry, Streamed's own origin, and it is approved
- * for a specific reason: opening the PPV tab already issues the Streamed
- * catalog requests from the same browser, so streamed.pk has already seen this
- * viewer's IP, user agent and timing before any poster is rendered. Loading an
- * image from that same origin discloses nothing new. Every other host - which
- * is every host the provider could otherwise nominate - is refused, and the
- * card falls back to its local icon.
+ * It is not enough to restrict this to a provider the app already talks to. A
+ * catalog request and a poster request are not the same disclosure: the poster
+ * additionally reveals per-card resource timing and exactly which image was
+ * requested, which is a per-event signal the catalog fetch does not carry. So
+ * no remote host is approved for automatic image loading, and the approved
+ * list below is deliberately empty.
+ *
+ * The list is kept, rather than deleting the mechanism, so that approving a
+ * host later is one reviewed line rather than a rewrite - and so that every
+ * caller keeps going through a single decision point either way.
  *
  * This is a rendering policy, not a fetch. Nothing here requests anything, and
- * no proxy, relay or replacement image service is involved: a refused poster is
- * simply not rendered.
+ * no proxy, relay or replacement image service is involved: a refused poster
+ * is simply not rendered.
  */
 
-export const PPV_POSTER_HOSTS: readonly string[] = ['streamed.pk'];
+/*
+ * Hosts approved for automatic image loading. Empty in V1: no provider-
+ * controlled poster is fetched. Adding an entry here is a deliberate,
+ * reviewed privacy decision, not a convenience.
+ */
+export const PPV_POSTER_HOSTS: readonly string[] = [];
 
 const PRIVATE_IPV4 = /^(10\.|127\.|0\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 
@@ -93,8 +100,9 @@ export function isAllowedPpvPosterUrl(value: unknown): boolean {
 
 /*
  * The single gate every poster passes before it can reach an <img src>.
- * Returns undefined for anything refused, so a caller that forgets to check
- * renders the local fallback rather than a tracker.
+ * Returns undefined for anything refused - which in V1 is everything remote -
+ * so a caller that forgets to check renders the local fallback rather than
+ * making a request on the provider's behalf.
  */
 export function safePpvPosterUrl(value: unknown): string | undefined {
   return isAllowedPpvPosterUrl(value) ? (value as string).trim() : undefined;

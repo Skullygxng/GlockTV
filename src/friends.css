@@ -219,9 +219,35 @@
 }
 
 .party-picker__results > button:hover,
-.party-picker__results > button:focus-visible {
+.party-picker__results > button:focus-visible,
+/* Keyboard highlight. The input keeps focus, so :focus-visible never lands on
+   the option the user is actually on. */
+.party-picker__results > button.active {
   border-color: #7d28b8;
   background: #18101f;
+}
+
+.party-picker__results > button:disabled {
+  opacity: 0.55;
+}
+
+.party-picker__status {
+  margin: 0;
+  padding: 0 20px 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #817a89;
+  font-size: 11px;
+}
+
+.party-picker__status svg {
+  width: 13px;
+  height: 13px;
+}
+
+.party-picker__status--error {
+  color: #e78ba0;
 }
 
 .party-picker__results img,

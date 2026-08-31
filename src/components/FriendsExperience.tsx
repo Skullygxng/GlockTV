@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
+import { type FormEvent, type KeyboardEvent as ReactKeyboardEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { Ban, ChevronDown, Copy, Crown, DoorOpen, Flag, LoaderCircle, LockKeyhole, Mail, MessageCircle, Play, Radio, RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, UserCheck, UserMinus, Users, Volume2, VolumeX, X } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
@@ -9,6 +9,8 @@ import { EpisodeBrowser } from './EpisodeBrowser';
 import { InviteJoinCard } from './InviteJoinCard';
 import { LoungeBallotPanel } from './LoungeBallotPanel';
 import { PartyPlaybackPlayer, type PartyPlaybackConfig } from './PartyPlaybackPlayer';
+import { optionId } from './SearchSuggestions';
+import { SUGGEST_MIN_CHARS, useMediaSearchSuggestions } from '../hooks/useMediaSearchSuggestions';
 import '../friends.css';
 
 interface FriendsExperienceProps {
@@ -65,8 +67,10 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const [copied, setCopied] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<MediaItem[]>([]);
-  const [searching, setSearching] = useState(false);
+  /* Scoped to the picker: a failed lookup must not blank out the room. */
+  const [searchError, setSearchError] = useState('');
+  /* The title commit, which is separate from the lookup that found it. */
+  const [choosing, setChoosing] = useState(false);
   const [recentRoom, setRecentRoom] = useState<RecentRoom | null>(readRecentRoom);
   const [leaveConfirm, setLeaveConfirm] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
@@ -93,6 +97,12 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
   const messageMutationVersion = useRef(0);
   const snapshotVersion = useRef(0);
   const blockedUsersRef = useRef<string[]>([]);
+  /* Mirrors `choosing`, so two clicks landing in one React batch cannot both
+     read the pre-commit value and start a write. */
+  const choosingRef = useRef(false);
+  /* The dialog, and the control that opened it, so focus can go back. */
+  const picker = useRef<HTMLElement>(null);
+  const pickerTrigger = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     blockedUsersRef.current = blockedUsers;
@@ -538,16 +548,47 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     try { await service.updatePlayback(room.id, state, position); } catch { setError('Playback did not sync.'); }
   };
 
-  const searchTitles = async (event: FormEvent) => {
-    event.preventDefault(); if (!query.trim()) return;
-    setSearching(true); setError('');
-    try { setResults(await client.search(query.trim())); } catch { setError('Title search is unavailable right now.'); }
-    finally { setSearching(false); }
+  /*
+   * The picker searches as you type, on the same shared controller Discover
+   * uses, so the two surfaces cannot drift apart. Only the presentation is
+   * local: a poster grid inside the dialog rather than a floating popup.
+   *
+   * chooseTitle is a hoisted declaration so it can close over the controller it
+   * is handed to - it never runs before the hook returns.
+   */
+  const suggest = useMediaSearchSuggestions({
+    term: query,
+    search: client.search,
+    onSelect: (item) => void chooseTitle(item),
+    onError: () => setSearchError('Title search is unavailable right now.'),
+  });
+
+  const closePicker = useCallback(() => {
+    /*
+     * Everything the lookup owns goes with the dialog: a response still in
+     * flight is retired by reset(), so it cannot land as loading state or as
+     * results waiting for whoever opens the picker next.
+     */
+    suggest.reset();
+    setQuery('');
+    setSearchError('');
+    setPickerOpen(false);
+    pickerTrigger.current?.focus();
+  }, [suggest]);
+
+  const openPicker = () => {
+    setQuery('');
+    setSearchError('');
+    setPickerOpen(true);
   };
 
-  const chooseTitle = async (item: MediaItem) => {
+  async function chooseTitle(item: MediaItem) {
     if (!service || !room || room.hostId !== userId) return;
-    setSearching(true); setError('');
+    /* One commit at a time: a second pick while the first is in flight would
+       race two updateTitle writes against each other. */
+    if (choosingRef.current) return;
+    choosingRef.current = true;
+    setChoosing(true); setError('');
     try {
       const context = await client.getTitleContext(item);
       const nextRoom = await service.updateTitle(room.id, {
@@ -557,10 +598,41 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
       setRoom(nextRoom);
       const nextRecentRoom = { code: nextRoom.code, titleName: nextRoom.titleName, wasHost: nextRoom.hostId === userId };
       setRecentRoom(nextRecentRoom); localStorage.setItem(recentRoomKey, JSON.stringify(nextRecentRoom));
-      setPickerOpen(false); setQuery(''); setResults([]);
+      closePicker();
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'The room title could not be changed.'); }
-    finally { setSearching(false); }
+    finally { choosingRef.current = false; setChoosing(false); }
+  }
+
+  const onPickerKeyDown = (event: ReactKeyboardEvent) => {
+    /* Escape peels one layer at a time: the suggestion list first, the dialog
+       once there is no list left to close. */
+    if (event.key === 'Escape' && !suggest.visible) {
+      event.preventDefault();
+      closePicker();
+      return;
+    }
+    suggest.onKeyDown(event);
   };
+
+  /* Nothing inside the dialog is in the tab order behind it, so Tab is wrapped
+     rather than allowed to walk into the room underneath. */
+  const trapPickerTab = (event: ReactKeyboardEvent) => {
+    if (event.key !== 'Tab' || !picker.current) return;
+    const focusable = Array.from(
+      picker.current.querySelectorAll<HTMLElement>('button:not([disabled]):not([tabindex="-1"]), input:not([disabled])'),
+    );
+    if (!focusable.length) return;
+    const edge = event.shiftKey ? focusable[0] : focusable[focusable.length - 1];
+    if (document.activeElement !== edge) return;
+    event.preventDefault();
+    (event.shiftKey ? focusable[focusable.length - 1] : focusable[0]).focus();
+  };
+
+  const pickerResultsId = 'party-title-suggestions';
+  const trimmedQuery = query.trim();
+  /* Dismissing the list hides everything it owns, the status lines included. */
+  const pickerEmpty = suggest.open && !suggest.loading && !searchError
+    && trimmedQuery.length >= SUGGEST_MIN_CHARS && suggest.suggestions.length === 0;
 
   const chooseEpisode = async (seasonNumber: number, episodeNumber: number) => {
     if (!service || !room || room.hostId !== userId) return;
@@ -703,7 +775,7 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
     <div className="watch-party__layout">
       <section className="party-screen">
         <PartyPlaybackPlayer room={room} config={partyConfig} isHost={isHost} onHostCommand={(state, position) => void updatePlayback(state, position)} onHostServerChange={(serverId) => void changeRoomServer(serverId)} onSyncHealth={updateSyncHealth} resyncToken={resyncToken} />
-        <div className="party-title-row"><div><span>{room.mediaType === 'tv' ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : 'Now watching'}</span><h1>{room.titleName}</h1>{room.isOfficial && <p className="official-room-note"><Radio /> Automated GlockTV host keeps the public lounge on one shared timeline.</p>}</div><div className="party-title-actions">{isHost && <button type="button" onClick={() => setPickerOpen(true)}><Search /> Change title</button>}<button type="button" aria-label={isHost ? 'Resync everyone' : 'Resync me'} onClick={requestResync}><RefreshCw /> {isHost ? 'Resync everyone' : 'Resync me'}</button><div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · room clock</div></div></div>
+        <div className="party-title-row"><div><span>{room.mediaType === 'tv' ? `Season ${room.seasonNumber} · Episode ${room.episodeNumber}` : 'Now watching'}</span><h1>{room.titleName}</h1>{room.isOfficial && <p className="official-room-note"><Radio /> Automated GlockTV host keeps the public lounge on one shared timeline.</p>}</div><div className="party-title-actions">{isHost && <button type="button" ref={pickerTrigger} onClick={openPicker}><Search /> Change title</button>}<button type="button" aria-label={isHost ? 'Resync everyone' : 'Resync me'} onClick={requestResync}><RefreshCw /> {isHost ? 'Resync everyone' : 'Resync me'}</button><div className="party-sync"><span className="live-dot" /> {room.playbackState === 'playing' ? 'Playing' : 'Paused'} · room clock</div></div></div>
         {room.mediaType === 'tv' && <EpisodeBrowser compact client={client} seriesId={room.titleId} activeSeason={room.seasonNumber ?? 1} activeEpisode={room.episodeNumber ?? 1} canSelect={isHost} onSelect={(season, episode) => void chooseEpisode(season, episode)} />}
         {resyncNotice && <p className="party-notice" role="status">{resyncNotice}</p>}{error && <p className="friends-error" role="alert">{error}</p>}
       </section>
@@ -744,6 +816,86 @@ export function FriendsExperience({ client, service, selectedTitle, initialRoomC
         <form className={`party-compose${chatMuted ? ' party-compose--muted' : ''}`} onSubmit={(event) => void sendMessage(event)}><input aria-label="Message the room" maxLength={500} value={message} onChange={(event) => setMessage(event.target.value)} placeholder={chatMuted ? 'Chat muted by host' : room.slowModeSeconds ? `Slow mode · ${room.slowModeSeconds}s` : 'Message the room...'} disabled={chatMuted} /><button type="submit" aria-label="Send message" disabled={chatMuted || !message.trim()}><Send /></button>{chatMuted && <span><VolumeX /> Muted by host</span>}{room.isOfficial && !chatMuted && <span><ShieldCheck /> Public chat blocks spam and links</span>}</form>
       </aside>
     </div>
-    {pickerOpen && <div className="party-picker-backdrop"><section className="party-picker" role="dialog" aria-modal="true" aria-label="Change watch party title"><header><div><span>Host controls</span><h2>Choose the full title</h2></div><button type="button" aria-label="Close title picker" onClick={() => setPickerOpen(false)}><X /></button></header><form onSubmit={(event) => void searchTitles(event)}><Search /><input autoFocus aria-label="Search watch party titles" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search movies and TV shows" /><button type="submit" aria-label="Search titles" disabled={searching || !query.trim()}>{searching ? <LoaderCircle className="spin" /> : 'Search'}</button></form><div className="party-picker__results">{results.map((item) => <button type="button" key={`${item.mediaType}-${item.id}`} aria-label={`Choose ${item.title}`} onClick={() => void chooseTitle(item)} disabled={searching}>{imageUrl(item.posterPath, 'w185') ? <img src={imageUrl(item.posterPath, 'w185')!} alt="" /> : <span className="party-picker__poster"><Play /></span>}<span><strong>{item.title}</strong><small>{item.year} · {item.mediaType === 'movie' ? 'Movie' : 'TV show'}</small></span></button>)}</div></section></div>}
+    {pickerOpen && <div className="party-picker-backdrop">
+      <section
+        ref={picker}
+        className="party-picker"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Change watch party title"
+        onKeyDown={(event) => {
+          // The input already prevents default on the keys it consumes, so this
+          // only fires for Escape pressed somewhere else in the dialog.
+          if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); closePicker(); }
+          trapPickerTab(event);
+        }}
+      >
+        <header>
+          <div><span>Host controls</span><h2>Choose the full title</h2></div>
+          <button type="button" aria-label="Close title picker" onClick={closePicker}><X /></button>
+        </header>
+        {/* Typing is enough to search. The button stays for anyone who expects
+            to press it, and re-opens the list rather than issuing a second
+            request of its own. */}
+        <form onSubmit={(event) => { event.preventDefault(); suggest.openSuggestions(); }}>
+          <Search />
+          <input
+            autoFocus
+            aria-label="Search watch party titles"
+            value={query}
+            onChange={(event) => { setQuery(event.target.value); setSearchError(''); suggest.setOpen(true); }}
+            onFocus={suggest.openSuggestions}
+            onKeyDown={onPickerKeyDown}
+            placeholder="Search movies and TV shows"
+            role="combobox"
+            aria-expanded={suggest.visible}
+            aria-controls={suggest.visible ? pickerResultsId : undefined}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              suggest.visible && suggest.activeIndex >= 0
+                ? optionId(pickerResultsId, suggest.activeIndex)
+                : undefined
+            }
+          />
+          <button type="submit" aria-label="Search titles" disabled={choosing || !trimmedQuery}>
+            {suggest.loading || choosing ? <LoaderCircle className="spin" /> : 'Search'}
+          </button>
+        </form>
+        {/* Status lines sit outside the listbox so it only ever contains options. */}
+        {suggest.open && suggest.loading && !suggest.suggestions.length && (
+          <p className="party-picker__status" role="status"><LoaderCircle className="spin" /> Searching titles...</p>
+        )}
+        {suggest.open && searchError && <p className="party-picker__status party-picker__status--error" role="status">{searchError}</p>}
+        {pickerEmpty && <p className="party-picker__status" role="status">No titles match &ldquo;{trimmedQuery}&rdquo;.</p>}
+        {suggest.open && suggest.suggestions.length > 0 && (
+          <div className="party-picker__results" role="listbox" id={pickerResultsId} aria-label="Title suggestions">
+            {suggest.suggestions.map((item, index) => (
+              <button
+                type="button"
+                key={`${item.mediaType}-${item.id}`}
+                id={optionId(pickerResultsId, index)}
+                // activedescendant model: the input keeps focus, so options stay
+                // out of the Tab order.
+                tabIndex={-1}
+                role="option"
+                aria-selected={index === suggest.activeIndex}
+                className={index === suggest.activeIndex ? 'active' : ''}
+                aria-label={`Choose ${item.title}`}
+                // The input keeps focus, so the click must not blur it first.
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => suggest.setActiveIndex(index)}
+                onClick={() => void chooseTitle(item)}
+                disabled={choosing}
+              >
+                {imageUrl(item.posterPath, 'w185')
+                  ? <img src={imageUrl(item.posterPath, 'w185')!} alt="" />
+                  : <span className="party-picker__poster"><Play /></span>}
+                <span><strong>{item.title}</strong><small>{item.year} · {item.mediaType === 'movie' ? 'Movie' : 'TV show'}</small></span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>}
   </motion.section>;
 }

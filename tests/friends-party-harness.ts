@@ -57,15 +57,55 @@ export const room = {
   serverId: 'cinesrc', isLocked: false, slowModeSeconds: 0,
 };
 
-export const publicRoom = { ...room, id: 'public-1', code: 'GLOCK1', hostId: null, isPublic: true, isOfficial: true, audienceCount: 4 };
+/*
+ * The room shape the fake serves. Widened where the real thing is wider: an
+ * official lounge has no host, and carries an audience count. The old mocks
+ * erased this through mockResolvedValue's loose typing; stating it keeps the
+ * lounge overrides in the other suites type-checked rather than untyped.
+ */
+export type PartyRoomFixture = Omit<
+  typeof room,
+  'hostId' | 'mediaType' | 'playbackState' | 'backdropPath' | 'durationSeconds'
+> & {
+  hostId: string | null;
+  mediaType: 'movie' | 'tv';
+  playbackState: 'paused' | 'playing';
+  backdropPath: string | null;
+  durationSeconds: number | null;
+  audienceCount?: number;
+};
+
+export const publicRoom: PartyRoomFixture = { ...room, id: 'public-1', code: 'GLOCK1', hostId: null, isPublic: true, isOfficial: true, audienceCount: 4 };
 export const partyPlaybackConfig = { movieUrlTemplate: 'https://party.example/movie/{tmdb_id}', tvUrlTemplate: 'https://party.example/tv/{tmdb_id}/{season_number}/{episode_number}' };
 
+/*
+ * A fake party service that remembers what it was told.
+ *
+ * Every read used to resolve to the frozen `room` above, so the fake modelled
+ * a server with amnesia: an optimistic UI update could be silently reverted by
+ * a background heartbeat or room refresh landing afterwards with the original
+ * values. Whether that landed between two user actions was a scheduling coin
+ * flip, which is exactly how a race that cannot happen against a real server
+ * showed up as an intermittent test failure.
+ *
+ * Writes now commit to a per-service room and reads return it, so the fake
+ * behaves the way the component is entitled to assume a server behaves. State
+ * is created per makePartyService() call, so nothing leaks between tests.
+ */
 export function makePartyService() {
+  let current: PartyRoomFixture = { ...room };
+  const commit = (patch: Partial<PartyRoomFixture>) => {
+    // A new object each time, so React sees a changed reference on a write and
+    // an unchanged one on a plain read.
+    current = { ...current, ...patch };
+    return current;
+  };
+
   return {
     ensureUser: vi.fn().mockResolvedValue({ id: 'user-1' }),
-    createRoom: vi.fn().mockResolvedValue(room),
-    joinRoom: vi.fn().mockResolvedValue(room),
-    getRoom: vi.fn().mockResolvedValue(room),
+    createRoom: vi.fn(async (..._args: unknown[]) => current),
+    joinRoom: vi.fn(async (..._args: unknown[]) => current),
+    getRoom: vi.fn(async (_roomId: string) => current),
     getMembers: vi.fn().mockResolvedValue([{ userId: 'user-1', nickname: 'Skully', joinedAt: '2026-08-11T00:00:00.000Z', isMuted: false, isCohost: false, lastSeenAt: '2026-08-11T00:00:00.000Z', syncStatus: 'synced', syncOffsetSeconds: 0, serverId: 'cinesrc' }]),
     listPublicRooms: vi.fn().mockResolvedValue([publicRoom]),
     getMessages: vi.fn().mockResolvedValue([]),
@@ -74,25 +114,25 @@ export function makePartyService() {
     applyOfficialLoungeTitle: vi.fn().mockResolvedValue(publicRoom),
     getOfficialLoungeBallot: vi.fn().mockResolvedValue([]),
     castOfficialLoungeVote: vi.fn().mockResolvedValue([]),
-    updateTitle: vi.fn().mockImplementation(async (_roomId: string, input: { titleId: number; mediaType: 'movie' | 'tv'; titleName: string; backdropPath: string | null; durationSeconds: number | null }) => ({
-      ...room,
-      titleId: input.titleId,
-      mediaType: input.mediaType,
-      titleName: input.titleName,
-      backdropPath: input.backdropPath,
-      durationSeconds: input.durationSeconds,
-      playbackPosition: 0,
-    })),
+    updateTitle: vi.fn(async (_roomId: string, input: { titleId: number; mediaType: 'movie' | 'tv'; titleName: string; backdropPath: string | null; durationSeconds: number | null }) =>
+      commit({
+        titleId: input.titleId,
+        mediaType: input.mediaType,
+        titleName: input.titleName,
+        backdropPath: input.backdropPath,
+        durationSeconds: input.durationSeconds,
+        playbackPosition: 0,
+      })),
     subscribe: vi.fn().mockReturnValue(() => undefined),
     leaveRoom: vi.fn().mockResolvedValue(undefined),
     setMemberMuted: vi.fn().mockResolvedValue(undefined),
     removeMember: vi.fn().mockResolvedValue(undefined),
     getMembershipStatus: vi.fn().mockResolvedValue('active'),
-    heartbeatRoom: vi.fn().mockResolvedValue(room),
+    heartbeatRoom: vi.fn(async (_roomId: string, _presence?: unknown) => current),
     setCohost: vi.fn().mockResolvedValue(undefined),
-    transferHost: vi.fn().mockImplementation(async (_roomId: string, userId: string) => ({ ...room, hostId: userId })),
-    setRoomServer: vi.fn().mockImplementation(async (_roomId: string, serverId: string) => ({ ...room, serverId })),
-    setRoomControls: vi.fn().mockImplementation(async (_roomId: string, controls: { isLocked: boolean; slowModeSeconds: number }) => ({ ...room, ...controls })),
+    transferHost: vi.fn(async (_roomId: string, userId: string) => commit({ hostId: userId })),
+    setRoomServer: vi.fn(async (_roomId: string, serverId: string) => commit({ serverId })),
+    setRoomControls: vi.fn(async (_roomId: string, controls: { isLocked: boolean; slowModeSeconds: number }) => commit(controls)),
     clearChat: vi.fn().mockResolvedValue(undefined),
     getBannedMembers: vi.fn().mockResolvedValue([]),
     unbanMember: vi.fn().mockResolvedValue(undefined),
@@ -102,6 +142,6 @@ export function makePartyService() {
     getAccount: vi.fn().mockResolvedValue({ id: 'user-1', email: null, isAnonymous: true }),
     linkEmail: vi.fn().mockResolvedValue(undefined),
     sendSignInLink: vi.fn().mockResolvedValue(undefined),
-    updateEpisode: vi.fn().mockImplementation(async (_roomId: string, seasonNumber: number, episodeNumber: number) => ({ ...room, seasonNumber, episodeNumber })),
+    updateEpisode: vi.fn(async (_roomId: string, seasonNumber: number, episodeNumber: number) => commit({ seasonNumber, episodeNumber })),
   };
 }

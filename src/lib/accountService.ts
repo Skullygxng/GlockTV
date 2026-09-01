@@ -20,7 +20,10 @@ export interface AccountService {
   loadAccount(): Promise<GlockTvAccount | null>;
   /* Always resolves. Never rejects, and never resolves to premium on failure. */
   loadEntitlements(): Promise<{ entitlements: Entitlements; error: string }>;
-  /* Attach an email to the account that is already signed in, keeping its id. */
+  /*
+   * Attach an email to this visitor's identity, minting the anonymous account
+   * first if they do not have one yet. An existing id is always kept.
+   */
   linkEmail(email: string): Promise<void>;
   /* Send a returning sign-in link. */
   sendSignInLink(email: string): Promise<void>;
@@ -31,6 +34,31 @@ export interface AccountService {
 const ENTITLEMENTS_TABLE = 'account_entitlements';
 
 export function createAccountService(client: SupabaseClient): AccountService {
+  /*
+   * Minting an anonymous identity, at most once and only when asked.
+   *
+   * This is deliberately not on the AccountService surface. Nothing should be
+   * able to create a session as a side effect of rendering - GlockTV is
+   * guest-first, and a visitor who only browses must never become a row in
+   * auth.users. It is reachable solely from the actions that genuinely need an
+   * authenticated identity, the same rule the watch party already follows when
+   * it creates or joins a room.
+   */
+  let signingIn: Promise<string> | null = null;
+
+  async function ensureUser(): Promise<string> {
+    const { data: sessionData } = await client.auth.getSession();
+    if (sessionData.session?.user) return sessionData.session.user.id;
+
+    /* Two clicks that both find no session must still produce one user. */
+    signingIn ??= client.auth.signInAnonymously().then(({ data, error }) => {
+      if (error || !data.user) throw new Error(error?.message ?? 'Guest sign-in failed.');
+      return data.user.id;
+    }).finally(() => { signingIn = null; });
+
+    return signingIn;
+  }
+
   return {
     async loadAccount() {
       const { data, error } = await client.auth.getUser();
@@ -69,6 +97,15 @@ export function createAccountService(client: SupabaseClient): AccountService {
     },
 
     async linkEmail(email: string) {
+      /*
+       * A first-time visitor can protect an identity before they have one:
+       * they reached the account panel without ever opening a watch party, so
+       * there is no session for updateUser to update yet. Minting here keeps
+       * the id that everything else is keyed to - the anonymous user created
+       * now is the same user the email lands on, and stays the same id
+       * afterwards.
+       */
+      await ensureUser();
       const { error } = await client.auth.updateUser({ email: email.trim() });
       if (error) throw new Error(error.message);
     },

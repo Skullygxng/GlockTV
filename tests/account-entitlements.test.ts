@@ -151,6 +151,102 @@ describe('account service entitlement reads', () => {
   });
 });
 
+describe('protecting an account mints an identity only when asked', () => {
+  /*
+   * The regression this covers: linkEmail used to sit on the watch-party
+   * service and called ensureUser first, because a guest reached it only from
+   * the Friends lobby. On the global account surface a visitor can reach it
+   * having never opened a watch party, so there may be no session at all for
+   * updateUser to update.
+   */
+  function authClient(session: { user: { id: string } } | null) {
+    const order: string[] = [];
+    const getSession = vi.fn(async () => { order.push('getSession'); return { data: { session } }; });
+    const signInAnonymously = vi.fn(async () => {
+      order.push('signInAnonymously');
+      return { data: { user: { id: 'anon-new' } }, error: null };
+    });
+    const updateUser = vi.fn(async () => { order.push('updateUser'); return { error: null }; });
+    return {
+      order,
+      client: {
+        auth: {
+          getSession,
+          signInAnonymously,
+          updateUser,
+          signInWithOtp: vi.fn(async () => { order.push('signInWithOtp'); return { error: null }; }),
+          getUser: vi.fn(async () => ({ data: { user: null }, error: null })),
+          onAuthStateChange: vi.fn(() => ({ data: { subscription: { unsubscribe: vi.fn() } } })),
+        },
+        from: vi.fn(() => ({ select: vi.fn(() => ({ maybeSingle: vi.fn(async () => ({ data: null, error: null })) })) })),
+      },
+      getSession,
+      signInAnonymously,
+      updateUser,
+    };
+  }
+
+  it('creates the anonymous identity first when there is no session', async () => {
+    const fake = authClient(null);
+    await createAccountService(fake.client as never).linkEmail('viewer@example.com');
+
+    expect(fake.order).toEqual(['getSession', 'signInAnonymously', 'updateUser']);
+    expect(fake.updateUser).toHaveBeenCalledWith({ email: 'viewer@example.com' });
+  });
+
+  it('reuses an existing anonymous identity rather than minting a second', async () => {
+    const fake = authClient({ user: { id: 'anon-existing' } });
+    await createAccountService(fake.client as never).linkEmail('viewer@example.com');
+
+    expect(fake.order).toEqual(['getSession', 'updateUser']);
+    expect(fake.signInAnonymously).not.toHaveBeenCalled();
+    // The email lands on the id everything else is already keyed to.
+    expect(fake.updateUser).toHaveBeenCalledWith({ email: 'viewer@example.com' });
+  });
+
+  it('signs in anonymously once when two protect attempts race', async () => {
+    const fake = authClient(null);
+    const service = createAccountService(fake.client as never);
+
+    await Promise.all([
+      service.linkEmail('viewer@example.com'),
+      service.linkEmail('viewer@example.com'),
+    ]);
+
+    expect(fake.signInAnonymously).toHaveBeenCalledTimes(1);
+    expect(fake.updateUser).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces a failed guest sign-in instead of linking to nobody', async () => {
+    const fake = authClient(null);
+    fake.signInAnonymously.mockResolvedValue({ data: { user: null }, error: { message: 'guest signup disabled' } } as never);
+
+    await expect(createAccountService(fake.client as never).linkEmail('viewer@example.com'))
+      .rejects.toThrow('guest signup disabled');
+    expect(fake.updateUser).not.toHaveBeenCalled();
+  });
+
+  it('sends a sign-in link without minting anything', async () => {
+    const fake = authClient(null);
+    await createAccountService(fake.client as never).sendSignInLink('viewer@example.com');
+
+    // A magic link resolves to its own user server-side; creating a throwaway
+    // anonymous account here would strand it.
+    expect(fake.signInAnonymously).not.toHaveBeenCalled();
+    expect(fake.order).toEqual(['signInWithOtp']);
+  });
+
+  it('mints nothing merely from reading the account or its entitlements', async () => {
+    const fake = authClient(null);
+    const service = createAccountService(fake.client as never);
+
+    await service.loadAccount();
+    await service.loadEntitlements();
+
+    expect(fake.signInAnonymously).not.toHaveBeenCalled();
+  });
+});
+
 describe('entitlement migration keeps write authority on the server', () => {
   /* Strip SQL comments so prose in the header cannot satisfy a check. */
   const sql = migration.replace(/--[^\n]*/g, '').toLowerCase();

@@ -91,6 +91,43 @@ describe('global account surface', () => {
     expect(service.loadAccount).toHaveBeenCalled();
     // No session means nothing to ask about, so no entitlement request at all.
     expect(service.loadEntitlements).not.toHaveBeenCalled();
+    /*
+     * And nothing that could mint an identity ran. Rendering the app must
+     * never turn a passer-by into a row in auth.users.
+     */
+    expect(service.linkEmail).not.toHaveBeenCalled();
+    expect(service.sendSignInLink).not.toHaveBeenCalled();
+  });
+
+  it('does not go stale when auth events land during account protection', async () => {
+    /*
+     * Protecting an account fires SIGNED_IN from the anonymous sign-in and
+     * USER_UPDATED from the email attach, so the provider reloads more than
+     * once for one user action. The request-version guard has to leave the
+     * newest answer standing rather than an in-flight older one.
+     */
+    let identity: GlockTvAccount | null = null;
+    const service = accountService(null);
+    service.loadAccount = vi.fn(async () => identity);
+    service.linkEmail = vi.fn(async (email: string) => {
+      identity = { id: 'anon-new', email: null, isAnonymous: true, createdAt: null };
+      service.fire();                            // SIGNED_IN, still anonymous
+      identity = { id: 'anon-new', email, isAnonymous: false, createdAt: null };
+      service.fire();                            // USER_UPDATED, now linked
+    });
+
+    render(<App client={client()} accountService={service} />);
+    await ready();
+    const dialog = await openAccount();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
+      target: { value: 'viewer@example.com' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Protect guest account/ }));
+
+    expect(await within(dialog).findByText('viewer@example.com')).toBeInTheDocument();
+    await waitFor(() => expect(within(dialog).queryByText('Guest')).not.toBeInTheDocument());
+    expect(service.linkEmail).toHaveBeenCalledTimes(1);
   });
 
   it('shows a guest as a guest on the free tier', async () => {
@@ -203,6 +240,56 @@ describe('global account surface', () => {
 
     expect(await within(dialog).findByText('viewer@example.com')).toBeInTheDocument();
     expect(within(dialog).getByText(/Premium · ad-free/)).toBeInTheDocument();
+  });
+
+  it('protects a first-time visitor who has never opened a watch party', async () => {
+    /*
+     * The path the red-team caught: this visitor reached the account panel
+     * without ever creating or joining a room, so nothing has minted them an
+     * identity yet. Protecting the account has to work anyway - that is the
+     * whole reason the surface is global.
+     */
+    let identity: GlockTvAccount | null = null;
+    const linked: string[] = [];
+    const service = accountService(null);
+    service.loadAccount = vi.fn(async () => identity);
+    service.linkEmail = vi.fn(async (email: string) => {
+      // What the real service does: mint the anonymous user, then attach.
+      identity = { id: 'anon-new', email, isAnonymous: false, createdAt: null };
+      linked.push(email);
+    });
+
+    render(<App client={client()} accountService={service} />);
+    await ready();
+
+    const dialog = await openAccount();
+    expect(within(dialog).getByText('Guest')).toBeInTheDocument();
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
+      target: { value: 'viewer@example.com' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Protect guest account/ }));
+
+    await waitFor(() => expect(linked).toEqual(['viewer@example.com']));
+    expect(await within(dialog).findByText(/Check your email/)).toBeInTheDocument();
+    // The panel now reflects the identity that protecting it created.
+    expect(await within(dialog).findByText('viewer@example.com')).toBeInTheDocument();
+  });
+
+  it('offers Protect guest account to a visitor with no session at all', async () => {
+    // Never solved by hiding the control until Friends has made a session.
+    render(<App client={client()} accountService={accountService(null)} />);
+    await ready();
+    const dialog = await openAccount();
+
+    expect(within(dialog).getByText('Guest')).toBeInTheDocument();
+    expect(within(dialog).getByText('Free')).toBeInTheDocument();
+    const protect = within(dialog).getByRole('button', { name: /Protect guest account/ });
+    expect(protect).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
+      target: { value: 'viewer@example.com' },
+    });
+    expect(protect).toBeEnabled();
   });
 
   it('is reachable from the mobile tab bar, where the topbar is hidden', async () => {

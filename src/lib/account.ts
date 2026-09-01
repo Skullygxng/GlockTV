@@ -41,9 +41,12 @@ export interface EntitlementRow {
  * value can only ever cost someone Premium they were not granted, never grant
  * Premium they were not sold.
  *
- * ads_enabled is read from the row when it is a real boolean, so support can
- * turn ads off for an account without moving it to Premium. A Premium account
- * never sees ads regardless of what the column says.
+ * ads_enabled is carried through faithfully from the row, but note what it
+ * does NOT do in V1: shouldShowAds keys off the tier alone, so a free account
+ * with ads_enabled false is still shown ads. The column is recorded so the
+ * server can already express per-account ad suppression, and so a later policy
+ * can honour it, without a schema change. Until that policy exists, the only
+ * thing that makes an account ad-free is Premium.
  */
 export function entitlementsFromRow(row: EntitlementRow | null | undefined): Entitlements {
   if (!row) return FREE_ENTITLEMENTS;
@@ -58,6 +61,11 @@ export function entitlementsFromRow(row: EntitlementRow | null | undefined): Ent
  * The single ad-policy boundary. Pages ask this rather than reading a tier and
  * deciding for themselves, so there is one place to change when the ad rules
  * change - and one place to audit.
+ *
+ * V1 policy is exactly: premium means no ads, everything else means ads. The
+ * row's ads_enabled is intentionally not consulted here - see
+ * entitlementsFromRow - so there is one condition to audit rather than two
+ * that could disagree.
  *
  * It renders nothing and knows about no ad network. Not knowing the answer
  * means ads: a viewer briefly seeing an ad slot they paid to avoid is a bug,

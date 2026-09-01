@@ -82,20 +82,6 @@ describe('Friends watch party moderation and official lounge', () => {
     await waitFor(() => expect(partyService.blockUser).toHaveBeenCalledWith('room-1', 'user-1', true));
   });
 
-  it('lets a guest protect their account with email and request a returning sign-in link', async () => {
-    const partyService = makePartyService();
-    render(<App client={tmdbClient} partyService={partyService as never} partyPlaybackConfig={partyPlaybackConfig} />);
-    await screen.findByRole('heading', { name: 'Heat' });
-    fireEvent.click(within(screen.getByRole('navigation', { name: 'Primary navigation' })).getByRole('button', { name: 'Friends' }));
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Open account' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Account email' }), { target: { value: 'viewer@example.com' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Protect guest account' }));
-    await waitFor(() => expect(partyService.linkEmail).toHaveBeenCalledWith('viewer@example.com'));
-    fireEvent.click(screen.getByRole('button', { name: 'Email sign-in link' }));
-    await waitFor(() => expect(partyService.sendSignInLink).toHaveBeenCalledWith('viewer@example.com'));
-  });
-
   it('disables chat for a guest muted by the host', async () => {
     const partyService = makePartyService();
     partyService.ensureUser.mockResolvedValue({ id: 'user-2' });

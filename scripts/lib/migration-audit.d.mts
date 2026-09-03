@@ -10,6 +10,8 @@ export interface DeclaredArtifacts {
   triggers: string[];
   indexes: string[];
   grants: string[];
+  revokes: string[];
+  rlsEnabled: string[];
   securityDefiners: string[];
   pinnedSearchPath: string[];
 }
@@ -21,14 +23,15 @@ export interface LiveSchema {
   triggers: Set<string>;
   indexes: Set<string>;
   grants: Set<string>;
+  rlsEnabled: Set<string>;
   securityDefiners: Set<string>;
   pinnedSearchPath: Set<string>;
 }
 
 export type MigrationStatus =
   | 'history_match'
-  | 'equivalent'
-  | 'schema_candidate'
+  | 'same_name_candidate'
+  | 'schema_present_candidate'
   | 'partial'
   | 'absent'
   | 'unverifiable';
@@ -37,6 +40,7 @@ export interface Verdict {
   status: MigrationStatus;
   missing: string[];
   present: string[];
+  sameNameRemoteVersion?: string;
 }
 
 export interface AuditRow extends Verdict {
@@ -54,15 +58,18 @@ export function artifactsDeclaredBy(sql: string): DeclaredArtifacts;
 export function versionOf(filename: string): string | null;
 export function nameOf(filename: string): string | null;
 export function isVerifiable(declared: DeclaredArtifacts): boolean;
+export const CHECKED_KINDS: string[];
+export const NOT_VERIFIED: string[];
 export function classify(
   declared: DeclaredArtifacts,
   live: LiveSchema,
-  options: { inHistory: boolean },
+  options: { inHistory: boolean; sameNameRemoteVersion?: string },
 ): Verdict;
-export function reconciliationPlan(rows: AuditRow[]): {
+/* Deliberately returns no repair list: this parser cannot authorize one. */
+export function auditSummary(rows: AuditRow[]): {
   historyMatch: AuditRow[];
-  repairable: AuditRow[];
-  schemaCandidates: AuditRow[];
+  sameNameCandidates: AuditRow[];
+  schemaPresentCandidates: AuditRow[];
   partial: AuditRow[];
   pending: AuditRow[];
   unverifiable: AuditRow[];

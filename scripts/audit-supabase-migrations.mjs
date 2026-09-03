@@ -12,6 +12,10 @@
 // project's identity first, then the history, then what the schema actually
 // contains.
 //
+// It is diagnostic only. It never prints or constructs a `supabase migration
+// repair` command: names and existence are syntax, equivalence is semantics,
+// and this reads only the first. A person reads the evidence and decides.
+//
 // Read-only by construction: every statement it sends is a SELECT, and it
 // refuses to send anything else.
 //
@@ -21,12 +25,13 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {
+  NOT_VERIFIED,
   artifactsDeclaredBy,
   assertReadOnly,
+  auditSummary,
   classify,
   maskRef,
   nameOf,
-  reconciliationPlan,
   remoteOnly,
   renameCandidates,
   versionOf,
@@ -145,7 +150,7 @@ if (orphans.length) {
 
 /* ------------------------------------------------------------ live schema */
 
-const [relations, routines, policies, triggers, indexes, grants, functionAttrs] = await Promise.all([
+const [relations, routines, policies, triggers, indexes, grants, functionAttrs, rlsTables] = await Promise.all([
   query("select table_name as name from information_schema.tables where table_schema = 'public'"),
   query("select routine_name as name from information_schema.routines where routine_schema = 'public'"),
   query("select tablename || ':' || policyname as name from pg_policies where schemaname = 'public'"),
@@ -153,6 +158,7 @@ const [relations, routines, policies, triggers, indexes, grants, functionAttrs] 
   query("select indexname as name from pg_indexes where schemaname = 'public'"),
   query("select distinct table_name || ':' || grantee as name from information_schema.role_table_grants where table_schema = 'public'"),
   query("select p.proname as name, p.prosecdef as definer, array_to_string(p.proconfig, ',') as config from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'"),
+  query("select c.relname as name from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public' and c.relrowsecurity"),
 ]);
 
 const live = {
@@ -164,80 +170,91 @@ const live = {
   grants: set(grants),
   securityDefiners: new Set(functionAttrs.filter((row) => row.definer === true || row.definer === 't').map((row) => String(row.name).toLowerCase())),
   pinnedSearchPath: new Set(functionAttrs.filter((row) => /search_path=(""|'')?$/.test(String(row.config ?? '')) || /search_path=$/.test(String(row.config ?? ''))).map((row) => String(row.name).toLowerCase())),
+  rlsEnabled: set(rlsTables),
 };
 
 console.log('\n=== LIVE SCHEMA ===');
 console.log(`relations ${live.relations.size}  functions ${live.functions.size}  policies ${live.policies.size}`);
 console.log(`triggers ${live.triggers.size}  indexes ${live.indexes.size}  table grants ${live.grants.size}`);
 console.log(`security definer functions ${live.securityDefiners.size}  pinned search_path ${live.pinnedSearchPath.size}`);
+console.log(`tables with row level security enabled ${live.rlsEnabled.size}`);
 
 /* -------------------------------------------------------------- verdicts */
 
+const renamedByFile = new Map(renamed.map((entry) => [entry.file, entry.remoteVersion]));
 const rows = local.map((file) => {
   const version = versionOf(file);
   const declared = artifactsDeclaredBy(readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8'));
-  const verdict = classify(declared, live, { inHistory: remoteVersionSet.has(version) });
+  const verdict = classify(declared, live, {
+    inHistory: remoteVersionSet.has(version),
+    sameNameRemoteVersion: renamedByFile.get(file),
+  });
   return { file, version, name: nameOf(file), ...verdict };
 });
 
 const pad = (value, width) => String(value).padEnd(width);
-console.log('\n=== PER-MIGRATION VERDICT ===');
-console.log(`${pad('MIGRATION', 50)} ${pad('STATUS', 17)} DETAIL`);
+console.log('\n=== PER-MIGRATION EVIDENCE ===');
+console.log(`${pad('MIGRATION', 50)} ${pad('STATUS', 26)} DETAIL`);
 for (const row of rows) {
   const detail = row.status === 'history_match'
     ? 'version already recorded'
-    : row.status === 'equivalent'
-      ? `all ${row.present.length} declared artifacts present`
+    : row.status === 'same_name_candidate'
+      ? `remote ${row.sameNameRemoteVersion} shares this name; ${row.missing.length ? `${row.missing.length} artifact(s) missing` : 'all checked artifacts present'}`
       : row.status === 'unverifiable'
-        ? 'declares nothing this audit can check'
-        : `missing ${row.missing.length}: ${row.missing.slice(0, 4).join(', ')}`;
-  console.log(`${pad(row.file, 50)} ${pad(row.status, 17)} ${detail.slice(0, 100)}`);
+        ? 'declares nothing this audit can look for'
+        : row.missing.length
+          ? `missing ${row.missing.length}: ${row.missing.slice(0, 3).join(', ')}`
+          : `all ${row.present.length} checked artifacts present`;
+  console.log(`${pad(row.file, 50)} ${pad(row.status, 26)} ${detail.slice(0, 90)}`);
 }
 
-const plan = reconciliationPlan(rows);
+const summary = auditSummary(rows);
 
-console.log('\n=== RECONCILIATION ===\n');
-console.log(`Already recorded (no action):        ${plan.historyMatch.length}`);
-console.log(`Proven equivalent (repair offered):  ${plan.repairable.length}`);
-console.log(`Schema candidates (NOT offered):     ${plan.schemaCandidates.length}`);
-console.log(`Partially present (NOT offered):     ${plan.partial.length}`);
-console.log(`Absent (push normally):              ${plan.pending.length}`);
-console.log(`Unverifiable (NOT offered):          ${plan.unverifiable.length}\n`);
-
-if (plan.repairable.length) {
-  console.log('Every artifact these declare is present. Only these may be repaired:');
-  for (const row of plan.repairable) console.log(`  ${row.version}  ${row.file}`);
-  console.log('\n  supabase migration repair --status applied '
-    + plan.repairable.map((row) => row.version).join(' '));
-  console.log('\n  Nothing else is appended to that command. In particular, an unverifiable');
-  console.log('  migration is not swept in behind a neighbour: "creates no object" means');
-  console.log('  this audit cannot prove it, not that it follows another one safely.\n');
-} else {
-  console.log('No migration is proven equivalent. Nothing is offered for repair.\n');
-}
+console.log('\n=== SUMMARY ===\n');
+console.log(`history_match             ${summary.historyMatch.length}   already recorded, no action`);
+console.log(`same_name_candidate       ${summary.sameNameCandidates.length}   manual equivalence review required`);
+console.log(`schema_present_candidate  ${summary.schemaPresentCandidates.length}   may already be represented; NOT proven`);
+console.log(`partial                   ${summary.partial.length}   investigate`);
+console.log(`absent                    ${summary.pending.length}   clearly pending`);
+console.log(`unverifiable              ${summary.unverifiable.length}   cannot establish equivalence`);
 
 for (const [label, bucket] of [
-  ['SCHEMA CANDIDATES - objects exist, equivalence NOT proven', plan.schemaCandidates],
-  ['PARTIALLY PRESENT - decide per migration', plan.partial],
-  ['UNVERIFIABLE - policy/grant/index-only, or nothing checkable', plan.unverifiable],
+  ['SAME NAME, DIFFERENT VERSION - review each by hand', summary.sameNameCandidates],
+  ['SCHEMA PRESENT - suggestive only, equivalence NOT established', summary.schemaPresentCandidates],
+  ['PARTIAL - investigate', summary.partial],
+  ['UNVERIFIABLE', summary.unverifiable],
 ]) {
   if (!bucket.length) continue;
-  console.log(`${label}:`);
+  console.log(`\n${label}:`);
   for (const row of bucket) {
-    console.log(`  ${row.version}  ${row.file}`);
-    if (row.missing.length) console.log(`      missing: ${row.missing.join(', ').slice(0, 200)}`);
+    const lead = row.sameNameRemoteVersion ? `  ~ remote ${row.sameNameRemoteVersion}` : '';
+    console.log(`  ${row.version}  ${row.file}${lead}`);
+    if (row.present.length) console.log(`      present: ${row.present.join(', ').slice(0, 240)}`);
+    if (row.missing.length) console.log(`      missing: ${row.missing.join(', ').slice(0, 240)}`);
   }
-  console.log();
 }
 
-console.log('ABSENT - these should be pushed normally:');
-if (plan.pending.length) {
-  for (const row of plan.pending) console.log(`  ${row.version}  ${row.file}`);
+console.log('\nABSENT - clearly pending, push these normally:');
+if (summary.pending.length) {
+  for (const row of summary.pending) console.log(`  ${row.version}  ${row.file}`);
 } else {
   console.log('  none');
 }
 
+/*
+ * The disclaimer is part of the output, not of the documentation. Anyone
+ * reading a "schema present" line needs to see, in the same breath, the list of
+ * things that were never looked at.
+ */
+console.log('\n=== WHAT THIS AUDIT DID NOT VERIFY ===\n');
+for (const item of NOT_VERIFIED) console.log(`  - ${item}`);
+console.log('\nNames and existence are syntax. Equivalence is semantics, and this reads');
+console.log('only the first: a policy with the right name and an inverted USING clause');
+console.log('passes every check above. So no repair command is printed here and none');
+console.log('should be derived from this output alone. Decide each version by hand, then');
+console.log("pass the reviewed list to the workflow's repair_versions input.");
+
 if (!historyReadable) {
-  console.log('\n::warning:: The migration history could not be read. Treat every verdict above');
+  console.log('\n::warning:: The migration history could not be read. Treat every line above');
   console.log('as provisional - "not in history" cannot be distinguished from "history unknown".');
 }

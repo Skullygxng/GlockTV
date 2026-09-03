@@ -307,6 +307,31 @@ creates - from the migration itself, not a hand-kept list - and asks the
 project which of those objects exist. Every statement it sends is a `SELECT`,
 and it refuses to send anything else.
 
+### The audit is diagnostic only
+
+It produces **evidence, not authorization**. It never prints or constructs a
+`supabase migration repair` command, and no status it reports means "proven
+equivalent" — because this parser cannot establish that.
+
+Names and existence are syntax; equivalence is semantics, and the audit reads
+only the first. It does **not** verify:
+
+- policy `USING` / `WITH CHECK` expressions
+- function bodies, or `EXECUTE` grants on them
+- column-level grants, or `REVOKE` state beyond a role holding no table privilege
+- constraints added or changed by `ALTER TABLE`, or `FORCE ROW LEVEL SECURITY`
+- object ownership
+- which function a trigger fires, and when
+- index columns, order, uniqueness and predicates
+
+A policy with the right name and an inverted `USING` clause passes every check
+the audit makes and grants the world read access. That list is printed with
+every run, next to the results, so a "present" column is never read as a clean
+bill of health.
+
+You decide which versions may be repaired, and pass that hand-reviewed list to
+the workflow's `repair_versions` input. The audit does not produce it.
+
 ### Object existence is not equivalence
 
 A migration establishes far more than the objects it names: RLS policies,
@@ -317,20 +342,22 @@ security rests on those parts rather than on the tables. Marking such a
 migration applied writes it out of the history with its policies still missing,
 and nothing will ever apply them.
 
-So the audit checks every artifact a migration declares, and is reluctant:
+So the audit reports every artifact a migration declares, and every verdict
+except `history_match` is a lead for a person rather than an instruction:
 
-| Verdict | Meaning | Action |
-| --- | --- | --- |
-| `history_match` | the exact version is already recorded | nothing |
-| `equivalent` | **every** declared artifact is present | the only status offered for repair |
-| `schema_candidate` | its objects exist but something it declares does not | **not** offered - equivalence is not established |
-| `partial` | only some of its objects exist | **not** offered |
-| `absent` | none of its objects exist | push it |
-| `unverifiable` | it declares nothing checkable | **not** offered |
+| Verdict | Meaning |
+| --- | --- |
+| `history_match` | the exact version is already recorded; no action |
+| `same_name_candidate` | a remote entry shares this name under a different version; **manual equivalence review required** |
+| `schema_present_candidate` | everything the audit can look for is present, which is suggestive and proves nothing |
+| `partial` | some of its primary objects exist; investigate |
+| `absent` | none do; clearly pending, push it |
+| `unverifiable` | it declares nothing the audit can look for |
 
-Nothing is appended to a repair command. In particular an `unverifiable`
-migration is never swept in behind a neighbour: "creates no object" means the
-audit cannot prove it, not that it follows another migration safely.
+Grant evidence keeps **`public` and `anon`** — this repository secures a table
+by revoking from exactly those roles and granting narrowly back, so dropping
+them would discard the half that matters. A revoke the same migration grants
+back to is excluded, because the end state for that role is granted.
 
 The audit also reports two things a dry run cannot:
 
@@ -350,8 +377,8 @@ two different projects. Exact version matches are called out separately: if
 are reading different histories, and that must be resolved before anything is
 repaired or pushed.
 
-Supply proven-equivalent versions in the workflow's `repair_versions` input and
-dispatch it again: repair writes rows into
+Supply a **hand-reviewed** list of versions in the workflow's `repair_versions`
+input and dispatch it again: repair writes rows into
 `supabase_migrations.schema_migrations` and touches **no schema and no data**,
 then the dry run re-runs so you can see what genuinely remains.
 

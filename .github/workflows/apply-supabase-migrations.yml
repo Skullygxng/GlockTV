@@ -17,8 +17,10 @@ on:
         default: true
       repair_versions:
         description: >-
-          Space-separated migration versions to mark as already applied.
-          History only - writes no schema and no data. Leave empty to audit.
+          Space-separated versions to mark applied, from a list YOU reviewed by
+          hand. The audit does not produce this list and cannot: it reads names
+          and existence, not equivalence. History only - writes no schema and no
+          data. Leave empty to audit.
         type: string
         default: ''
 
@@ -81,8 +83,11 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: supabase migration list
 
-      # Read-only, and the decisive half: whether the objects each migration
-      # creates already exist. Every statement it sends is a SELECT.
+      # Read-only evidence, not a decision. It reports which of each migration's
+      # declared artifacts exist and, just as importantly, what it never looked
+      # at - policy expressions, function bodies, index definitions. It prints no
+      # repair command, because it cannot establish equivalence. Every statement
+      # it sends is a SELECT.
       - name: Audit local migrations against the live schema
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

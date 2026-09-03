@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  NOT_VERIFIED,
   artifactsDeclaredBy,
   assertReadOnly,
+  auditSummary,
   classify,
   isVerifiable,
   maskRef,
   nameOf,
-  reconciliationPlan,
   remoteOnly,
   renameCandidates,
   versionOf,
@@ -34,7 +35,7 @@ import supportTickets from '../supabase/migrations/20260903210000_support_ticket
 const EMPTY = {
   relations: new Set<string>(), functions: new Set<string>(), policies: new Set<string>(),
   triggers: new Set<string>(), indexes: new Set<string>(), grants: new Set<string>(),
-  securityDefiners: new Set<string>(), pinnedSearchPath: new Set<string>(),
+  rlsEnabled: new Set<string>(), securityDefiners: new Set<string>(), pinnedSearchPath: new Set<string>(),
 };
 const liveWith = (overrides: Partial<typeof EMPTY>) => ({ ...EMPTY, ...overrides });
 
@@ -48,6 +49,7 @@ function liveFor(sql: string) {
     triggers: new Set(declared.triggers),
     indexes: new Set(declared.indexes),
     grants: new Set(declared.grants),
+    rlsEnabled: new Set(declared.rlsEnabled),
     securityDefiners: new Set(declared.securityDefiners),
     pinnedSearchPath: new Set(declared.pinnedSearchPath),
   };
@@ -90,8 +92,25 @@ describe('reading what a migration establishes', () => {
     expect(declared.policies).toEqual([]);
   });
 
-  it('reports a grant-only migration as declaring nothing checkable', () => {
-    expect(isVerifiable(artifactsDeclaredBy(publicRoomGrant))).toBe(false);
+  it('can now check a grant-only migration, because grants are evidence', () => {
+    /* This one used to be unverifiable, when public and anon were filtered out
+       of the grant evidence. Keeping them makes it checkable. */
+    const declared = artifactsDeclaredBy(publicRoomGrant);
+    expect(declared.grants).toContain('watch_rooms:anon');
+    expect(isVerifiable(declared)).toBe(true);
+  });
+
+  it('excludes a revoke the same migration grants back', () => {
+    /*
+     * The pattern throughout this repository is "revoke all from public, anon,
+     * authenticated" then a narrow grant to authenticated. The end state for
+     * that role is granted, so checking the revoke alone would report every
+     * correctly-secured table here as missing one.
+     */
+    const declared = artifactsDeclaredBy(watchProgress);
+    expect(declared.grants).toContain('watch_progress:authenticated');
+    expect(declared.revokes).toEqual(['watch_progress:public', 'watch_progress:anon']);
+    expect(declared.revokes).not.toContain('watch_progress:authenticated');
   });
 
   it('splits version and name the way the history table stores them', () => {
@@ -101,53 +120,38 @@ describe('reading what a migration establishes', () => {
   });
 });
 
-describe('the verdict is reluctant', () => {
+describe('the verdict is a lead, never an instruction', () => {
   it('needs nothing else once the exact version is recorded', () => {
-    const verdict = classify(artifactsDeclaredBy(watchProgress), EMPTY, { inHistory: true });
-    expect(verdict.status).toBe('history_match');
+    expect(classify(artifactsDeclaredBy(watchProgress), EMPTY, { inHistory: true }).status)
+      .toBe('history_match');
   });
 
-  it('is equivalent only when every declared artifact is present', () => {
-    const verdict = classify(artifactsDeclaredBy(watchProgress), liveFor(watchProgress), { inHistory: false });
-    expect(verdict.status).toBe('equivalent');
-    expect(verdict.missing).toEqual([]);
-  });
-
-  it('refuses to call a migration equivalent when its table exists but a policy does not', () => {
+  it('has no status meaning proven equivalent', () => {
     /*
-     * The exact case that makes object-existence unsafe. Repairing this writes
-     * the migration out of the history while its RLS is still missing, and
-     * nothing will ever apply it.
+     * The defect this replaced: a full house of checked artifacts was called
+     * "equivalent" and a repair command was printed from it. Names and
+     * existence are syntax; equivalence is semantics. A policy with the right
+     * name and an inverted USING clause passes every check in this file.
      */
+    const everything = classify(artifactsDeclaredBy(watchProgress), liveFor(watchProgress), { inHistory: false });
+    expect(everything.status).toBe('schema_present_candidate');
+    expect(everything.status).not.toBe('equivalent');
+  });
+
+  it('sends a renamed migration to manual review, whatever the schema says', () => {
+    const verdict = classify(artifactsDeclaredBy(watchProgress), liveFor(watchProgress), {
+      inHistory: false, sameNameRemoteVersion: '20260811044118',
+    });
+    expect(verdict.status).toBe('same_name_candidate');
+    expect(verdict.sameNameRemoteVersion).toBe('20260811044118');
+  });
+
+  it('still reports what is missing when a policy or attribute is absent', () => {
     const live = liveFor(watchProgress);
     live.policies.delete([...live.policies][0]);
     const verdict = classify(artifactsDeclaredBy(watchProgress), live, { inHistory: false });
-    expect(verdict.status).toBe('schema_candidate');
-    expect(verdict.status).not.toBe('equivalent');
+    expect(verdict.status).not.toBe('schema_present_candidate');
     expect(verdict.missing.some((entry) => entry.startsWith('policy '))).toBe(true);
-  });
-
-  it('refuses when a function exists but is not security definer', () => {
-    const live = liveFor(supportTickets);
-    live.securityDefiners.delete('is_support_staff');
-    expect(classify(artifactsDeclaredBy(supportTickets), live, { inHistory: false }).status)
-      .toBe('schema_candidate');
-  });
-
-  it('refuses when a security definer function has no pinned search_path', () => {
-    const live = liveFor(supportTickets);
-    live.pinnedSearchPath.delete('is_support_staff');
-    expect(classify(artifactsDeclaredBy(supportTickets), live, { inHistory: false }).status)
-      .toBe('schema_candidate');
-  });
-
-  it('refuses when a trigger or a grant is missing', () => {
-    for (const key of ['triggers', 'grants'] as const) {
-      const live = liveFor(watchProgress);
-      live[key].delete([...live[key]][0]);
-      expect(classify(artifactsDeclaredBy(watchProgress), live, { inHistory: false }).status)
-        .toBe('schema_candidate');
-    }
   });
 
   it('is absent when none of its primary objects exist', () => {
@@ -159,50 +163,90 @@ describe('the verdict is reluctant', () => {
     expect(classify(artifactsDeclaredBy(supportTickets), live, { inHistory: false }).status).toBe('partial');
   });
 
-  it('is unverifiable when it declares nothing this audit can check', () => {
-    const verdict = classify(artifactsDeclaredBy(publicRoomGrant), liveWith({ relations: new Set(['watch_rooms']) }), { inHistory: false });
-    expect(verdict.status).toBe('unverifiable');
+  it('is unverifiable when it declares nothing this audit looks for', () => {
+    /* An ALTER TABLE constraint is exactly the sort of thing listed in
+       NOT_VERIFIED - the audit cannot see it, and says so rather than guessing. */
+    const constraintOnly = 'alter table public.watch_rooms add constraint room_code_len check (length(code) = 6);';
+    expect(isVerifiable(artifactsDeclaredBy(constraintOnly))).toBe(false);
+    expect(classify(artifactsDeclaredBy(constraintOnly), liveWith({ relations: new Set(['watch_rooms']) }), { inHistory: false }).status)
+      .toBe('unverifiable');
+  });
+
+  it('names what it never examined', () => {
+    /* Printed with every result, so a "present" column is not read as a clean
+       bill of health. */
+    const text = NOT_VERIFIED.join(' ').toLowerCase();
+    for (const aspect of ['using', 'function bodies', 'column-level grants', 'revoke', 'constraints', 'ownership', 'trigger', 'index columns']) {
+      expect(text).toContain(aspect);
+    }
   });
 });
 
-describe('what may be acted on', () => {
+describe('grant evidence keeps the roles that matter', () => {
+  it('does not drop public or anon', () => {
+    /*
+     * An earlier version filtered exactly these out. This repository secures a
+     * table by revoking from public and anon and granting narrowly back, so
+     * dropping them discards the half of the evidence that matters.
+     */
+    const declared = artifactsDeclaredBy(watchProgress);
+    expect(declared.revokes.some((entry) => entry.endsWith(':public'))).toBe(true);
+    expect(declared.revokes.some((entry) => entry.endsWith(':anon'))).toBe(true);
+    expect(declared.grants.every((entry) => !/:(public|anon)$/.test(entry) || true)).toBe(true);
+
+    const withAnonGrant = artifactsDeclaredBy('grant select on public.thing to anon, authenticated;');
+    expect(withAnonGrant.grants).toContain('thing:anon');
+  });
+
+  it('treats a revoke as satisfied only when the role holds no table privilege', () => {
+    const sql = 'create table public.t (id int);\nrevoke all on public.t from anon;';
+    const declared = artifactsDeclaredBy(sql);
+    const denied = classify(declared, liveWith({ relations: new Set(['t']) }), { inHistory: false });
+    expect(denied.present).toContain('revoked t:anon (table level only)');
+
+    const stillGranted = classify(declared, liveWith({ relations: new Set(['t']), grants: new Set(['t:anon']) }), { inHistory: false });
+    expect(stillGranted.missing).toContain('revoked t:anon (table level only)');
+  });
+
+  it('notices row level security being switched on', () => {
+    const declared = artifactsDeclaredBy(watchProgress);
+    expect(declared.rlsEnabled).toEqual(['watch_progress']);
+    const off = classify(declared, { ...liveFor(watchProgress), rlsEnabled: new Set<string>() }, { inHistory: false });
+    expect(off.missing).toContain('rls enabled watch_progress');
+  });
+});
+
+describe('the summary offers no repair list', () => {
   const rows: AuditRow[] = [
     { version: '1', status: 'history_match', missing: [], present: [] },
-    { version: '2', status: 'equivalent', missing: [], present: [] },
-    { version: '3', status: 'schema_candidate', missing: ['policy x'], present: [] },
+    { version: '2', status: 'same_name_candidate', missing: [], present: [] },
+    { version: '3', status: 'schema_present_candidate', missing: [], present: [] },
     { version: '4', status: 'partial', missing: [], present: [] },
     { version: '5', status: 'absent', missing: [], present: [] },
     { version: '6', status: 'unverifiable', missing: [], present: [] },
   ];
 
-  it('offers only proven equivalence for repair', () => {
-    const plan = reconciliationPlan(rows);
-    expect(plan.repairable.map((row) => row.version)).toEqual(['2']);
+  it('has no bucket that authorizes writing history', () => {
+    const summary = auditSummary(rows);
+    expect(Object.keys(summary).sort()).toEqual([
+      'historyMatch', 'partial', 'pending', 'sameNameCandidates',
+      'schemaPresentCandidates', 'unverifiable',
+    ]);
+    expect(summary).not.toHaveProperty('repairable');
   });
 
-  it('never sweeps an unverifiable migration in behind a neighbour', () => {
-    /*
-     * "Creates no object" means this audit cannot prove it, not that it follows
-     * another migration safely. The previous version appended these to the
-     * repair command, which would have recorded them applied on no evidence.
-     */
-    const plan = reconciliationPlan(rows);
-    expect(plan.repairable.map((row) => row.version)).not.toContain('6');
-    expect(plan.unverifiable.map((row) => row.version)).toEqual(['6']);
+  it('groups every status without promoting any of them', () => {
+    const summary = auditSummary(rows);
+    expect(summary.historyMatch.map((row) => row.version)).toEqual(['1']);
+    expect(summary.sameNameCandidates.map((row) => row.version)).toEqual(['2']);
+    expect(summary.schemaPresentCandidates.map((row) => row.version)).toEqual(['3']);
+    expect(summary.partial.map((row) => row.version)).toEqual(['4']);
+    expect(summary.pending.map((row) => row.version)).toEqual(['5']);
+    expect(summary.unverifiable.map((row) => row.version)).toEqual(['6']);
   });
 
-  it('keeps schema candidates and partials out of both action buckets', () => {
-    const plan = reconciliationPlan(rows);
-    for (const bucket of [plan.repairable, plan.pending]) {
-      expect(bucket.map((row) => row.version)).not.toContain('3');
-      expect(bucket.map((row) => row.version)).not.toContain('4');
-    }
-    expect(plan.schemaCandidates.map((row) => row.version)).toEqual(['3']);
-    expect(plan.partial.map((row) => row.version)).toEqual(['4']);
-  });
-
-  it('proposes pushing only what is absent', () => {
-    expect(reconciliationPlan(rows).pending.map((row) => row.version)).toEqual(['5']);
+  it('the only action it implies is pushing what was never applied', () => {
+    expect(auditSummary(rows).pending.map((row) => row.version)).toEqual(['5']);
   });
 });
 
@@ -246,9 +290,10 @@ describe('the real drift this project has', () => {
       'full_title_watch_rooms', 'public_room_read_policy', 'public_room_select_grant',
       'room_reliability_suite', 'room_report_index',
     ]);
-    /* A shared name is evidence for a human. Nothing here promotes it. */
-    expect(reconciliationPlan(renamed.map((entry) => ({ ...entry, status: 'schema_candidate' } as AuditRow))).repairable)
-      .toEqual([]);
+    /* A shared name is evidence for a human. Nothing promotes it. */
+    const summary = auditSummary(renamed.map((entry) => ({ ...entry, status: 'same_name_candidate' } as AuditRow)));
+    expect(summary.sameNameCandidates).toHaveLength(8);
+    expect(summary).not.toHaveProperty('repairable');
   });
 
   it('finds two history entries this repository does not contain', () => {
@@ -295,9 +340,34 @@ describe('the audit only ever reads', () => {
     expect(auditScript).toContain('EXACT VERSION MATCHES');
     expect(auditScript).toMatch(/must not list them as/);
   });
+
+  it('never constructs a repair command', () => {
+    /*
+     * The blocker this replaced. The tool may produce evidence; it may not
+     * produce an authorization, and the difference has to be structural rather
+     * than a matter of how carefully the output is worded.
+     */
+    expect(auditScript).not.toMatch(/migration repair --status applied/);
+    expect(auditScript).not.toMatch(/supabase migration repair/);
+    expect(auditScript).not.toMatch(/\.join\(' '\)/);
+  });
+
+  it('prints what it never examined, alongside the results', () => {
+    expect(auditScript).toContain('WHAT THIS AUDIT DID NOT VERIFY');
+    expect(auditScript).toContain('NOT_VERIFIED');
+    expect(auditScript).toMatch(/no repair command is printed here/);
+  });
 });
 
 describe('the workflow keeps repair separate from applying', () => {
+  it('describes repair_versions as a hand-reviewed list', () => {
+    /* The audit does not produce it and cannot; the input must not read as
+       though it does. */
+    const input = workflow.slice(workflow.indexOf('repair_versions:'), workflow.indexOf('permissions:'));
+    expect(input).toMatch(/reviewed by\s*\n?\s*#?\s*hand|YOU reviewed by hand/);
+    expect(input).toContain('The audit does not produce this list');
+  });
+
   it('repairs only when versions are explicitly supplied', () => {
     /* Bounded to this step: an unbounded slice runs into "Re-audit after
        repair", which carries the same condition, so a deleted guard would

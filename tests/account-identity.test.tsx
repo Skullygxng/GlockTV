@@ -137,7 +137,9 @@ describe('global account surface', () => {
 
     expect(within(dialog).getByText('Guest')).toBeInTheDocument();
     expect(within(dialog).getByText('Free')).toBeInTheDocument();
-    expect(within(dialog).queryByText(/Premium/)).not.toBeInTheDocument();
+    /* The Premium card is on show for a free member - what must be absent is
+       the entitled status, not the word. */
+    expect(within(dialog).queryByText(/Premium · ad-free/)).not.toBeInTheDocument();
   });
 
   it('shows a linked email once the account is protected', async () => {
@@ -185,7 +187,7 @@ describe('global account surface', () => {
 
     expect(within(dialog).getByText('Free')).toBeInTheDocument();
     expect(within(dialog).getByText(/Membership status is unavailable/)).toBeInTheDocument();
-    expect(within(dialog).queryByText(/Premium/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Premium · ad-free/)).not.toBeInTheDocument();
   });
 
   it('protects a guest account and requests a returning sign-in link', async () => {

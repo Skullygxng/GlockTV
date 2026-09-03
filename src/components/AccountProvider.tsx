@@ -22,10 +22,29 @@ export interface AccountState {
   error: string;
   /* True once the first load has settled, however it settled. */
   ready: boolean;
+  /*
+   * A checkout has just returned and we are re-asking the server whether the
+   * webhook has landed yet. Purely a display state - it never implies Premium,
+   * and it gives up rather than polling forever.
+   */
+  confirmingMembership: boolean;
+  /* True once confirmation ran to the end without Premium appearing. */
+  confirmationTimedOut: boolean;
   refresh: () => Promise<void>;
+  /* Begin the bounded post-checkout re-check. Safe to call more than once. */
+  confirmMembership: () => Promise<void>;
   linkEmail: (email: string) => Promise<void>;
   sendSignInLink: (email: string) => Promise<void>;
 }
+
+/*
+ * How long a returning member waits before we admit the webhook has not
+ * arrived. Stripe usually delivers in seconds; this covers a slow delivery
+ * without leaving a spinner up indefinitely, and the member stays free the
+ * whole time.
+ */
+export const MEMBERSHIP_CONFIRM_ATTEMPTS = 6;
+export const MEMBERSHIP_CONFIRM_INTERVAL_MS = 2500;
 
 const AccountContext = createContext<AccountState | null>(null);
 
@@ -36,6 +55,8 @@ const GUEST_STATE = {
   loading: false,
   error: '',
   ready: true,
+  confirmingMembership: false,
+  confirmationTimedOut: false,
 } as const;
 
 let defaultService: AccountService | null | undefined;
@@ -59,19 +80,23 @@ export function AccountProvider({
   const [loading, setLoading] = useState(service !== null);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(service === null);
+  const [confirmingMembership, setConfirmingMembership] = useState(false);
+  const [confirmationTimedOut, setConfirmationTimedOut] = useState(false);
 
   /* A slow earlier load must never overwrite a newer one - a sign-in that
      resolves before a stale guest read would otherwise be undone by it. */
   const version = useRef(0);
 
-  const load = useCallback(async () => {
+  /* Returns what it settled on, so the post-checkout re-check can tell whether
+     the webhook has landed without reading back through React state. */
+  const load = useCallback(async (): Promise<Entitlements> => {
     if (!service) {
       setAccount(null);
       setEntitlements(FREE_ENTITLEMENTS);
       setError('');
       setLoading(false);
       setReady(true);
-      return;
+      return FREE_ENTITLEMENTS;
     }
 
     const request = ++version.current;
@@ -97,13 +122,44 @@ export function AccountProvider({
       if (result.error) nextError = result.error;
     }
 
-    if (request !== version.current) return;
+    if (request !== version.current) return nextEntitlements;
     setAccount(nextAccount);
     setEntitlements(nextEntitlements);
     setError(nextError);
     setLoading(false);
     setReady(true);
+    return nextEntitlements;
   }, [service]);
+
+  /*
+   * After a checkout returns, ask the server again for a bounded while.
+   *
+   * The redirect proves nothing - a member could type that URL - so this only
+   * re-reads what the server says. If the verified webhook has not landed by
+   * the end, the account stays free and says so, which is the correct outcome
+   * rather than a failure to paper over.
+   */
+  const confirming = useRef(false);
+  const confirmMembership = useCallback(async () => {
+    if (!service || confirming.current) return;
+    confirming.current = true;
+    setConfirmingMembership(true);
+    setConfirmationTimedOut(false);
+
+    try {
+      for (let attempt = 0; attempt < MEMBERSHIP_CONFIRM_ATTEMPTS; attempt += 1) {
+        const settled = await load();
+        if (settled.tier === 'premium') return;
+        if (attempt < MEMBERSHIP_CONFIRM_ATTEMPTS - 1) {
+          await new Promise((resolve) => setTimeout(resolve, MEMBERSHIP_CONFIRM_INTERVAL_MS));
+        }
+      }
+      setConfirmationTimedOut(true);
+    } finally {
+      confirming.current = false;
+      setConfirmingMembership(false);
+    }
+  }, [service, load]);
 
   useEffect(() => {
     void load();
@@ -133,10 +189,17 @@ export function AccountProvider({
     loading,
     error,
     ready,
-    refresh: load,
+    confirmingMembership,
+    confirmationTimedOut,
+    refresh: async () => { await load(); },
+    confirmMembership,
     linkEmail,
     sendSignInLink,
-  }), [account, entitlements, loading, error, ready, load, linkEmail, sendSignInLink]);
+  }), [
+    account, entitlements, loading, error, ready,
+    confirmingMembership, confirmationTimedOut,
+    load, confirmMembership, linkEmail, sendSignInLink,
+  ]);
 
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
 }
@@ -153,6 +216,7 @@ export function useAccount(): AccountState {
   return {
     ...GUEST_STATE,
     refresh: async () => {},
+    confirmMembership: async () => {},
     linkEmail: async () => { throw new Error('Accounts are unavailable right now.'); },
     sendSignInLink: async () => { throw new Error('Accounts are unavailable right now.'); },
   };

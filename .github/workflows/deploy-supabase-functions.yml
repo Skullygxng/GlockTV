@@ -1,0 +1,46 @@
+name: Deploy Supabase Edge Functions
+
+# Deploys only the billing functions, and only from main. PR validation never
+# runs this workflow, so a pull request cannot reach production.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+      - 'supabase/config.toml'
+      - '.github/workflows/deploy-supabase-functions.yml'
+  workflow_dispatch:
+
+# Read-only against the repository. The deployment credential is a secret, not
+# a workflow permission.
+permissions:
+  contents: read
+
+concurrency:
+  group: supabase-functions
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Named explicitly rather than deploying everything under functions/, so
+      # a new directory cannot reach production without a deliberate change here.
+      - name: Deploy billing functions
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions deploy create-checkout \
+            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+          supabase functions deploy create-billing-portal \
+            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+          supabase functions deploy stripe-webhook \
+            --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"

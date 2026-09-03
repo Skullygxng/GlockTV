@@ -12,6 +12,8 @@ import { useDialogBehavior } from './hooks/useDialogBehavior';
 import { AccountPanel } from './components/AccountPanel';
 import { AccountProvider, useAccount } from './components/AccountProvider';
 import type { AccountService } from './lib/accountService';
+import type { BillingService } from './lib/billing';
+import { billingReturnKind } from './lib/billing';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { composeDiscoverFeed } from './lib/feed';
@@ -39,6 +41,8 @@ export interface AppProps {
   partyPlaybackConfig?: PartyPlaybackConfig;
   /* Omit for the app's own account layer; pass null to run with no backend. */
   accountService?: AccountService | null;
+  /* Omit for the app's own billing client; pass null to run with no backend. */
+  billingService?: BillingService | null;
 }
 
 type View = 'discover' | 'friends' | 'vibe' | 'list';
@@ -110,7 +114,7 @@ export function App({ accountService, ...props }: AppProps) {
   );
 }
 
-function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig }: Omit<AppProps, 'accountService'>) {
+function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, billingService }: Omit<AppProps, 'accountService'>) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
@@ -139,6 +143,30 @@ function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig }:
   const [query, setQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  /*
+   * Stripe's hosted pages come back with a marker. It is a cue to re-ask the
+   * server what this account is entitled to and nothing else - a member who
+   * types this URL gets the same answer as one who paid.
+   */
+  const billingReturn = useMemo(() => billingReturnKind(window.location.search), []);
+  const { confirmMembership } = useAccount();
+  const billingReturnHandled = useRef(false);
+
+  /*
+   * Coming back from Stripe opens the account panel and starts the bounded
+   * re-check. The marker is then removed from the URL so a refresh - or a
+   * shared link - does not put the page back into a confirming state.
+   */
+  useEffect(() => {
+    if (!billingReturn || billingReturnHandled.current) return;
+    billingReturnHandled.current = true;
+    setAccountOpen(true);
+    void confirmMembership();
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete('billing');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [billingReturn, confirmMembership]);
   const [isMobileView, setIsMobileView] = useState(false);
   const [session, dispatch] = useReducer(sessionReducer, undefined, loadSession);
 
@@ -980,7 +1008,7 @@ const wheelLockedUntil = useRef(0);
         )}
       </AnimatePresence>
 
-      {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} />}
+      {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} billing={billingService} />}
 
       <footer className="credits">
         Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.

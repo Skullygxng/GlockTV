@@ -33,6 +33,7 @@ import {
 import {
   SECTIONS,
   cleanupFixtures,
+  emptyFixtures,
   fixturePlan,
   provisionFixtures,
 } from './lib/fixtures.mjs';
@@ -176,11 +177,16 @@ const eventId = `evt_${namespace}`;
  * `--only billing` no longer seeds staff_members or asks for an anonymous
  * session, which is why it can now pass on a project where the support
  * migration has not been applied.
+ *
+ * Declared here and filled in by the provisioner rather than assigned from its
+ * return value: if provisioning fails partway - the second user unavailable,
+ * staff seeding refused - the finally below still knows about everything
+ * created before that point and removes it.
  */
-let fixtures = { users: {}, anonymous: null, staffSeeded: false };
+const fixtures = emptyFixtures();
 
 try {
-  fixtures = await provisionFixtures(plan, {
+  await provisionFixtures(plan, {
     createProtectedUser,
     createAnonymousUser,
     seedStaff: async (userId) => {
@@ -189,7 +195,7 @@ try {
       const { error } = await admin.from('staff_members').insert({ user_id: userId, role: 'agent' });
       if (error) throw new Error(`Could not seed staff fixture: ${error.message}`);
     },
-  });
+  }, fixtures);
 
   if (plan.anonymous && !fixtures.anonymous) {
     console.log('NOTE  anonymous sign-ins are disabled on this project; the anonymous check will fail rather than be skipped.\n');

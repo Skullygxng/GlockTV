@@ -33,5 +33,11 @@ export interface CleanupDeps {
 export const SECTION_FIXTURES: Record<string, FixturePlan>;
 export const SECTIONS: string[];
 export function fixturePlan(sections: string[]): FixturePlan;
-export function provisionFixtures(plan: FixturePlan, deps: ProvisionDeps): Promise<ProvisionedFixtures>;
+export function emptyFixtures(): ProvisionedFixtures;
+/* `into` is caller-owned so a partial failure is still cleanable. */
+export function provisionFixtures(
+  plan: FixturePlan,
+  deps: ProvisionDeps,
+  into: ProvisionedFixtures,
+): Promise<ProvisionedFixtures>;
 export function cleanupFixtures(created: Partial<ProvisionedFixtures>, deps: CleanupDeps): Promise<string[]>;

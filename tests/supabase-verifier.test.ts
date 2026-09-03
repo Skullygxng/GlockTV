@@ -13,6 +13,7 @@ import {
   SECTION_FIXTURES,
   SECTIONS,
   cleanupFixtures,
+  emptyFixtures,
   fixturePlan,
   provisionFixtures,
 } from '../scripts/lib/fixtures.mjs';
@@ -413,7 +414,7 @@ function spyDeps(anonymous: { id: string; token: string } | null = { id: 'anon',
 describe('each section provisions only what it needs', () => {
   it('billing creates one user, never touches staff_members, never asks for anonymous auth', async () => {
     const { calls, deps } = spyDeps();
-    const created = await provisionFixtures(fixturePlan(['billing']), deps);
+    const created = await provisionFixtures(fixturePlan(['billing']), deps, emptyFixtures());
 
     expect(calls.users).toEqual(['a']);
     expect(calls.staff).toEqual([]);
@@ -426,7 +427,7 @@ describe('each section provisions only what it needs', () => {
     /* The anonymous session is not incidental here: "an anonymous session
        cannot write cloud progress" is one of the things being verified. */
     const { calls, deps } = spyDeps();
-    const created = await provisionFixtures(fixturePlan(['progress']), deps);
+    const created = await provisionFixtures(fixturePlan(['progress']), deps, emptyFixtures());
 
     expect(calls.users).toEqual(['a', 'b']);
     expect(calls.anonymous).toBe(1);
@@ -436,7 +437,7 @@ describe('each section provisions only what it needs', () => {
 
   it('support creates both customers and staff, and never asks for anonymous auth', async () => {
     const { calls, deps } = spyDeps();
-    const created = await provisionFixtures(fixturePlan(['support']), deps);
+    const created = await provisionFixtures(fixturePlan(['support']), deps, emptyFixtures());
 
     expect(calls.users).toEqual(['a', 'b', 'staff']);
     expect(calls.staff).toEqual(['user-staff']);
@@ -446,7 +447,7 @@ describe('each section provisions only what it needs', () => {
 
   it('a full run shares users rather than provisioning them per section', async () => {
     const { calls, deps } = spyDeps();
-    await provisionFixtures(fixturePlan(SECTIONS), deps);
+    await provisionFixtures(fixturePlan(SECTIONS), deps, emptyFixtures());
 
     /* Sharing is safe: the rows each section writes for a given user do not
        overlap, and one deletion removes all of them. */
@@ -463,7 +464,7 @@ describe('each section provisions only what it needs', () => {
     /* The progress check then fails, which is correct - silence would read as a
        pass for the boundary that most needs an answer. */
     const { deps } = spyDeps(null);
-    const created = await provisionFixtures(fixturePlan(['progress']), deps);
+    const created = await provisionFixtures(fixturePlan(['progress']), deps, emptyFixtures());
     expect(created.anonymous).toBeNull();
   });
 });
@@ -496,7 +497,7 @@ describe('a full run still covers everything', () => {
 describe('cleanup removes what exists and nothing else', () => {
   it('removes only the one user a billing-only run created', async () => {
     const deleted: string[] = [];
-    const created = await provisionFixtures(fixturePlan(['billing']), spyDeps().deps);
+    const created = await provisionFixtures(fixturePlan(['billing']), spyDeps().deps, emptyFixtures());
     created.billingEventId = 'evt_x';
 
     await cleanupFixtures(created, {
@@ -508,7 +509,7 @@ describe('cleanup removes what exists and nothing else', () => {
 
   it('does not try to delete an anonymous user that was never created', async () => {
     const deleted: string[] = [];
-    const created = await provisionFixtures(fixturePlan(['support']), spyDeps().deps);
+    const created = await provisionFixtures(fixturePlan(['support']), spyDeps().deps, emptyFixtures());
 
     await cleanupFixtures(created, { deleteUser: async (id: string) => { deleted.push(id); } });
     expect(deleted).toEqual(['user-a', 'user-b', 'user-staff']);
@@ -516,7 +517,7 @@ describe('cleanup removes what exists and nothing else', () => {
 
   it('does not delete a billing event when the billing section never ran', async () => {
     let billingDeletes = 0;
-    const created = await provisionFixtures(fixturePlan(['progress']), spyDeps().deps);
+    const created = await provisionFixtures(fixturePlan(['progress']), spyDeps().deps, emptyFixtures());
 
     await cleanupFixtures(created, {
       deleteUser: async () => {},
@@ -527,7 +528,7 @@ describe('cleanup removes what exists and nothing else', () => {
 
   it('keeps going when one deletion fails, so a cleanup problem is not a red run', async () => {
     const deleted: string[] = [];
-    const created = await provisionFixtures(fixturePlan(SECTIONS), spyDeps().deps);
+    const created = await provisionFixtures(fixturePlan(SECTIONS), spyDeps().deps, emptyFixtures());
 
     await expect(cleanupFixtures(created, {
       deleteUser: async (id: string) => {
@@ -570,5 +571,143 @@ describe('the runner honours the plan', () => {
   it('describes only the fixtures the requested sections need in its dry run', () => {
     expect(runner).toContain('NOT touch staff_members');
     expect(runner).toContain('NOT request an anonymous session');
+  });
+});
+
+
+/*
+ * Partial provisioning.
+ *
+ * The failure mode: provisioning built a private record and handed it back only
+ * once everything had succeeded, so a throw partway propagated before the
+ * caller learned about the users that already existed. The finally then cleaned
+ * up nothing and those users were left on the project, findable only by the
+ * run's namespace.
+ *
+ * These inject a failure after at least one resource exists and assert the
+ * earlier ones are still removed - which is only possible if the caller's state
+ * was filled in as it went.
+ */
+function failingDeps(fail: { at: 'userB' | 'staffSeed' | 'anonymous' }) {
+  const created: string[] = [];
+  return {
+    created,
+    deps: {
+      createProtectedUser: async (tag: string) => {
+        if (fail.at === 'userB' && tag === 'b') throw new Error('user B unavailable');
+        created.push(tag);
+        return { id: `user-${tag}`, token: `token-${tag}` };
+      },
+      createAnonymousUser: async () => {
+        if (fail.at === 'anonymous') throw new Error('anonymous sign-in exploded');
+        return { id: 'anon', token: 'token-anon' };
+      },
+      seedStaff: async () => {
+        if (fail.at === 'staffSeed') throw new Error('staff_members unavailable');
+      },
+    },
+  };
+}
+
+async function cleanupAfter(failure: Parameters<typeof failingDeps>[0], sections: string[]) {
+  const fixtures = emptyFixtures();
+  const { deps } = failingDeps(failure);
+  await expect(provisionFixtures(fixturePlan(sections), deps, fixtures)).rejects.toThrow();
+
+  const deleted: string[] = [];
+  await cleanupFixtures(fixtures, { deleteUser: async (id: string) => { deleted.push(id); } });
+  return deleted;
+}
+
+describe('a partial provisioning failure leaks nothing', () => {
+  it('deletes A when B cannot be created', async () => {
+    expect(await cleanupAfter({ at: 'userB' }, ['progress'])).toEqual(['user-a']);
+  });
+
+  it('deletes every user when staff seeding fails after they exist', async () => {
+    /* The users are real by then; only the membership row is not. */
+    expect(await cleanupAfter({ at: 'staffSeed' }, ['support']))
+      .toEqual(['user-a', 'user-b', 'user-staff']);
+  });
+
+  it('deletes the protected users when anonymous creation throws', async () => {
+    expect(await cleanupAfter({ at: 'anonymous' }, ['progress'])).toEqual(['user-a', 'user-b']);
+  });
+
+  it('records staffSeeded only once the seeding actually succeeded', async () => {
+    const fixtures = emptyFixtures();
+    const { deps } = failingDeps({ at: 'staffSeed' });
+    await expect(provisionFixtures(fixturePlan(['support']), deps, fixtures)).rejects.toThrow();
+    expect(fixtures.staffSeeded).toBe(false);
+    expect(Object.keys(fixtures.users)).toEqual(['a', 'b', 'staff']);
+  });
+
+  it('refuses to provision without caller-owned state at all', () => {
+    /* Handing back a fresh object would silently reintroduce the leak, so the
+       signature makes it impossible to ask for. */
+    const { deps } = spyDeps();
+    // @ts-expect-error - the third argument is required on purpose
+    return expect(provisionFixtures(fixturePlan(['billing']), deps)).rejects.toThrow(/caller-owned state/);
+  });
+});
+
+describe('cleanup attempts everything it knows about', () => {
+  it('carries on past a deletion that rejects', async () => {
+    const fixtures = emptyFixtures();
+    await provisionFixtures(fixturePlan(SECTIONS), spyDeps().deps, fixtures);
+
+    const deleted: string[] = [];
+    await cleanupFixtures(fixtures, {
+      deleteUser: async (id: string) => {
+        if (id === 'user-a') throw new Error('already gone');
+        deleted.push(id);
+      },
+    });
+    /* The first one failing must not cost the other three. */
+    expect(deleted).toEqual(['user-b', 'user-staff', 'anon']);
+  });
+
+  it('carries on past a deletion that throws synchronously', async () => {
+    /* A dependency that throws before returning a promise would escape a
+       rejection handler and abort the rest of cleanup. */
+    const fixtures = emptyFixtures();
+    await provisionFixtures(fixturePlan(SECTIONS), spyDeps().deps, fixtures);
+    fixtures.billingEventId = 'evt_x';
+
+    const deleted: string[] = [];
+    await expect(cleanupFixtures(fixtures, {
+      deleteUser: ((id: string) => {
+        if (id === 'user-a') throw new Error('sync boom');
+        deleted.push(id);
+        return Promise.resolve();
+      }) as (id: string) => Promise<unknown>,
+      deleteBillingEvent: async (id: string) => { deleted.push(id); },
+    })).resolves.toBeDefined();
+    expect(deleted).toEqual(['user-b', 'user-staff', 'anon', 'evt_x']);
+  });
+
+  it('reports only what it actually removed', async () => {
+    const fixtures = emptyFixtures();
+    await provisionFixtures(fixturePlan(['progress']), spyDeps().deps, fixtures);
+
+    const removed = await cleanupFixtures(fixtures, {
+      deleteUser: async (id: string) => { if (id === 'anon') throw new Error('gone'); },
+    });
+    expect(removed).toEqual(['user-a', 'user-b']);
+  });
+});
+
+describe('the runner holds the fixture state itself', () => {
+  it('declares it before the try and fills it in through the provisioner', () => {
+    expect(runner).toContain('const fixtures = emptyFixtures();');
+    expect(runner).toMatch(/await provisionFixtures\(plan, \{[\s\S]*?\}, fixtures\);/);
+    /* Assigning from the return value is what lost a partial provisioning. */
+    expect(runner).not.toMatch(/fixtures = await provisionFixtures/);
+    expect(runner).not.toMatch(/let fixtures/);
+  });
+
+  it('still cleans up that same state in the finally', () => {
+    const cleanup = runner.slice(runner.indexOf('} finally {'));
+    expect(cleanup).toContain('cleanupFixtures(fixtures, {');
   });
 });

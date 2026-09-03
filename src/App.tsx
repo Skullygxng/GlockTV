@@ -10,12 +10,14 @@ import { SearchSuggestions, optionId } from './components/SearchSuggestions';
 import { useMediaSearchSuggestions } from './hooks/useMediaSearchSuggestions';
 import { useDialogBehavior } from './hooks/useDialogBehavior';
 import { AccountPanel } from './components/AccountPanel';
+import { SupportPanel } from './components/SupportPanel';
 import { AccountProvider, useAccount } from './components/AccountProvider';
 import { AdSlot } from './components/AdSlot';
 import { WatchProgressProvider } from './components/WatchProgressProvider';
 import type { WatchProgressService } from './lib/watchProgressService';
 import type { AccountService } from './lib/accountService';
 import type { BillingService } from './lib/billing';
+import type { SupportService } from './lib/support';
 import { billingReturnKind } from './lib/billing';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
@@ -50,6 +52,8 @@ export interface AppProps {
   billingService?: BillingService | null;
   /* Omit for the app's own progress layer; pass null for device-local only. */
   watchProgressService?: WatchProgressService | null;
+  /* Omit for the app's own support layer; pass null to run with no backend. */
+  supportService?: SupportService | null;
 }
 
 type View = 'discover' | 'friends' | 'vibe' | 'list';
@@ -126,7 +130,7 @@ export function App({ accountService, watchProgressService, ...props }: AppProps
   );
 }
 
-function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, billingService }: Omit<AppProps, 'accountService'>) {
+function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, billingService, supportService }: Omit<AppProps, 'accountService'>) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
@@ -172,6 +176,9 @@ function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, b
   const [query, setQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  /* Opened from the account panel, which closes as it opens - two stacked
+     right-hand sheets would trap focus between them. */
+  const [supportOpen, setSupportOpen] = useState(false);
   /*
    * My List has two things in it that are both "yours": what you saved, and
    * what you are partway through. They share a destination rather than taking
@@ -1134,7 +1141,20 @@ const wheelLockedUntil = useRef(0);
         )}
       </AnimatePresence>
 
-      {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} billing={billingService} />}
+      {accountOpen && (
+        <AccountPanel
+          onClose={() => setAccountOpen(false)}
+          onOpenSupport={() => { setAccountOpen(false); setSupportOpen(true); }}
+          billing={billingService}
+        />
+      )}
+
+      {supportOpen && (
+        <SupportPanel
+          onClose={() => setSupportOpen(false)}
+          service={supportService}
+        />
+      )}
 
       <footer className="credits">
         Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.

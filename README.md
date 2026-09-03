@@ -289,6 +289,75 @@ There is none, deliberately. No paid email provider is introduced, and the
 ticket system works without one: replies appear in the panel. Notification
 delivery is a future adapter, not a dependency.
 
+## Verifying the database boundaries
+
+Everything that stops one account reading another's watch history, stops a
+customer answering their own ticket as staff, and stops a browser granting
+itself Premium lives in PostgreSQL - in a grant, a policy, a trigger. The test
+suite reads those migrations and can prove a rule was **written**. It cannot
+prove what a project did with it: a grant can be missing, over-broad, or
+changed by hand later, and every source-level assertion would still pass.
+
+`scripts/verify-supabase-permissions.mjs` asks a real project instead. Each
+check has a wrong answer that is a privilege escalation.
+
+| Section | Verifies |
+| --- | --- |
+| `billing` | service-role can execute `apply_billing_provider_state`; publishable key signed out cannot; an ordinary authenticated user cannot |
+| `progress` | an account can create, read, update and delete its own progress; it cannot read, insert into, update or delete another's; an anonymous session cannot write cloud progress at all; `updated_at` is database time; a forged future `updated_at` cannot be established |
+| `support` | a customer can open and read their own ticket; cannot read another's ticket or messages; cannot set status; cannot read or write `staff_members`; a reply claiming `author_role: 'staff'` is stored as `customer`; a real staff member's reply is stored as `staff`; the transcript cannot be edited or deleted |
+
+### Running it
+
+Export `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and
+`SUPABASE_PUBLISHABLE_KEY` into your shell - this file deliberately shows no
+assignment, so no secret name here is ever one careless edit away from carrying
+a real value - then:
+
+```sh
+node scripts/verify-supabase-permissions.mjs            # dry run, writes nothing
+node scripts/verify-supabase-permissions.mjs --execute
+node scripts/verify-supabase-permissions.mjs --execute --only support
+```
+
+**Sections are isolated.** Each provisions only what it needs, so
+`--only billing` runs on a project where the support migration has not been
+applied yet:
+
+| Section | Users | Anonymous session | `staff_members` |
+| --- | --- | --- | --- |
+| `billing` | A | no | untouched |
+| `progress` | A, B | yes - anonymous write rejection is part of what it verifies | untouched |
+| `support` | A, B, staff | no | seeded by the service role |
+
+A full run shares A and B across sections rather than provisioning them per
+section; the rows each section writes for a given user do not overlap, and one
+deletion removes all of them, so coverage is unchanged.
+
+**Test-mode project only.** A run creates only the throwaway auth users its
+sections need, writes only rows those users own, and deletes them in a
+`finally` - which cascades every row it created. Cleanup removes what was
+actually created, so a section that never ran leaves nothing behind. It never grants
+Premium: the billing section applies the `free` tier throughout. Credentials
+come from the environment only; nothing is written to a file, and the run
+refuses to start if a variable is missing or if the service-role and
+publishable keys are the same value, which would compare a role against itself.
+
+The staff fixture is seeded through the only path there is - a service-role
+insert into `staff_members` - because no browser-reachable way to become staff
+exists, which is the property being verified.
+
+`.github/workflows/verify-supabase-permissions.yml` runs it on
+`workflow_dispatch` only, never on a push, and defaults to the dry run. It
+needs `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and
+`SUPABASE_PUBLISHABLE_KEY` as Actions secrets.
+
+The verifier itself is unit-tested with fixtures in
+`tests/supabase-verifier.test.ts`: each check is driven with both the safe
+answer and the escalating one and asserted to tell them apart, because a check
+that reports PASS when a database says "yes, anyone may read that" is worse
+than no check at all.
+
 ## Premium membership
 
 GlockTV Premium is one recurring monthly subscription whose only V1 benefit is
@@ -404,19 +473,5 @@ halves for real:
 A failure of the first means every webhook silently 500s. A success of the
 second means anyone can set their own tier.
 
-`scripts/verify-billing-permissions.mjs` asks the project all three questions
-and exits non-zero if any answer is wrong. Export `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_PUBLISHABLE_KEY` into your shell -
-this file deliberately shows no assignment, so no secret name here is ever one
-careless edit away from carrying a real value - then run:
-
-```sh
-node scripts/verify-billing-permissions.mjs
-```
-
-It reads its keys from the environment only - nothing is written to a file and
-no key is committed. It signs in anonymously to obtain a real `auth.uid()` to
-key the write to, applies the `free` tier under an obvious `smoke_` namespace
-so no account is granted Premium by the test, and deletes the rows afterwards.
-Run it against the test-mode project after every migration change that touches
-the function or its grants.
+These three questions are now the `billing` section of the project-wide
+verifier described under **Verifying the database boundaries** below.

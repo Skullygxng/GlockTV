@@ -1,0 +1,79 @@
+name: Verify Supabase permissions
+
+# The database boundaries this project relies on cannot be checked by the test
+# suite - it reads migration text and can prove a rule was written, not what a
+# project did with it. This asks a real project.
+#
+# It never runs on a push. Verifying creates throwaway users and writes rows, so
+# it is dispatched deliberately, and it defaults to a dry run: the first thing
+# you get is what it would do, not a mutation.
+on:
+  workflow_dispatch:
+    inputs:
+      execute:
+        description: 'Actually run the checks (unticked = dry run, writes nothing)'
+        type: boolean
+        default: false
+      section:
+        description: 'Limit to one section'
+        type: choice
+        default: all
+        options: [all, billing, progress, support]
+
+permissions:
+  contents: read
+
+# Two runs would create fixtures against one database at the same time.
+concurrency:
+  group: supabase-permission-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Require project credentials
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          missing=""
+          [ -n "$SUPABASE_URL" ] || missing="$missing SUPABASE_URL"
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || missing="$missing SUPABASE_SERVICE_ROLE_KEY"
+          [ -n "$SUPABASE_PUBLISHABLE_KEY" ] || missing="$missing SUPABASE_PUBLISHABLE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Point these at the TEST-mode project. See README, 'Verifying the"
+            echo "database boundaries'."
+            exit 1
+          fi
+          echo "Credentials present."
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The verifier itself is unit-tested with fixtures, so a broken verifier
+      # is caught here rather than being mistaken for a broken database.
+      - name: Test the verifier
+        run: npx vitest run tests/supabase-verifier.test.ts
+
+      - name: Verify
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          args=""
+          if [ "${{ inputs.execute }}" = "true" ]; then args="--execute"; fi
+          if [ "${{ inputs.section }}" != "all" ]; then args="$args --only ${{ inputs.section }}"; fi
+          node scripts/verify-supabase-permissions.mjs $args

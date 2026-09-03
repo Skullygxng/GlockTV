@@ -12,6 +12,8 @@ import { useDialogBehavior } from './hooks/useDialogBehavior';
 import { AccountPanel } from './components/AccountPanel';
 import { AccountProvider, useAccount } from './components/AccountProvider';
 import type { AccountService } from './lib/accountService';
+import type { BillingService } from './lib/billing';
+import { billingReturnKind } from './lib/billing';
 import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { composeDiscoverFeed } from './lib/feed';
@@ -39,6 +41,8 @@ export interface AppProps {
   partyPlaybackConfig?: PartyPlaybackConfig;
   /* Omit for the app's own account layer; pass null to run with no backend. */
   accountService?: AccountService | null;
+  /* Omit for the app's own billing client; pass null to run with no backend. */
+  billingService?: BillingService | null;
 }
 
 type View = 'discover' | 'friends' | 'vibe' | 'list';
@@ -110,7 +114,7 @@ export function App({ accountService, ...props }: AppProps) {
   );
 }
 
-function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig }: Omit<AppProps, 'accountService'>) {
+function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, billingService }: Omit<AppProps, 'accountService'>) {
   const api = useMemo(() => client ?? createTmdbClient({
     apiKey: import.meta.env.VITE_TMDB_API_KEY,
     readToken: import.meta.env.VITE_TMDB_READ_TOKEN,
@@ -139,6 +143,30 @@ function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig }:
   const [query, setQuery] = useState('');
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  /*
+   * Stripe's hosted pages come back with a marker. It is a cue to re-ask the
+   * server what this account is entitled to and nothing else - a member who
+   * types this URL gets the same answer as one who paid.
+   */
+  const billingReturn = useMemo(() => billingReturnKind(window.location.search), []);
+  const { confirmMembership } = useAccount();
+  const billingReturnHandled = useRef(false);
+
+  /*
+   * Coming back from Stripe opens the account panel and starts the bounded
+   * re-check. The marker is then removed from the URL so a refresh - or a
+   * shared link - does not put the page back into a confirming state.
+   */
+  useEffect(() => {
+    if (!billingReturn || billingReturnHandled.current) return;
+    billingReturnHandled.current = true;
+    setAccountOpen(true);
+    void confirmMembership();
+
+    const url = new URL(window.location.href);
+    url.searchParams.delete('billing');
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+  }, [billingReturn, confirmMembership]);
   const [isMobileView, setIsMobileView] = useState(false);
   const [session, dispatch] = useReducer(sessionReducer, undefined, loadSession);
 
@@ -784,6 +812,10 @@ const wheelLockedUntil = useRef(0);
                   >
                     <Filter />
                   </button>
+                  {/* The topbar is hidden on phones, so the account lives with
+                      the other top controls rather than taking a tab-bar slot
+                      from a product destination. */}
+                  <MobileAccountButton onOpen={() => setAccountOpen(true)} />
                 </>
               )}
             </div>
@@ -921,9 +953,7 @@ const wheelLockedUntil = useRef(0);
         >
           <Bookmark /><span>My List</span>
         </button>
-        {/* The topbar is hidden on phones, so the account needs its own way in
-            here or it is unreachable below the breakpoint. */}
-        <MobileAccountButton onOpen={() => setAccountOpen(true)} />
+        {/* Live TV portals its button in here as the fifth destination. */}
       </nav>
 
       <AnimatePresence>
@@ -980,7 +1010,7 @@ const wheelLockedUntil = useRef(0);
         )}
       </AnimatePresence>
 
-      {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} />}
+      {accountOpen && <AccountPanel onClose={() => setAccountOpen(false)} billing={billingService} />}
 
       <footer className="credits">
         Movie and TV data supplied by TMDB. This product uses the TMDB API but is not endorsed or certified by TMDB. Watch availability powered by JustWatch.
@@ -1016,15 +1046,24 @@ function AccountButton({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-/* The same account, reached from the mobile tab bar. */
+/*
+ * The account, as a header control on phones.
+ *
+ * A guest gets the invitation spelled out - "Sign up" next to the avatar -
+ * because a bare avatar tells somebody with no account nothing. Once there is
+ * an account the label drops away and it becomes the avatar alone, so the
+ * header stays balanced against All / Movies / TV Shows / Search / Filter.
+ */
 function MobileAccountButton({ onOpen }: { onOpen: () => void }) {
   const { account, entitlements } = useAccount();
   const isPremium = entitlements.tier === 'premium';
   const isGuest = !account || account.isAnonymous;
+  const initial = account?.email?.trim()?.[0]?.toUpperCase() ?? '';
 
   return (
     <button
       type="button"
+      className={`mobile-account${isGuest ? ' mobile-account--guest' : ''}${isPremium ? ' mobile-account--premium' : ''}`}
       aria-label={
         isPremium
           ? 'Your account, Premium'
@@ -1032,8 +1071,10 @@ function MobileAccountButton({ onOpen }: { onOpen: () => void }) {
       }
       onClick={onOpen}
     >
-      {isPremium ? <Sparkles /> : <CircleUser />}
-      <span>{isPremium ? 'Premium' : isGuest ? 'Guest' : 'Account'}</span>
+      <span className="mobile-account__mark" aria-hidden="true">
+        {isPremium ? <Sparkles /> : isGuest ? <CircleUser /> : initial}
+      </span>
+      {isGuest && <span className="mobile-account__label">Sign up</span>}
     </button>
   );
 }

@@ -1,19 +1,43 @@
 import { type FormEvent, useState } from 'react';
-import { LoaderCircle, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { CreditCard, LoaderCircle, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { useAccount } from './AccountProvider';
 import { useDialogBehavior } from '../hooks/useDialogBehavior';
+import { createDefaultBillingService, type BillingService } from '../lib/billing';
 
 /*
  * The GlockTV account surface. It reads the global account layer and offers
  * the two identity actions; it has no way to change a tier, because nothing in
  * the browser does.
  */
-export function AccountPanel({ onClose }: { onClose: () => void }) {
-  const { account, entitlements, loading, error, linkEmail, sendSignInLink } = useAccount();
+let defaultBilling: BillingService | null | undefined;
+function getDefaultBilling(): BillingService | null {
+  if (defaultBilling === undefined) defaultBilling = createDefaultBillingService();
+  return defaultBilling;
+}
+
+export function AccountPanel({
+  onClose,
+  billing: providedBilling,
+}: {
+  onClose: () => void;
+  /* Omit for the app's own billing client; pass null to run with no backend. */
+  billing?: BillingService | null;
+}) {
+  const {
+    account, entitlements, loading, error,
+    confirmingMembership, confirmationTimedOut,
+    linkEmail, sendSignInLink,
+  } = useAccount();
+  const billing = providedBilling === undefined ? getDefaultBilling() : providedBilling;
+
   const [email, setEmail] = useState(account?.email ?? '');
   const [status, setStatus] = useState('');
   const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
+  /* Separate from the identity actions: a checkout in flight must not be
+     restartable by a second click while the first is still going. */
+  const [billingBusy, setBillingBusy] = useState(false);
+  const [billingError, setBillingError] = useState('');
 
   const dialog = useDialogBehavior<HTMLElement>({ onClose });
 
@@ -36,6 +60,25 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
   const protectAccount = (event: FormEvent) => {
     event.preventDefault();
     void run(() => linkEmail(email), 'Check your email to finish protecting this account.');
+  };
+
+  /*
+   * Both membership actions do the same thing: ask the server for a hosted
+   * Stripe URL and go there. The browser never creates a Stripe object, and
+   * nothing here can change a tier - only the verified webhook does that.
+   */
+  const goToStripe = async (request: () => Promise<string>, unavailable: string) => {
+    if (billingBusy) return;
+    if (!billing) { setBillingError(unavailable); return; }
+    setBillingBusy(true); setBillingError('');
+    try {
+      window.location.assign(await request());
+    } catch (reason) {
+      setBillingError(reason instanceof Error ? reason.message : unavailable);
+      /* Only cleared on failure: on success the page is navigating away, and
+         re-enabling the button first would invite a second checkout. */
+      setBillingBusy(false);
+    }
   };
 
   return (
@@ -72,6 +115,67 @@ export function AccountPanel({ onClose }: { onClose: () => void }) {
         </dl>
 
         {error && <p className="account-panel__note" role="status">Membership status is unavailable right now, so this account is on the free tier.</p>}
+
+        {/*
+          * The membership card. Its state comes from the server's answer, never
+          * from having just been through checkout.
+          */}
+        <section className="account-premium" aria-label="GlockTV Premium">
+          <header>
+            <div><Sparkles /><strong>GlockTV Premium</strong></div>
+            <span>Ad-free GlockTV</span>
+          </header>
+
+          {confirmingMembership && (
+            <p className="account-premium__pending" role="status">
+              <LoaderCircle className="spin" /> Confirming membership…
+            </p>
+          )}
+
+          {confirmationTimedOut && !isPremium && !confirmingMembership && (
+            <p className="account-premium__pending" role="status">
+              We have not had confirmation from the payment provider yet. Nothing is lost - this
+              updates by itself once it arrives, and you can reopen this panel to check.
+            </p>
+          )}
+
+          {isPremium ? (
+            <div className="account-premium__actions">
+              <button
+                type="button"
+                disabled={billingBusy}
+                onClick={() => void goToStripe(
+                  () => billing!.createPortalUrl(),
+                  'The billing portal could not be opened.',
+                )}
+              >
+                {billingBusy ? <LoaderCircle className="spin" /> : <CreditCard />} Manage membership
+              </button>
+            </div>
+          ) : isGuest ? (
+            /* No checkout for an anonymous account: it lives in one browser's
+               storage, so a membership bought against it could be lost with a
+               cleared cache and never recovered. */
+            <p className="account-premium__gate" role="status">
+              Protect your account with email first, then you can go Premium.
+            </p>
+          ) : (
+            <div className="account-premium__actions">
+              <button
+                type="button"
+                disabled={billingBusy}
+                onClick={() => void goToStripe(
+                  () => billing!.createCheckoutUrl(),
+                  'Checkout could not be started.',
+                )}
+              >
+                {billingBusy ? <LoaderCircle className="spin" /> : <Sparkles />} Go Premium
+              </button>
+            </div>
+          )}
+
+          {billingError && <small className="account-panel__error" role="alert">{billingError}</small>}
+        </section>
 
         <form onSubmit={protectAccount}>
           <p>

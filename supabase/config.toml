@@ -1,0 +1,17 @@
+# Minimum Supabase project config for the billing Edge Functions.
+#
+# verify_jwt is off for all three because each does its own authorization:
+# the two browser-callable functions resolve the caller from their Supabase JWT
+# and refuse anonymous accounts, and the webhook has no user at all - Stripe's
+# signature is its proof of authority. Leaving the platform gate on would
+# reject Stripe outright.
+project_id = "glocktv"
+
+[functions.create-checkout]
+verify_jwt = false
+
+[functions.create-billing-portal]
+verify_jwt = false
+
+[functions.stripe-webhook]
+verify_jwt = false

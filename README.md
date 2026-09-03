@@ -307,19 +307,53 @@ creates - from the migration itself, not a hand-kept list - and asks the
 project which of those objects exist. Every statement it sends is a `SELECT`,
 and it refuses to send anything else.
 
-Each migration comes back as one of:
+### Object existence is not equivalence
+
+A migration establishes far more than the objects it names: RLS policies,
+grants and revokes, triggers, indexes, and whether a function is
+`SECURITY DEFINER` with a pinned `search_path`. Every one of those can be
+absent while the table sits there looking correct - and in this repository the
+security rests on those parts rather than on the tables. Marking such a
+migration applied writes it out of the history with its policies still missing,
+and nothing will ever apply them.
+
+So the audit checks every artifact a migration declares, and is reluctant:
 
 | Verdict | Meaning | Action |
 | --- | --- | --- |
-| `represented` | everything it creates already exists | repair its history |
-| `absent` | none of it exists | push it |
-| `partial` | **some** of it exists | neither - decide per migration |
-| `inconclusive` | it creates nothing of its own (a policy, grant or index on an earlier migration's table) | follows the migration it amends |
+| `history_match` | the exact version is already recorded | nothing |
+| `equivalent` | **every** declared artifact is present | the only status offered for repair |
+| `schema_candidate` | its objects exist but something it declares does not | **not** offered - equivalence is not established |
+| `partial` | only some of its objects exist | **not** offered |
+| `absent` | none of its objects exist | push it |
+| `unverifiable` | it declares nothing checkable | **not** offered |
 
-The audit prints the exact repair command. Supply those versions in the
-workflow's `repair_versions` input and dispatch it again: repair writes rows
-into `supabase_migrations.schema_migrations` and touches **no schema and no
-data**, then the dry run re-runs so you can see what genuinely remains.
+Nothing is appended to a repair command. In particular an `unverifiable`
+migration is never swept in behind a neighbour: "creates no object" means the
+audit cannot prove it, not that it follows another migration safely.
+
+The audit also reports two things a dry run cannot:
+
+- **same name, different version** - a lead for a human, never grounds for
+  repair on its own. A shared name says somebody applied something with this
+  purpose, not that they applied this content.
+- **remote-only history entries** - changes the database has that this
+  repository does not, which a push touching the same objects could contradict.
+
+### When the dry run and the dashboard disagree
+
+The audit prints the project's identity first - masked ref, name, region,
+connected database - because "the history says X" means nothing without knowing
+which database said it, and a dry run that contradicts the dashboard is usually
+two different projects. Exact version matches are called out separately: if
+`db push` lists a version the history already records, the push and the audit
+are reading different histories, and that must be resolved before anything is
+repaired or pushed.
+
+Supply proven-equivalent versions in the workflow's `repair_versions` input and
+dispatch it again: repair writes rows into
+`supabase_migrations.schema_migrations` and touches **no schema and no data**,
+then the dry run re-runs so you can see what genuinely remains.
 
 Repair is opt-in and runs on a dry run too, because repairing and re-checking
 the push is the point of doing it. Applying still needs `dry_run` unticked, and

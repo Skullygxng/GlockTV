@@ -1,196 +1,307 @@
 import { describe, expect, it } from 'vitest';
 import {
+  artifactsDeclaredBy,
   assertReadOnly,
   classify,
-  objectsCreatedBy,
+  isVerifiable,
+  maskRef,
+  nameOf,
   reconciliationPlan,
+  remoteOnly,
+  renameCandidates,
   versionOf,
   type AuditRow,
 } from '../scripts/lib/migration-audit.mjs';
 import auditScript from '../scripts/audit-supabase-migrations.mjs?raw';
 import workflow from '../.github/workflows/apply-supabase-migrations.yml?raw';
 import watchParties from '../supabase/migrations/20260811010000_watch_parties.sql?raw';
-import roomIndex from '../supabase/migrations/20260818031228_index_room_bans_user.sql?raw';
+import publicRoomGrant from '../supabase/migrations/20260811125500_public_room_select_grant.sql?raw';
 import watchProgress from '../supabase/migrations/20260903190000_watch_progress.sql?raw';
 import supportTickets from '../supabase/migrations/20260903210000_support_tickets.sql?raw';
-import billingAtomic from '../supabase/migrations/20260903020000_billing_atomic_and_expiry.sql?raw';
 
 /*
- * Reconciling a migration history against a database that already has the
- * schema.
+ * Reconciling a migration history against a database that already has schema.
  *
- * `db push --dry-run` says which local versions the remote history does not
- * mention. It never says why, and the two reasons need opposite treatment: a
- * version missing because the change was never made needs pushing, while one
- * missing because the change was made by hand needs its history repaired. Push
- * the second kind and you re-run DDL against live objects.
+ * The first version of this audit called a migration "represented" when the
+ * tables and functions it creates existed. That is not proof of anything that
+ * matters here: a migration also establishes RLS policies, grants, triggers,
+ * indexes and whether a function is SECURITY DEFINER with a pinned search_path,
+ * and every one of those can be absent while the table sits there looking
+ * correct. Repairing on that basis writes the migration out of the history with
+ * its policies still missing, and nothing ever applies them.
  */
 
-const remote = (relations: string[], functions: string[] = []) => ({
-  relations: new Set(relations),
-  functions: new Set(functions),
-});
+const EMPTY = {
+  relations: new Set<string>(), functions: new Set<string>(), policies: new Set<string>(),
+  triggers: new Set<string>(), indexes: new Set<string>(), grants: new Set<string>(),
+  securityDefiners: new Set<string>(), pinnedSearchPath: new Set<string>(),
+};
+const liveWith = (overrides: Partial<typeof EMPTY>) => ({ ...EMPTY, ...overrides });
 
-describe('reading what a migration creates', () => {
-  it('finds the tables and functions it introduces', () => {
-    const objects = objectsCreatedBy(watchParties);
-    expect(objects.tables).toEqual(['watch_rooms', 'room_members', 'chat_messages']);
-    expect(objects.functions).toContain('is_room_member');
-    expect(objects.functions).toContain('create_watch_room');
+/* Everything a migration declares, satisfied. */
+function liveFor(sql: string) {
+  const declared = artifactsDeclaredBy(sql);
+  return {
+    relations: new Set([...declared.tables, ...declared.views]),
+    functions: new Set(declared.functions),
+    policies: new Set(declared.policies),
+    triggers: new Set(declared.triggers),
+    indexes: new Set(declared.indexes),
+    grants: new Set(declared.grants),
+    securityDefiners: new Set(declared.securityDefiners),
+    pinnedSearchPath: new Set(declared.pinnedSearchPath),
+  };
+}
+
+describe('reading what a migration establishes', () => {
+  it('sees far more than the objects it creates', () => {
+    /* The tables were never the security-relevant part. */
+    const declared = artifactsDeclaredBy(watchProgress);
+    expect(declared.tables).toEqual(['watch_progress']);
+    expect(declared.policies.length).toBe(4);
+    expect(declared.triggers).toEqual(['watch_progress_stamp_updated_at']);
+    expect(declared.indexes).toEqual(['watch_progress_user_recent_idx']);
+    expect(declared.grants.length).toBeGreaterThan(0);
+    expect(declared.pinnedSearchPath).toContain('stamp_watch_progress_updated_at');
   });
 
-  it('finds a view as well as a table', () => {
-    const objects = objectsCreatedBy(billingAtomic);
-    expect(objects.views).toEqual(['account_entitlements_effective']);
-    expect(objects.functions).toEqual(['apply_billing_provider_state']);
+  it('notices which functions are security definer with a pinned search_path', () => {
+    const declared = artifactsDeclaredBy(supportTickets);
+    expect(declared.securityDefiners.sort())
+      .toEqual(['is_support_staff', 'set_support_message_author_role', 'touch_support_ticket']);
+    expect(declared.pinnedSearchPath.sort()).toEqual(declared.securityDefiners.sort());
   });
 
   it('reads statements, not the prose around them', () => {
     /*
-     * These files explain at length what they deliberately leave alone, and a
-     * migration that said so in the obvious words would be credited with
-     * creating the very thing it promises to avoid - then marked represented
-     * against a database holding none of its real tables.
-     *
-     * No migration is written that way today, so this is asserted against
-     * input that would actually fool a naive scan rather than against the
-     * current files, which would pass either way and prove nothing.
+     * These files explain at length what they deliberately leave alone. A
+     * migration saying so in the obvious words would otherwise be credited with
+     * creating the very thing it promises to avoid. No migration is written
+     * that way today, so this uses input that actually would fool a naive scan
+     * rather than the current files, which would pass either way.
      */
     const misleading = [
       '-- This does not create table public.watch_rooms; that lives elsewhere.',
-      '/* Nor does it create or replace function public.leave_watch_room(uuid). */',
+      "/* Nor create policy \"Members can view their rooms\" on public.watch_rooms. */",
       'create table if not exists public.watch_progress (user_id uuid);',
     ].join('\n');
-
-    const objects = objectsCreatedBy(misleading);
-    expect(objects.tables).toEqual(['watch_progress']);
-    expect(objects.functions).toEqual([]);
+    const declared = artifactsDeclaredBy(misleading);
+    expect(declared.tables).toEqual(['watch_progress']);
+    expect(declared.policies).toEqual([]);
   });
 
-  it('reports the real migrations exactly, as a regression guard', () => {
-    /* Separate from the test above: this pins today's files rather than the
-       parser's handling of prose. */
-    expect(objectsCreatedBy(watchProgress).tables).toEqual(['watch_progress']);
-    expect(objectsCreatedBy(supportTickets).tables)
-      .toEqual(['staff_members', 'support_tickets', 'support_messages']);
-    expect(objectsCreatedBy(supportTickets).tables).not.toContain('watch_progress');
+  it('reports a grant-only migration as declaring nothing checkable', () => {
+    expect(isVerifiable(artifactsDeclaredBy(publicRoomGrant))).toBe(false);
   });
 
-  it('reports nothing for a migration that only adds an index', () => {
-    expect(objectsCreatedBy(roomIndex)).toEqual({ tables: [], functions: [], views: [] });
-  });
-
-  it('takes the version from the filename, which is what the history stores', () => {
+  it('splits version and name the way the history table stores them', () => {
     expect(versionOf('20260903190000_watch_progress.sql')).toBe('20260903190000');
-    expect(versionOf('not-a-migration.sql')).toBeNull();
+    expect(nameOf('20260903190000_watch_progress.sql')).toBe('watch_progress');
+    expect(versionOf('nope.sql')).toBeNull();
   });
 });
 
-describe('deciding whether a migration is already represented', () => {
-  const objects = { tables: ['watch_progress'], functions: ['stamp_watch_progress_updated_at'], views: [] };
+describe('the verdict is reluctant', () => {
+  it('needs nothing else once the exact version is recorded', () => {
+    const verdict = classify(artifactsDeclaredBy(watchProgress), EMPTY, { inHistory: true });
+    expect(verdict.status).toBe('history_match');
+  });
 
-  it('is represented when everything it creates already exists', () => {
-    const verdict = classify(objects, remote(['watch_progress'], ['stamp_watch_progress_updated_at']));
-    expect(verdict.status).toBe('represented');
+  it('is equivalent only when every declared artifact is present', () => {
+    const verdict = classify(artifactsDeclaredBy(watchProgress), liveFor(watchProgress), { inHistory: false });
+    expect(verdict.status).toBe('equivalent');
     expect(verdict.missing).toEqual([]);
   });
 
-  it('is absent when none of it exists', () => {
-    expect(classify(objects, remote([], [])).status).toBe('absent');
-  });
-
-  it('is partial when only some of it exists, which is never safe to act on blindly', () => {
+  it('refuses to call a migration equivalent when its table exists but a policy does not', () => {
     /*
-     * The dangerous middle. Repairing this would record a migration as applied
-     * when half of it is not there; pushing it would re-run the half that is.
-     * Both are wrong, so it is neither and a human decides.
+     * The exact case that makes object-existence unsafe. Repairing this writes
+     * the migration out of the history while its RLS is still missing, and
+     * nothing will ever apply it.
      */
-    const verdict = classify(objects, remote(['watch_progress'], []));
-    expect(verdict.status).toBe('partial');
-    expect(verdict.present).toEqual(['table watch_progress']);
-    expect(verdict.missing).toEqual(['function stamp_watch_progress_updated_at']);
+    const live = liveFor(watchProgress);
+    live.policies.delete([...live.policies][0]);
+    const verdict = classify(artifactsDeclaredBy(watchProgress), live, { inHistory: false });
+    expect(verdict.status).toBe('schema_candidate');
+    expect(verdict.status).not.toBe('equivalent');
+    expect(verdict.missing.some((entry) => entry.startsWith('policy '))).toBe(true);
   });
 
-  it('is inconclusive when the migration creates nothing of its own', () => {
-    /* A policy, grant or index migration cannot be judged from the schema
-       alone; its standing follows the migration it amends. */
-    expect(classify({ tables: [], functions: [], views: [] }, remote(['anything'])).status)
-      .toBe('inconclusive');
+  it('refuses when a function exists but is not security definer', () => {
+    const live = liveFor(supportTickets);
+    live.securityDefiners.delete('is_support_staff');
+    expect(classify(artifactsDeclaredBy(supportTickets), live, { inHistory: false }).status)
+      .toBe('schema_candidate');
   });
 
-  it('checks functions against functions, not against relations', () => {
-    /* A table sharing a name with a function must not vouch for it. */
-    const verdict = classify({ tables: [], functions: ['is_support_staff'], views: [] }, remote(['is_support_staff'], []));
-    expect(verdict.status).toBe('absent');
-  });
-});
-
-describe('what the plan proposes', () => {
-  const rows: AuditRow[] = [
-    { version: '1', inHistory: true, status: 'represented' },
-    { version: '2', inHistory: false, status: 'represented' },
-    { version: '3', inHistory: false, status: 'inconclusive' },
-    { version: '4', inHistory: false, status: 'absent' },
-    { version: '5', inHistory: false, status: 'partial' },
-  ];
-
-  it('proposes repair only for what the database already has and the history lacks', () => {
-    const plan = reconciliationPlan(rows);
-    expect(plan.repairable.map((row) => row.version)).toEqual(['2']);
-    expect(plan.inconclusive.map((row) => row.version)).toEqual(['3']);
-    expect(plan.genuinelyPending.map((row) => row.version)).toEqual(['4']);
+  it('refuses when a security definer function has no pinned search_path', () => {
+    const live = liveFor(supportTickets);
+    live.pinnedSearchPath.delete('is_support_staff');
+    expect(classify(artifactsDeclaredBy(supportTickets), live, { inHistory: false }).status)
+      .toBe('schema_candidate');
   });
 
-  it('never files a partially-present migration as pending or as repairable', () => {
-    const plan = reconciliationPlan(rows);
-    expect(plan.partial.map((row) => row.version)).toEqual(['5']);
-    for (const bucket of [plan.repairable, plan.genuinelyPending, plan.inconclusive]) {
-      expect(bucket.map((row) => row.version)).not.toContain('5');
+  it('refuses when a trigger or a grant is missing', () => {
+    for (const key of ['triggers', 'grants'] as const) {
+      const live = liveFor(watchProgress);
+      live[key].delete([...live[key]][0]);
+      expect(classify(artifactsDeclaredBy(watchProgress), live, { inHistory: false }).status)
+        .toBe('schema_candidate');
     }
   });
 
-  it('proposes nothing for a migration the history already records', () => {
-    expect(reconciliationPlan(rows).repairable.map((row) => row.version)).not.toContain('1');
+  it('is absent when none of its primary objects exist', () => {
+    expect(classify(artifactsDeclaredBy(supportTickets), EMPTY, { inHistory: false }).status).toBe('absent');
+  });
+
+  it('is partial when only some primary objects exist', () => {
+    const live = liveWith({ relations: new Set(['support_tickets']) });
+    expect(classify(artifactsDeclaredBy(supportTickets), live, { inHistory: false }).status).toBe('partial');
+  });
+
+  it('is unverifiable when it declares nothing this audit can check', () => {
+    const verdict = classify(artifactsDeclaredBy(publicRoomGrant), liveWith({ relations: new Set(['watch_rooms']) }), { inHistory: false });
+    expect(verdict.status).toBe('unverifiable');
+  });
+});
+
+describe('what may be acted on', () => {
+  const rows: AuditRow[] = [
+    { version: '1', status: 'history_match', missing: [], present: [] },
+    { version: '2', status: 'equivalent', missing: [], present: [] },
+    { version: '3', status: 'schema_candidate', missing: ['policy x'], present: [] },
+    { version: '4', status: 'partial', missing: [], present: [] },
+    { version: '5', status: 'absent', missing: [], present: [] },
+    { version: '6', status: 'unverifiable', missing: [], present: [] },
+  ];
+
+  it('offers only proven equivalence for repair', () => {
+    const plan = reconciliationPlan(rows);
+    expect(plan.repairable.map((row) => row.version)).toEqual(['2']);
+  });
+
+  it('never sweeps an unverifiable migration in behind a neighbour', () => {
+    /*
+     * "Creates no object" means this audit cannot prove it, not that it follows
+     * another migration safely. The previous version appended these to the
+     * repair command, which would have recorded them applied on no evidence.
+     */
+    const plan = reconciliationPlan(rows);
+    expect(plan.repairable.map((row) => row.version)).not.toContain('6');
+    expect(plan.unverifiable.map((row) => row.version)).toEqual(['6']);
+  });
+
+  it('keeps schema candidates and partials out of both action buckets', () => {
+    const plan = reconciliationPlan(rows);
+    for (const bucket of [plan.repairable, plan.pending]) {
+      expect(bucket.map((row) => row.version)).not.toContain('3');
+      expect(bucket.map((row) => row.version)).not.toContain('4');
+    }
+    expect(plan.schemaCandidates.map((row) => row.version)).toEqual(['3']);
+    expect(plan.partial.map((row) => row.version)).toEqual(['4']);
+  });
+
+  it('proposes pushing only what is absent', () => {
+    expect(reconciliationPlan(rows).pending.map((row) => row.version)).toEqual(['5']);
+  });
+});
+
+describe('the real drift this project has', () => {
+  /* The history read from the live project, as reported by the reviewer. */
+  const remote = [
+    ['20260811044118', 'watch_parties'], ['20260811044451', 'watch_party_advisor_fixes'],
+    ['20260811065428', 'watch_party_title_changes'], ['20260811163336', 'full_title_watch_rooms'],
+    ['20260811163453', 'public_room_read_policy'], ['20260811164102', 'public_room_select_grant'],
+    ['20260818023419', 'preserve_room_when_host_leaves'], ['20260818030935', 'host_member_moderation'],
+    ['20260818031228', 'index_room_bans_user'], ['20260818044028', 'room_reliability_suite'],
+    ['20260818044118', 'room_report_index'],
+    ['20260828044659', 'official_lounge_vote_authorization_hotfix'],
+    ['20260828045110', 'official_lounge_vote_conflict_hotfix'],
+  ].map(([version, name]) => ({ version, name }));
+
+  const local = [
+    '20260811010000_watch_parties.sql', '20260811011000_watch_party_advisor_fixes.sql',
+    '20260811030000_watch_party_title_changes.sql', '20260811123000_full_title_watch_rooms.sql',
+    '20260811124500_public_room_read_policy.sql', '20260811125500_public_room_select_grant.sql',
+    '20260818023419_preserve_room_when_host_leaves.sql', '20260818030935_host_member_moderation.sql',
+    '20260818031228_index_room_bans_user.sql', '20260818042433_room_reliability_suite.sql',
+    '20260818044105_room_report_index.sql', '20260827070000_official_lounge_rotation.sql',
+    '20260828020000_official_lounge_vote_authorization.sql', '20260901000000_account_entitlements.sql',
+    '20260901120000_billing_premium.sql', '20260903020000_billing_atomic_and_expiry.sql',
+    '20260903190000_watch_progress.sql', '20260903210000_support_tickets.sql',
+  ];
+
+  it('has three exact version matches, so the intersection is not empty', () => {
+    /* Asserted because it was claimed to be empty once, from a dry run rather
+       than from the history itself. */
+    const remoteVersions = new Set(remote.map((entry) => entry.version));
+    const exact = local.map(versionOf).filter((version) => remoteVersions.has(version!));
+    expect(exact).toEqual(['20260818023419', '20260818030935', '20260818031228']);
+  });
+
+  it('finds eight renamed migrations as leads, not verdicts', () => {
+    const renamed = renameCandidates(local, remote);
+    expect(renamed.map((entry) => entry.name)).toEqual([
+      'watch_parties', 'watch_party_advisor_fixes', 'watch_party_title_changes',
+      'full_title_watch_rooms', 'public_room_read_policy', 'public_room_select_grant',
+      'room_reliability_suite', 'room_report_index',
+    ]);
+    /* A shared name is evidence for a human. Nothing here promotes it. */
+    expect(reconciliationPlan(renamed.map((entry) => ({ ...entry, status: 'schema_candidate' } as AuditRow))).repairable)
+      .toEqual([]);
+  });
+
+  it('finds two history entries this repository does not contain', () => {
+    /* The database has changes the repo does not; a push touching the same
+       objects could contradict them. */
+    expect(remoteOnly(local, remote).map((entry) => entry.name)).toEqual([
+      'official_lounge_vote_authorization_hotfix',
+      'official_lounge_vote_conflict_hotfix',
+    ]);
   });
 });
 
 describe('the audit only ever reads', () => {
-  it('accepts a single select', () => {
+  it('accepts a single select and refuses everything else', () => {
     expect(assertReadOnly('select version from supabase_migrations.schema_migrations;'))
       .toBe('select version from supabase_migrations.schema_migrations');
-  });
-
-  it('refuses anything that writes', () => {
     for (const sql of [
-      'delete from watch_rooms',
-      'update account_entitlements set tier = $$premium$$',
-      'insert into staff_members values (1)',
-      'drop table watch_progress',
-      'truncate chat_messages',
+      'delete from watch_rooms', 'update account_entitlements set tier = $$premium$$',
+      'insert into staff_members values (1)', 'drop table watch_progress', 'truncate chat_messages',
+      'select 1; drop table watch_rooms',
     ]) {
       expect(() => assertReadOnly(sql)).toThrow(/non-SELECT/);
     }
   });
 
-  it('refuses a second statement riding along behind a select', () => {
-    expect(() => assertReadOnly('select 1; drop table watch_rooms')).toThrow(/non-SELECT/);
-  });
-
-  it('sends nothing but statements that went through the guard', () => {
-    const calls = [...auditScript.matchAll(/await query\(/g)];
-    expect(calls.length).toBeGreaterThan(0);
+  it('sends nothing that did not go through the guard', () => {
     expect(auditScript).toContain('assertReadOnly(sql)');
     expect(auditScript).not.toMatch(/\b(insert|update|delete|drop|truncate|alter)\s+(into|from|table)\b/i);
+  });
+
+  it('prints enough of the project ref to compare it, and no more', () => {
+    /* A dry run disagreeing with the dashboard is usually two projects. This
+       has to be decidable without publishing the ref. */
+    const masked = maskRef('abcdefghijklmnopqrst');
+    expect(masked).toContain('abcd');
+    expect(masked).toContain('qrst');
+    expect(masked).not.toContain('efghijklmnop');
+    expect(maskRef('')).toMatch(/unset/);
+    expect(auditScript).toContain('PROJECT IDENTITY');
+    expect(auditScript).toContain('maskRef(ref)');
+  });
+
+  it('says so when the exact matches contradict the push', () => {
+    expect(auditScript).toContain('EXACT VERSION MATCHES');
+    expect(auditScript).toMatch(/must not list them as/);
   });
 });
 
 describe('the workflow keeps repair separate from applying', () => {
   it('repairs only when versions are explicitly supplied', () => {
-    /*
-     * Bounded to this step. An unbounded slice runs on into "Re-audit after
-     * repair", which carries the same condition - so deleting the guard here
-     * would still find one and the assertion would pass having proved nothing.
-     */
+    /* Bounded to this step: an unbounded slice runs into "Re-audit after
+       repair", which carries the same condition, so a deleted guard would
+       still be found. */
     const repair = workflow.slice(
       workflow.indexOf('- name: Repair migration history'),
       workflow.indexOf('- name: Re-audit after repair'),
@@ -200,8 +311,6 @@ describe('the workflow keeps repair separate from applying', () => {
   });
 
   it('validates the versions instead of interpolating them into a shell', () => {
-    /* This input reaches a command line. It arrives through the environment
-       and every value is checked to be fourteen digits first. */
     const repair = workflow.slice(
       workflow.indexOf('- name: Repair migration history'),
       workflow.indexOf('- name: Re-audit after repair'),
@@ -215,7 +324,6 @@ describe('the workflow keeps repair separate from applying', () => {
     const apply = workflow.slice(workflow.indexOf('- name: Apply migrations'));
     expect(apply).toContain('inputs.dry_run == false');
     expect(apply).toMatch(/run: supabase db push\s*$/);
-    /* Repairing must not become a way to apply. */
     expect(apply).not.toContain('repair');
   });
 

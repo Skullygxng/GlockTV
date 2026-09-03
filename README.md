@@ -37,6 +37,73 @@ The workflow in `.github/workflows/deploy-pages.yml` builds and publishes the si
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 
+## Resume and Continue Watching
+
+GlockTV remembers where you got to and offers to put you back there. Progress is
+personal: it is not watch-party state, and joining a friend's room neither reads
+nor writes it.
+
+### Two layers
+
+| Layer | Who gets it | Where it lives |
+| --- | --- | --- |
+| Local | everybody, including guests with no account | `localStorage`, this device only |
+| Cloud | any account with a Supabase session | `watch_progress`, across devices |
+
+Nothing here signs anybody in. Pressing play never mints an account, so a
+visitor who has not signed in keeps their progress on the device and nowhere
+else - the same rule the account layer already follows.
+
+Both layers are read through one sanitizer and merged by one function. The
+newer record wins, with one asymmetry: the cloud's timestamp is the database's
+clock and the local one is the browser's, so a local stamp from the future does
+not win and an exact tie goes to the cloud. Without that, one device with a
+wrong clock would freeze a title in place across every other device.
+
+### What the providers actually expose
+
+Position is **observed**, never inferred. Clicking Watch records nothing; only a
+player that reports where it is produces an entry.
+
+| Server | Reports position | Resume | Notes |
+| --- | --- | --- | --- |
+| CineSrc | yes, `cinesrc:*` postMessage, origin-pinned | `?t=` | movies only - `resumeDisabledFor: ['tv']` |
+| VidZen backup | yes, `PLAYER_EVENT` / `mplayer` postMessage | `?startAt=` | both media types |
+| VidCore | no | none | the TV default, and it emits nothing |
+
+So **TV on the default server has no resume**, because that provider does not
+expose a position and GlockTV does not fabricate one. Nothing here scrapes a
+cross-origin iframe or works around provider isolation; a server that says
+nothing produces no entry, and Continue Watching stays empty rather than
+inventing a place in a film nobody watched.
+
+A resume is only offered into the server that observed it, so a position taken
+from one provider is never handed to another that would ignore it.
+
+### Rules
+
+- **Worth resuming** at 30 seconds. Below that, resuming is worse than starting.
+- **Finished** at whichever comes first of 95% or 90 seconds from the end, so a
+  two-hour feature is not "finished" with six minutes left and a 22-minute
+  episode is not still in progress during the credits. A finished title leaves
+  Continue Watching and starts from the beginning if opened again.
+- **No duration, no bar.** A player that reports a position but not a length
+  gets a timestamp and no progress bar, because the bar would need an invented
+  denominator.
+- **Throttled.** At most one cloud write per title per 10 seconds, with an
+  immediate send on pause, finish, episode change, player close and the tab
+  going away - so the last position is never the one that got throttled away.
+
+### Where to find it
+
+Inside **My List**, as a second tab, and in the desktop sidebar. It is
+deliberately not a sixth item in the mobile tab bar, which stays at exactly five
+product destinations.
+
+The next episode is offered when one finishes, but only when the season guide
+actually lists it - it is an offer rather than an auto-advance, and no episode
+number is assumed.
+
 ## Premium membership
 
 GlockTV Premium is one recurring monthly subscription whose only V1 benefit is

@@ -100,8 +100,15 @@ export async function openBillingPortal({
   return { ok: true, url: session.url };
 }
 
-/* The Stripe events that can change what somebody is entitled to. */
-const SUBSCRIPTION_EVENTS = new Set([
+/*
+ * The Stripe events that can change what somebody is entitled to.
+ *
+ * Exported because this list is also a configuration instruction: the webhook
+ * endpoint in the Stripe dashboard has to be subscribed to exactly these, and
+ * the README says so. A test binds the two together so adding a branch here
+ * cannot leave the setup instructions quietly wrong.
+ */
+export const SUBSCRIPTION_EVENTS = new Set([
   'customer.subscription.created',
   'customer.subscription.updated',
   'customer.subscription.deleted',

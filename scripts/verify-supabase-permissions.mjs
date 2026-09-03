@@ -30,13 +30,17 @@ import {
   supportChecks,
   watchProgressChecks,
 } from './lib/permission-checks.mjs';
+import {
+  SECTIONS,
+  cleanupFixtures,
+  fixturePlan,
+  provisionFixtures,
+} from './lib/fixtures.mjs';
 
 const args = process.argv.slice(2);
 const execute = args.includes('--execute');
 const onlyIndex = args.indexOf('--only');
 const only = onlyIndex >= 0 ? args[onlyIndex + 1] : null;
-const SECTIONS = ['billing', 'progress', 'support'];
-
 if (only && !SECTIONS.includes(only)) {
   console.error(`--only must be one of: ${SECTIONS.join(', ')}`);
   process.exit(2);
@@ -86,12 +90,17 @@ if (!execute) {
   console.log(`Project   ${url}`);
   console.log(`Sections  ${(only ? [only] : SECTIONS).join(', ')}`);
   console.log(`Namespace ${namespace}\n`);
+  const plan = fixturePlan(only ? [only] : SECTIONS);
   console.log('It would:');
-  console.log('  - create three throwaway auth users (customer A, customer B, staff)');
-  console.log('  - add the staff user to staff_members with the service role');
-  console.log('  - sign in anonymously, if the project allows it');
+  console.log(`  - create ${plan.users.length} throwaway auth user(s): ${plan.users.join(', ')}`);
+  console.log(plan.staff
+    ? '  - add the staff user to staff_members with the service role'
+    : '  - NOT touch staff_members');
+  console.log(plan.anonymous
+    ? '  - sign in anonymously, if the project allows it'
+    : '  - NOT request an anonymous session');
   console.log('  - write only rows owned by those users, tier free throughout');
-  console.log('  - delete all three users in a finally, cascading every row\n');
+  console.log('  - delete every user it created in a finally, cascading their rows\n');
 
   const probe = await fetch(`${url}/rest/v1/`, { headers: { apikey: publishableKey } }).catch(() => null);
   if (!probe) {
@@ -158,31 +167,46 @@ function record(section, check, outcome) {
 
 /* ---------------------------------------------------------------------- run */
 
-const created = [];
-let anonymousUser = null;
+const requested = only ? [only] : SECTIONS;
+const plan = fixturePlan(requested);
+const eventId = `evt_${namespace}`;
+
+/*
+ * Provisioned from the plan, so a section only ever depends on what it needs.
+ * `--only billing` no longer seeds staff_members or asks for an anonymous
+ * session, which is why it can now pass on a project where the support
+ * migration has not been applied.
+ */
+let fixtures = { users: {}, anonymous: null, staffSeeded: false };
 
 try {
-  const userA = await createProtectedUser('a');
-  const userB = await createProtectedUser('b');
-  const staffUser = await createProtectedUser('staff');
-  created.push(userA.id, userB.id, staffUser.id);
+  fixtures = await provisionFixtures(plan, {
+    createProtectedUser,
+    createAnonymousUser,
+    seedStaff: async (userId) => {
+      /* Granted out of band by a trusted caller - the same path an operator
+         uses, and the only one there is. */
+      const { error } = await admin.from('staff_members').insert({ user_id: userId, role: 'agent' });
+      if (error) throw new Error(`Could not seed staff fixture: ${error.message}`);
+    },
+  });
 
-  /* Staff membership is granted out of band by a trusted caller - the same
-     path an operator uses, and the only one there is. */
-  const { error: staffError } = await admin.from('staff_members').insert({ user_id: staffUser.id, role: 'agent' });
-  if (staffError) throw new Error(`Could not seed staff fixture: ${staffError.message}`);
-
-  anonymousUser = await createAnonymousUser();
-  if (!anonymousUser) {
+  if (plan.anonymous && !fixtures.anonymous) {
     console.log('NOTE  anonymous sign-ins are disabled on this project; the anonymous check will fail rather than be skipped.\n');
   }
+
+  const userA = fixtures.users.a;
+  const userB = fixtures.users.b;
+  const staffUser = fixtures.users.staff;
 
   const service = caller('service-role', serviceRoleKey, serviceRoleKey);
   const anon = caller('anon', publishableKey, publishableKey);
   const callerA = caller('customer A', publishableKey, userA.token);
-  const callerB = caller('customer B', publishableKey, userB.token);
-  const callerStaff = caller('staff', publishableKey, staffUser.token);
-  const callerAnonUser = anonymousUser ? caller('anonymous user', publishableKey, anonymousUser.token) : null;
+  const callerB = userB ? caller('customer B', publishableKey, userB.token) : null;
+  const callerStaff = staffUser ? caller('staff', publishableKey, staffUser.token) : null;
+  const callerAnonUser = fixtures.anonymous
+    ? caller('anonymous user', publishableKey, fixtures.anonymous.token)
+    : null;
 
   const payloadFor = () => ({
     p_user_id: userA.id,
@@ -198,13 +222,13 @@ try {
        anybody a membership. */
     p_tier: 'free',
     p_ads_enabled: true,
-    p_event_id: `evt_${namespace}`,
+    p_event_id: eventId,
     p_event_type: 'customer.subscription.deleted',
     p_event_created_at: new Date().toISOString(),
   });
 
   const progressRow = ({ mediaId, forUser }) => ({
-    user_id: forUser === 'A' ? userA.id : forUser === 'anon' ? anonymousUser?.id : userA.id,
+    user_id: forUser === 'anon' ? fixtures.anonymous?.id : userA.id,
     media_type: 'movie',
     media_id: mediaId,
     season_number: 0,
@@ -215,24 +239,26 @@ try {
     title: 'verifier fixture',
   });
 
-  const state = { userAId: userA.id, staffId: staffUser.id };
-
   const sections = {
-    billing: () => billingChecks({ rpc, payloadFor, service, anon, user: callerA }),
+    billing: () => {
+      /* The only section that writes a row belonging to no user, so it is the
+         only one that leaves cleanup anything beyond the users. */
+      fixtures.billingEventId = eventId;
+      return billingChecks({ rpc, payloadFor, service, anon, user: callerA });
+    },
     progress: () => watchProgressChecks({
+      rest, userA: callerA, userB: callerB, anonymous: callerAnonUser, progressRow,
+    }),
+    support: () => supportChecks({
       rest,
       userA: callerA,
       userB: callerB,
-      anonymous: callerAnonUser,
-      progressRow: ({ mediaId, forUser }) => ({
-        ...progressRow({ mediaId, forUser }),
-        user_id: forUser === 'anon' ? anonymousUser?.id : userA.id,
-      }),
+      staff: callerStaff,
+      state: { userAId: userA.id, staffId: staffUser?.id },
     }),
-    support: () => supportChecks({ rest, userA: callerA, userB: callerB, staff: callerStaff, state }),
   };
 
-  for (const name of only ? [only] : SECTIONS) {
+  for (const name of requested) {
     for (const check of sections[name]()) {
       try {
         record(name, check, await check.run());
@@ -243,16 +269,15 @@ try {
   }
 } finally {
   /*
-   * Deleting the users cascades every row they own - progress, tickets,
-   * messages, entitlements, staff membership. Best effort and never fatal: a
-   * cleanup failure must not turn a clean verification into a red one, and the
-   * leftovers are named with this run's namespace.
+   * Only what was created. Deleting a user cascades every row it owns -
+   * progress, tickets, messages, entitlements, staff membership - so a run that
+   * provisioned one user removes one user, and a section that never ran leaves
+   * nothing to remove.
    */
-  for (const id of created) {
-    await admin.auth.admin.deleteUser(id).catch(() => undefined);
-  }
-  if (anonymousUser) await admin.auth.admin.deleteUser(anonymousUser.id).catch(() => undefined);
-  await admin.from('billing_webhook_events').delete().eq('provider_event_id', `evt_${namespace}`).then(() => undefined, () => undefined);
+  await cleanupFixtures(fixtures, {
+    deleteUser: (id) => admin.auth.admin.deleteUser(id),
+    deleteBillingEvent: (id) => admin.from('billing_webhook_events').delete().eq('provider_event_id', id),
+  });
 }
 
 const failed = results.filter((result) => !result.ok);

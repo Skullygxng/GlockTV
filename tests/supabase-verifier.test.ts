@@ -9,6 +9,13 @@ import {
   supportChecks,
   watchProgressChecks,
 } from '../scripts/lib/permission-checks.mjs';
+import {
+  SECTION_FIXTURES,
+  SECTIONS,
+  cleanupFixtures,
+  fixturePlan,
+  provisionFixtures,
+} from '../scripts/lib/fixtures.mjs';
 import runner from '../scripts/verify-supabase-permissions.mjs?raw';
 import workflow from '../.github/workflows/verify-supabase-permissions.yml?raw';
 
@@ -368,5 +375,200 @@ describe('the workflow cannot run on an ordinary push', () => {
 
   it('passes --execute only when explicitly asked', () => {
     expect(workflow).toMatch(/inputs\.execute/);
+  });
+});
+
+
+/*
+ * Section isolation.
+ *
+ * Provisioning used to run before section selection, so every run created three
+ * users, seeded staff_members and asked for an anonymous session whatever was
+ * requested. That made `--only billing` fail on a project where the support
+ * migration had not been applied - the flag advertised an isolation that did
+ * not exist, which matters more than usual because this replaced a standalone
+ * billing smoke test.
+ *
+ * These watch what is actually provisioned rather than reading the source for
+ * the absence of a call.
+ */
+function spyDeps(anonymous: { id: string; token: string } | null = { id: 'anon', token: 't' }) {
+  const calls = { users: [] as string[], anonymous: 0, staff: [] as string[] };
+  return {
+    calls,
+    deps: {
+      createProtectedUser: async (tag: string) => {
+        calls.users.push(tag);
+        return { id: `user-${tag}`, token: `token-${tag}` };
+      },
+      createAnonymousUser: async () => {
+        calls.anonymous += 1;
+        return anonymous;
+      },
+      seedStaff: async (userId: string) => { calls.staff.push(userId); },
+    },
+  };
+}
+
+describe('each section provisions only what it needs', () => {
+  it('billing creates one user, never touches staff_members, never asks for anonymous auth', async () => {
+    const { calls, deps } = spyDeps();
+    const created = await provisionFixtures(fixturePlan(['billing']), deps);
+
+    expect(calls.users).toEqual(['a']);
+    expect(calls.staff).toEqual([]);
+    expect(calls.anonymous).toBe(0);
+    expect(created.staffSeeded).toBe(false);
+    expect(created.anonymous).toBeNull();
+  });
+
+  it('progress creates both customers and an anonymous session, and seeds no staff', async () => {
+    /* The anonymous session is not incidental here: "an anonymous session
+       cannot write cloud progress" is one of the things being verified. */
+    const { calls, deps } = spyDeps();
+    const created = await provisionFixtures(fixturePlan(['progress']), deps);
+
+    expect(calls.users).toEqual(['a', 'b']);
+    expect(calls.anonymous).toBe(1);
+    expect(calls.staff).toEqual([]);
+    expect(created.staffSeeded).toBe(false);
+  });
+
+  it('support creates both customers and staff, and never asks for anonymous auth', async () => {
+    const { calls, deps } = spyDeps();
+    const created = await provisionFixtures(fixturePlan(['support']), deps);
+
+    expect(calls.users).toEqual(['a', 'b', 'staff']);
+    expect(calls.staff).toEqual(['user-staff']);
+    expect(calls.anonymous).toBe(0);
+    expect(created.staffSeeded).toBe(true);
+  });
+
+  it('a full run shares users rather than provisioning them per section', async () => {
+    const { calls, deps } = spyDeps();
+    await provisionFixtures(fixturePlan(SECTIONS), deps);
+
+    /* Sharing is safe: the rows each section writes for a given user do not
+       overlap, and one deletion removes all of them. */
+    expect(calls.users).toEqual(['a', 'b', 'staff']);
+    expect(calls.anonymous).toBe(1);
+    expect(calls.staff).toEqual(['user-staff']);
+  });
+
+  it('refuses a section it does not know rather than provisioning nothing', () => {
+    expect(() => fixturePlan(['nonsense'])).toThrow(/Unknown section/);
+  });
+
+  it('records an unavailable anonymous session rather than throwing', async () => {
+    /* The progress check then fails, which is correct - silence would read as a
+       pass for the boundary that most needs an answer. */
+    const { deps } = spyDeps(null);
+    const created = await provisionFixtures(fixturePlan(['progress']), deps);
+    expect(created.anonymous).toBeNull();
+  });
+});
+
+describe('a full run still covers everything', () => {
+  it('executes all 24 checks across the three sections', () => {
+    const noop = async () => ({ response: { status: 200 }, body: '[]' });
+    const anyCaller = caller('x', 'pk', 'token');
+    const counts = {
+      billing: billingChecks({
+        rpc: noop, payloadFor: () => ({}), service: anyCaller, anon: anyCaller, user: anyCaller,
+      }).length,
+      progress: watchProgressChecks({
+        rest: noop, userA: anyCaller, userB: anyCaller, anonymous: anyCaller, progressRow: row,
+      }).length,
+      support: supportChecks({
+        rest: noop, userA: anyCaller, userB: anyCaller, staff: anyCaller, state: {},
+      }).length,
+    };
+
+    expect(counts).toEqual({ billing: 3, progress: 11, support: 10 });
+    expect(counts.billing + counts.progress + counts.support).toBe(24);
+    /* And every section named by the CLI has a fixture plan, so none can be
+       requested without one. */
+    expect(Object.keys(SECTION_FIXTURES).sort()).toEqual(['billing', 'progress', 'support']);
+    expect(SECTIONS.sort()).toEqual(['billing', 'progress', 'support']);
+  });
+});
+
+describe('cleanup removes what exists and nothing else', () => {
+  it('removes only the one user a billing-only run created', async () => {
+    const deleted: string[] = [];
+    const created = await provisionFixtures(fixturePlan(['billing']), spyDeps().deps);
+    created.billingEventId = 'evt_x';
+
+    await cleanupFixtures(created, {
+      deleteUser: async (id: string) => { deleted.push(id); },
+      deleteBillingEvent: async (id: string) => { deleted.push(id); },
+    });
+    expect(deleted).toEqual(['user-a', 'evt_x']);
+  });
+
+  it('does not try to delete an anonymous user that was never created', async () => {
+    const deleted: string[] = [];
+    const created = await provisionFixtures(fixturePlan(['support']), spyDeps().deps);
+
+    await cleanupFixtures(created, { deleteUser: async (id: string) => { deleted.push(id); } });
+    expect(deleted).toEqual(['user-a', 'user-b', 'user-staff']);
+  });
+
+  it('does not delete a billing event when the billing section never ran', async () => {
+    let billingDeletes = 0;
+    const created = await provisionFixtures(fixturePlan(['progress']), spyDeps().deps);
+
+    await cleanupFixtures(created, {
+      deleteUser: async () => {},
+      deleteBillingEvent: async () => { billingDeletes += 1; },
+    });
+    expect(billingDeletes).toBe(0);
+  });
+
+  it('keeps going when one deletion fails, so a cleanup problem is not a red run', async () => {
+    const deleted: string[] = [];
+    const created = await provisionFixtures(fixturePlan(SECTIONS), spyDeps().deps);
+
+    await expect(cleanupFixtures(created, {
+      deleteUser: async (id: string) => {
+        if (id === 'user-b') throw new Error('gone already');
+        deleted.push(id);
+      },
+    })).resolves.toBeDefined();
+    expect(deleted).toEqual(['user-a', 'user-staff', 'anon']);
+  });
+
+  it('copes with a fixture set that provisioned nothing at all', async () => {
+    /* The shape cleanup sees when provisioning threw on its first call. */
+    await expect(cleanupFixtures({ users: {}, anonymous: null }, { deleteUser: async () => {} }))
+      .resolves.toEqual([]);
+  });
+});
+
+describe('the runner honours the plan', () => {
+  it('provisions from the requested sections, not from a fixed list', () => {
+    expect(runner).toContain('const plan = fixturePlan(requested)');
+    expect(runner).toContain('provisionFixtures(plan, {');
+    /* The defect: three unconditional creations before section selection. */
+    expect(runner).not.toMatch(/await createProtectedUser\('b'\)/);
+    expect(runner).not.toMatch(/await createProtectedUser\('staff'\)/);
+    expect(runner).not.toMatch(/staff_members.*\n?.*insert\(\{ user_id: staffUser\.id/);
+  });
+
+  it('seeds staff only through the provisioner', () => {
+    const seeds = [...runner.matchAll(/from\('staff_members'\)/g)];
+    expect(seeds).toHaveLength(1);
+    expect(runner.slice(runner.indexOf("seedStaff: async"), runner.indexOf('provisionFixtures(plan') + 1200))
+      .toContain('staff_members');
+  });
+
+  it('cleans up through the same accounting, in a finally', () => {
+    expect(runner).toContain('} finally {');
+    expect(runner.slice(runner.indexOf('} finally {'))).toContain('cleanupFixtures(fixtures, {');
+  });
+
+  it('describes only the fixtures the requested sections need in its dry run', () => {
+    expect(runner).toContain('NOT touch staff_members');
+    expect(runner).toContain('NOT request an anonymous session');
   });
 });

@@ -320,9 +320,24 @@ node scripts/verify-supabase-permissions.mjs --execute
 node scripts/verify-supabase-permissions.mjs --execute --only support
 ```
 
-**Test-mode project only.** A run creates three throwaway auth users (two
-customers and a staff fixture), writes only rows those users own, and deletes
-the users in a `finally` - which cascades every row it created. It never grants
+**Sections are isolated.** Each provisions only what it needs, so
+`--only billing` runs on a project where the support migration has not been
+applied yet:
+
+| Section | Users | Anonymous session | `staff_members` |
+| --- | --- | --- | --- |
+| `billing` | A | no | untouched |
+| `progress` | A, B | yes - anonymous write rejection is part of what it verifies | untouched |
+| `support` | A, B, staff | no | seeded by the service role |
+
+A full run shares A and B across sections rather than provisioning them per
+section; the rows each section writes for a given user do not overlap, and one
+deletion removes all of them, so coverage is unchanged.
+
+**Test-mode project only.** A run creates only the throwaway auth users its
+sections need, writes only rows those users own, and deletes them in a
+`finally` - which cascades every row it created. Cleanup removes what was
+actually created, so a section that never ran leaves nothing behind. It never grants
 Premium: the billing section applies the `free` tier throughout. Credentials
 come from the environment only; nothing is written to a file, and the run
 refuses to start if a variable is missing or if the service-role and

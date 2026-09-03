@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import readme from '../README.md?raw';
 import deployFunctions from '../.github/workflows/deploy-supabase-functions.yml?raw';
 import applyMigrations from '../.github/workflows/apply-supabase-migrations.yml?raw';
-import smokeTest from '../scripts/verify-billing-permissions.mjs?raw';
+/*
+ * The billing smoke test grew into one verifier covering every database
+ * boundary on main - billing, watch progress and support. These assertions
+ * followed it there rather than being retired: each one still guards the same
+ * property, now for three sections instead of one.
+ */
+import smokeTest from '../scripts/verify-supabase-permissions.mjs?raw';
+import checks from '../scripts/lib/permission-checks.mjs?raw';
 import { SUBSCRIPTION_EVENTS } from '../supabase/functions/_shared/billing';
 
 /*
@@ -63,11 +70,11 @@ describe('migrations are applied deliberately', () => {
   });
 });
 
-describe('the permission smoke test asks the real project', () => {
-  it('covers all three required questions', () => {
-    expect(smokeTest).toContain('service-role can execute apply_billing_provider_state');
-    expect(smokeTest).toContain('publishable key signed out is refused');
-    expect(smokeTest).toContain('publishable key signed in as an ordinary user is refused');
+describe('the permission verifier asks the real project', () => {
+  it('covers all three required billing questions', () => {
+    expect(checks).toContain('service-role can execute apply_billing_provider_state');
+    expect(checks).toContain('publishable key signed out cannot execute it');
+    expect(checks).toContain('ordinary authenticated user cannot execute it');
   });
 
   it('fails the run when any check fails', () => {
@@ -76,9 +83,11 @@ describe('the permission smoke test asks the real project', () => {
 
   it('takes every credential from the environment and writes none to disk', () => {
     expect(smokeTest).toContain('process.env.SUPABASE_SERVICE_ROLE_KEY');
-    expect(smokeTest).not.toMatch(/writeFile|appendFile|createWriteStream/);
-    /* A real key must never be committed alongside the test that uses it. */
-    expect(smokeTest).not.toMatch(/\b(eyJ[A-Za-z0-9_-]{20,}|sb_secret_\S+|sk_(live|test)_\S+)/);
+    for (const source of [smokeTest, checks]) {
+      expect(source).not.toMatch(/writeFile|appendFile|createWriteStream/);
+      /* A real key must never be committed alongside the test that uses it. */
+      expect(source).not.toMatch(/\b(eyJ[A-Za-z0-9_-]{20,}|sb_secret_\S+|sk_(live|test)_\S+)/);
+    }
   });
 
   it('cannot be satisfied without a real project', () => {
@@ -90,6 +99,20 @@ describe('the permission smoke test asks the real project', () => {
   it('grants no premium while proving the write path', () => {
     expect(smokeTest).toContain("p_tier: 'free'");
     expect(smokeTest).not.toMatch(/p_tier:\s*'premium'/);
+  });
+
+  it('will not mutate a project unless asked', () => {
+    /* A run that creates users and writes rows should be arrived at
+       deliberately, not by default. */
+    expect(smokeTest).toContain("const execute = args.includes('--execute')");
+    expect(smokeTest).toMatch(/if \(!execute\) \{[\s\S]*?Dry run/);
+    expect(smokeTest).toMatch(/Re-run with --execute/);
+  });
+
+  it('removes its fixtures even when a check throws', () => {
+    const cleanup = smokeTest.slice(smokeTest.indexOf('} finally {'));
+    expect(cleanup).toContain('admin.auth.admin.deleteUser');
+    expect(smokeTest.indexOf('} finally {')).toBeGreaterThan(smokeTest.indexOf('const created = []'));
   });
 });
 

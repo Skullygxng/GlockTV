@@ -54,10 +54,56 @@ create table if not exists public.watch_progress (
   poster_path text,
   backdrop_path text,
 
+  /*
+   * Cloud recency, and the only timestamp anything is allowed to trust.
+   *
+   * Set by the database on every insert and update - see the trigger below -
+   * and deliberately not grantable to the browser, so a device with a wrong or
+   * hostile clock cannot establish a future cloud state that then wins every
+   * comparison forever. The column default alone would not be enough: it
+   * applies only when the value is omitted, and a modified client posting
+   * straight to PostgREST would simply name it.
+   */
   updated_at timestamptz not null default now(),
+
+  /*
+   * When the browser says it observed this position. Untrusted by
+   * construction: it is a client clock, it is never compared against a cloud
+   * timestamp to decide a winner, and nothing breaks if it is absurd. Kept
+   * because "recorded at 9am, uploaded at 5pm" is worth being able to see when
+   * a resume point looks wrong.
+   */
+  observed_at timestamptz,
 
   primary key (user_id, media_type, media_id, season_number, episode_number)
 );
+
+/*
+ * The database decides when a row was last written, not the writer.
+ *
+ * This is what makes updated_at authoritative rather than merely
+ * conventional. A client that omits it gets now() from the default; a client
+ * that sends one - including one posting directly to PostgREST with a forged
+ * future value - has it overwritten here before the row is stored. The column
+ * grants below also withhold updated_at, so such a request is refused before
+ * it arrives; the trigger is the guarantee that holds even if a future grant
+ * is written more loosely.
+ */
+create or replace function public.stamp_watch_progress_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists watch_progress_stamp_updated_at on public.watch_progress;
+create trigger watch_progress_stamp_updated_at
+before insert or update on public.watch_progress
+for each row execute function public.stamp_watch_progress_updated_at();
 
 -- The Continue Watching read is "my unfinished rows, newest first". The primary
 -- key already leads with user_id but says nothing about recency, so the sort
@@ -68,9 +114,21 @@ create index if not exists watch_progress_user_recent_idx
 alter table public.watch_progress enable row level security;
 
 revoke all on public.watch_progress from public, anon, authenticated;
--- Delete is deliberate: removing something from Continue Watching is the
--- viewer's own decision about their own history, not an administrative act.
-grant select, insert, update, delete on public.watch_progress to authenticated;
+
+-- Column-level, so updated_at is not merely omitted by today's client but
+-- absent from what a browser is permitted to name at all. Delete is deliberate:
+-- removing something from Continue Watching is the viewer's own decision about
+-- their own history, not an administrative act.
+grant select, delete on public.watch_progress to authenticated;
+grant insert (
+  user_id, media_type, media_id, season_number, episode_number,
+  position_seconds, duration_seconds, completed, provider_id,
+  title, poster_path, backdrop_path, observed_at
+) on public.watch_progress to authenticated;
+grant update (
+  position_seconds, duration_seconds, completed, provider_id,
+  title, poster_path, backdrop_path, observed_at
+) on public.watch_progress to authenticated;
 
 drop policy if exists "Viewers read their own progress" on public.watch_progress;
 create policy "Viewers read their own progress"
@@ -79,16 +137,36 @@ using (user_id = (select auth.uid()));
 
 -- with check on insert, and both using and with check on update, so a row can
 -- neither be created for somebody else nor be moved to them afterwards.
+/*
+ * Cloud progress is for a protected account. An anonymous session gets the
+ * device-local layer and nothing here.
+ *
+ * Enforced at this boundary and not only in the client, because a guest's
+ * session holds the same publishable key everybody else does and could post
+ * directly. The identity itself is unchanged by protecting an account -
+ * Supabase keeps the same uid when an email is attached - so a guest's local
+ * history becomes eligible for sync under the very same user_id, with nothing
+ * migrated and nothing deleted.
+ */
 drop policy if exists "Viewers record their own progress" on public.watch_progress;
 create policy "Viewers record their own progress"
 on public.watch_progress for insert to authenticated
-with check (user_id = (select auth.uid()));
+with check (
+  user_id = (select auth.uid())
+  and coalesce((select auth.jwt() ->> 'is_anonymous')::boolean, false) = false
+);
 
 drop policy if exists "Viewers update their own progress" on public.watch_progress;
 create policy "Viewers update their own progress"
 on public.watch_progress for update to authenticated
-using (user_id = (select auth.uid()))
-with check (user_id = (select auth.uid()));
+using (
+  user_id = (select auth.uid())
+  and coalesce((select auth.jwt() ->> 'is_anonymous')::boolean, false) = false
+)
+with check (
+  user_id = (select auth.uid())
+  and coalesce((select auth.jwt() ->> 'is_anonymous')::boolean, false) = false
+);
 
 drop policy if exists "Viewers forget their own progress" on public.watch_progress;
 create policy "Viewers forget their own progress"

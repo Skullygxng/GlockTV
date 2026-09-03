@@ -45,6 +45,7 @@ interface ProgressRow {
   poster_path?: unknown;
   backdrop_path?: unknown;
   updated_at?: unknown;
+  observed_at?: unknown;
 }
 
 /*
@@ -66,7 +67,10 @@ export function rowToEntry(row: ProgressRow | null | undefined): ProgressEntry |
     title: row.title,
     posterPath: row.poster_path,
     backdropPath: row.backdrop_path,
+    /* Database time. The column is trigger-stamped and not in the browser's
+       column grants, so this is the one recency value worth trusting. */
     updatedAt: row.updated_at,
+    observedAt: row.observed_at,
   });
 }
 
@@ -85,21 +89,42 @@ export function entryToRow(entry: ProgressEntry, userId: string) {
     poster_path: entry.posterPath ?? null,
     backdrop_path: entry.backdropPath ?? null,
     /*
-     * The client's stamp, not the column default, because reconciliation
-     * compares this against a local stamp and both sides have to describe the
-     * same moment. A wrong browser clock is handled where the comparison
-     * happens - reconcileProgress refuses to let a future stamp win - rather
-     * than by pretending the write time is the observation time.
+     * updated_at is deliberately absent.
+     *
+     * It is what reconciliation treats as authoritative cloud recency, so the
+     * browser must not be the one to say it. The database stamps it on every
+     * insert and update, and the browser's column grants do not include it, so
+     * a modified client posting straight to PostgREST cannot supply one either.
+     * Omitting it here is the least important half of that; the database is
+     * what enforces it.
+     *
+     * The browser's own idea of when it saw this goes to observed_at, which
+     * nothing trusts and nothing compares.
      */
-    updated_at: entry.updatedAt,
+    observed_at: entry.observedAt ?? entry.updatedAt,
   };
 }
 
 export function createWatchProgressService(client: SupabaseClient): WatchProgressService {
-  /* The caller's own id, or null. Never creates one. */
+  /*
+   * The caller's own id, but only once they have an account worth syncing to.
+   *
+   * Never creates one, and never returns one for an anonymous session. Cloud
+   * progress is a protected account's benefit: an anonymous identity lives in
+   * this browser's storage, so syncing it across devices is a promise nothing
+   * can keep, and it would put rows in the database for visitors who never
+   * asked for an account. Guests keep the device-local layer, which is the
+   * whole point of that layer existing.
+   *
+   * The RLS policies refuse an anonymous writer as well. This check is here so
+   * the app does not make requests it knows will be rejected; it is not what
+   * makes the boundary true.
+   */
   async function currentUserId(): Promise<string | null> {
     const { data } = await client.auth.getSession();
-    return data.session?.user?.id ?? null;
+    const user = data.session?.user as { id?: string; is_anonymous?: boolean } | undefined;
+    if (!user?.id || user.is_anonymous === true) return null;
+    return user.id;
   }
 
   return {
@@ -157,6 +182,8 @@ export function createWatchProgressService(client: SupabaseClient): WatchProgres
 
     async remove(identity) {
       try {
+        /* Anonymous callers get no cloud delete either - there is nothing of
+           theirs up there to delete, and the policy would refuse it. */
         if (!(await currentUserId())) return false;
         const { error } = await client
           .from(TABLE)

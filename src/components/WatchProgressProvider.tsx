@@ -106,7 +106,26 @@ export function WatchProgressProvider({
   children: ReactNode;
 }) {
   const service = providedService === undefined ? getDefaultService() : providedService;
-  const { account } = useAccount();
+  const { account, ready: accountReady } = useAccount();
+
+  /*
+   * Whether this visitor's progress belongs in the cloud at all.
+   *
+   * Guests - including a guest holding an anonymous Supabase session, which is
+   * how the watch party mints an identity - keep the device-local layer and
+   * nothing more. An anonymous identity lives in this browser's storage, so
+   * "across your devices" is a promise nothing could keep for it.
+   *
+   * This is a request-avoidance check, not the boundary. The RLS policies
+   * refuse an anonymous writer, so a modified client that ignores this gets the
+   * same answer from the database.
+   *
+   * It flips to true the moment a guest protects their account, and because
+   * Supabase keeps the same uid when an email is attached, that costs nothing:
+   * the local rows this device already holds sync up under the identity they
+   * were always keyed to. Nothing is migrated and nothing is deleted.
+   */
+  const cloudEligible = Boolean(service) && accountReady && account !== null && !account.isAnonymous;
 
   const [entries, setEntries] = useState<ProgressEntry[]>(() => localProgressEntries());
   const [ready, setReady] = useState(false);
@@ -155,9 +174,20 @@ export function WatchProgressProvider({
     const request = ++version.current;
     const local = localProgressEntries();
 
-    if (!service) {
+    /*
+     * Local-only: the unconfigured build, and every guest.
+     *
+     * The outbox is dropped rather than left to accumulate writes that would be
+     * refused - but only once the account layer has actually answered. Before
+     * that this is "we do not know yet", and discarding a position recorded in
+     * that window would lose a real write for an ordinary signed-in viewer who
+     * pressed play during start-up.
+     */
+    if (!service || !cloudEligible) {
+      if (!service || accountReady) pending.current.clear();
       if (request === version.current) {
         setEntries(local);
+        setError('');
         setReady(true);
       }
       return;
@@ -183,10 +213,14 @@ export function WatchProgressProvider({
     setError(listError);
     setReady(true);
     await sendPending();
-  }, [service, sendPending]);
+  }, [service, cloudEligible, accountReady, sendPending]);
 
-  /* Re-syncs when the session changes, so signing in merges this device's
-     history into the account and signing out stops writing to it. */
+  /*
+   * Re-syncs whenever eligibility or identity changes. Protecting a guest
+   * account flips cloudEligible, which is what carries a session's worth of
+   * local watching up to an account that has only just started existing in the
+   * cloud sense - under the same uid it already had.
+   */
   useEffect(() => {
     void sync();
   }, [sync, account?.id]);
@@ -230,14 +264,15 @@ export function WatchProgressProvider({
       return next;
     });
 
-    if (!service) return;
+    /* Recorded locally above regardless. Only the cloud half is gated. */
+    if (!service || !cloudEligible) return;
     pending.current.set(key, entry);
     if (input.flush) {
       void sendPending();
       return;
     }
     scheduleSend();
-  }, [service, sendPending, scheduleSend]);
+  }, [service, cloudEligible, sendPending, scheduleSend]);
 
   const forgetProgress = useCallback(async (
     identity: Pick<ProgressEntry, 'mediaType' | 'mediaId' | 'seasonNumber' | 'episodeNumber'>,
@@ -251,8 +286,10 @@ export function WatchProgressProvider({
       identity.episodeNumber,
     );
     setEntries((current) => current.filter((candidate) => entryKey(candidate) !== key));
-    await service?.remove(identity);
-  }, [service]);
+    /* The local delete above already happened, so a guest forgetting a title
+       still forgets it. There is simply no cloud row to remove as well. */
+    if (cloudEligible) await service?.remove(identity);
+  }, [service, cloudEligible]);
 
   /*
    * A closing tab is the most likely moment for the newest position to be the

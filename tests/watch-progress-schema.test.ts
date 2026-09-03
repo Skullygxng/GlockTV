@@ -9,7 +9,14 @@ import entitlementsMigration from '../supabase/migrations/20260901000000_account
  * would find every word it promises not to use, and would pass just as happily
  * if the comment were deleted and the thing itself added.
  */
-const statements = migration.replace(/^\s*--.*$/gm, '');
+const statements = migration.replace(/^\s*--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+
+/* Grants span several lines now that they name columns, so they are split on
+   the statement terminator rather than by line. */
+const grantStatements = statements
+  .split(';')
+  .map((chunk) => chunk.trim())
+  .filter((chunk) => chunk.startsWith('grant ') && chunk.includes('public.watch_progress'));
 
 /*
  * Source-level assertions about the progress table.
@@ -29,23 +36,22 @@ describe('progress is per viewer and enforced by the database', () => {
   it('takes the default grants away before handing any back', () => {
     /* Revoke first, then grant exactly what is needed: the same order the
        entitlements table established, so one table cannot drift from the other. */
-    const revokeAt = migration.indexOf('revoke all on public.watch_progress');
-    const grantAt = migration.indexOf('grant select, insert, update, delete on public.watch_progress');
+    const revokeAt = statements.indexOf('revoke all on public.watch_progress');
+    const grantAt = statements.indexOf('grant select, delete on public.watch_progress');
     expect(revokeAt).toBeGreaterThan(-1);
     expect(grantAt).toBeGreaterThan(revokeAt);
-    expect(migration).toMatch(/revoke all on public\.watch_progress from public, anon, authenticated/);
+    expect(statements).toMatch(/revoke all on public\.watch_progress from public, anon, authenticated/);
   });
 
   it('gives the browser role nothing at all', () => {
     /* anon appears only in the revoke. A signed-out visitor keeps progress on
        the device; there is no row for them to reach. */
-    const grants = statements.split('\n').filter((line) => line.trim().startsWith('grant '));
-    expect(grants.length).toBeGreaterThan(0);
-    for (const grant of grants) {
+    expect(grantStatements.length).toBeGreaterThan(0);
+    for (const grant of grantStatements) {
       /* The grantee only: "public.watch_progress" is the table's schema, not a
          role, and matching the whole statement would fail on every grant. */
-      const grantee = grant.slice(grant.lastIndexOf(' to ') + 4);
-      expect(grantee).toMatch(/^authenticated\s*;?\s*$/);
+      const grantee = grant.slice(grant.lastIndexOf(' to ') + 4).trim();
+      expect(grantee).toBe('authenticated');
     }
   });
 
@@ -55,17 +61,38 @@ describe('progress is per viewer and enforced by the database', () => {
 
     for (const policy of policies) {
       expect(policy).toMatch(/user_id = \(select auth\.uid\(\)\)/);
-      /* An update needs both: using decides which rows may be touched, with
-         check decides what they may become. Without the second, a row could be
-         handed to another user_id on the way out. */
+      /*
+       * An update needs both: using decides which rows may be touched, with
+       * check decides what they may become. Without the second, a row could be
+       * handed to another user_id on the way out. Each clause is checked for
+       * the ownership condition rather than for an exact string, since both
+       * now carry the anonymous guard alongside it.
+       */
       if (/for update/.test(policy)) {
-        expect(policy).toMatch(/using \(user_id = \(select auth\.uid\(\)\)\)/);
-        expect(policy).toMatch(/with check \(user_id = \(select auth\.uid\(\)\)\)/);
+        const usingClause = policy.slice(policy.indexOf('using ('), policy.indexOf('with check ('));
+        const checkClause = policy.slice(policy.indexOf('with check ('));
+        expect(usingClause).toMatch(/user_id = \(select auth\.uid\(\)\)/);
+        expect(checkClause).toMatch(/user_id = \(select auth\.uid\(\)\)/);
       }
       if (/for insert/.test(policy)) {
-        expect(policy).toMatch(/with check \(user_id = \(select auth\.uid\(\)\)\)/);
+        expect(policy.slice(policy.indexOf('with check ('))).toMatch(/user_id = \(select auth\.uid\(\)\)/);
       }
     }
+  });
+
+  it('withholds the authoritative timestamp from every write grant', () => {
+    /*
+     * updated_at is what reconciliation trusts as database time. A browser that
+     * can name it can forge cloud recency, so it is absent from the column
+     * lists - and the trigger stamps it regardless of how the row arrives.
+     */
+    const writeGrants = grantStatements.filter((grant) => /^grant (insert|update) \(/.test(grant));
+    expect(writeGrants).toHaveLength(2);
+    for (const grant of writeGrants) {
+      expect(grant).not.toMatch(/\bupdated_at\b/);
+    }
+    expect(statements).toMatch(/new\.updated_at := now\(\)/);
+    expect(statements).toMatch(/before insert or update on public\.watch_progress/);
   });
 
   it('covers all four verbs it grants', () => {
@@ -75,9 +102,10 @@ describe('progress is per viewer and enforced by the database', () => {
   });
 
   it('is re-runnable', () => {
-    expect(migration).toContain('create table if not exists public.watch_progress');
-    expect(migration).toContain('create index if not exists watch_progress_user_recent_idx');
-    expect((migration.match(/drop policy if exists/g) ?? [])).toHaveLength(4);
+    expect(statements).toContain('create table if not exists public.watch_progress');
+    expect(statements).toContain('create index if not exists watch_progress_user_recent_idx');
+    expect((statements.match(/drop policy if exists/g) ?? [])).toHaveLength(4);
+    expect((statements.match(/drop trigger if exists/g) ?? [])).toHaveLength(1);
   });
 });
 

@@ -6,6 +6,21 @@ import type { MediaItem } from '../src/lib/media';
 import { PLAYBACK_PROGRESS_KEY } from '../src/lib/playbackProgress';
 import { entryKey, type ProgressEntry } from '../src/lib/watchProgress';
 import type { WatchProgressService } from '../src/lib/watchProgressService';
+import type { AccountService } from '../src/lib/accountService';
+import { FREE_ENTITLEMENTS } from '../src/lib/account';
+
+/*
+ * Cloud entries belong to a protected account. Anonymous sessions and guests
+ * are local-only, so a test that seeds cloud rows has to sign somebody in for
+ * the scenario to be the one it is describing.
+ */
+const protectedAccountService: AccountService = {
+  loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null }),
+  loadEntitlements: async () => ({ entitlements: FREE_ENTITLEMENTS, error: '' }),
+  linkEmail: async () => {},
+  sendSignInLink: async () => {},
+  onAuthChange: () => () => {},
+};
 
 /*
  * Continue Watching as a viewer meets it.
@@ -77,7 +92,7 @@ beforeEach(() => window.localStorage.clear());
 describe('the Continue Watching surface', () => {
   it('lives inside My List rather than taking a sixth tab', async () => {
     const { service } = serviceWith([entry()]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await screen.findByRole('button', { name: 'Mobile My List' });
     const nav = screen.getByRole('navigation', { name: 'Mobile navigation' });
@@ -89,7 +104,7 @@ describe('the Continue Watching surface', () => {
 
   it('shows what is in progress, with where it got to', async () => {
     const { service } = serviceWith([entry()]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
 
@@ -101,7 +116,7 @@ describe('the Continue Watching surface', () => {
 
   it('offers to resume rather than to start', async () => {
     const { service } = serviceWith([entry()]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     expect(await screen.findByRole('button', { name: /Resume movie/ })).toBeInTheDocument();
@@ -111,7 +126,7 @@ describe('the Continue Watching surface', () => {
     /* The honest case: position without duration. A bar would need an invented
        denominator and would lie about how much is left. */
     const { service } = serviceWith([entry({ durationSeconds: undefined })]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     expect(await screen.findByText(/1:00:00 in/)).toBeInTheDocument();
@@ -120,7 +135,7 @@ describe('the Continue Watching surface', () => {
 
   it('keeps a finished title out of the way', async () => {
     const { service } = serviceWith([entry({ positionSeconds: 7100, completed: true })]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     expect(await screen.findByText('Nothing in progress')).toBeInTheDocument();
@@ -128,7 +143,7 @@ describe('the Continue Watching surface', () => {
 
   it('says what the surface needs rather than looking broken when empty', async () => {
     const { service } = serviceWith([]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     expect(await screen.findByText(/once a player reports where you got to/)).toBeInTheDocument();
@@ -136,7 +151,7 @@ describe('the Continue Watching surface', () => {
 
   it('leaves My List exactly as it was', async () => {
     const { service } = serviceWith([entry()]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Mobile My List' }));
     /* The saved tab is still the one you land on, and it is still empty until
@@ -147,7 +162,7 @@ describe('the Continue Watching surface', () => {
 
   it('forgets a title when asked, here and in the cloud', async () => {
     const { service, removes } = serviceWith([entry()]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     fireEvent.click(await screen.findByRole('button', { name: 'Remove' }));
@@ -168,7 +183,7 @@ describe('resuming the right thing', () => {
       mediaType: 'tv', mediaId: 1396, seasonNumber: 1, episodeNumber: 3,
       positionSeconds: 900, durationSeconds: 2880, title: 'Breaking Bad',
     })]);
-    render(<App client={clientFor([series]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([series]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     fireEvent.click(await screen.findByRole('button', { name: /Resume episode/ }));
@@ -182,7 +197,7 @@ describe('resuming the right thing', () => {
       mediaType: 'tv', mediaId: 1396, seasonNumber: 2, episodeNumber: 5,
       positionSeconds: 600, durationSeconds: 2880, title: 'Breaking Bad',
     })]);
-    render(<App client={clientFor([series]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([series]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     expect(await screen.findByText(/S2 \/ E5/)).toBeInTheDocument();
@@ -192,7 +207,7 @@ describe('resuming the right thing', () => {
     /* The cross-device case: the feed knows nothing about this id, so the tile
        is drawn entirely from what another device recorded. */
     const { service } = serviceWith([entry({ mediaId: 99999, title: 'Recorded Elsewhere' })]);
-    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} />);
+    render(<App client={clientFor([movie]) as never} playbackConfig={config} watchProgressService={service} accountService={protectedAccountService} />);
 
     await openContinueWatching();
     expect(await screen.findByRole('heading', { name: 'Recorded Elsewhere' })).toBeInTheDocument();

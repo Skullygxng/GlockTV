@@ -31,7 +31,22 @@ export interface ProgressEntry {
   title: string;
   posterPath?: string | null;
   backdropPath?: string | null;
+  /*
+   * Recency, and which clock it came from depends on which side this is.
+   *
+   * On a local entry it is the browser's clock, which is user-controlled and
+   * routinely wrong. On a cloud entry it is the database's: the column is
+   * stamped by a trigger and withheld from the browser's column grants, so a
+   * client cannot put a value here however it posts. reconcileProgress relies
+   * on exactly that asymmetry, which is why it is stated here rather than left
+   * to be inferred.
+   */
   updatedAt: string;
+  /*
+   * When the browser believes it observed this. Never used to decide a winner -
+   * it is a client clock on both sides, so it can prove nothing about order.
+   */
+  observedAt?: string;
 }
 
 export type ProgressKey = string;
@@ -216,17 +231,30 @@ export function sanitizeProgressEntry(raw: unknown): ProgressEntry | null {
     posterPath: typeof value.posterPath === 'string' ? value.posterPath : null,
     backdropPath: typeof value.backdropPath === 'string' ? value.backdropPath : null,
     updatedAt: isoOrEpoch(value.updatedAt),
+    observedAt: typeof value.observedAt === 'string' && Number.isFinite(Date.parse(value.observedAt))
+      ? new Date(Date.parse(value.observedAt)).toISOString()
+      : undefined,
   };
 }
 
 /*
  * Which of two records for the same title is the truth.
  *
- * Newest wins, with one asymmetry that matters: `cloud.updatedAt` came from the
- * database's clock and `local.updatedAt` came from the browser's. So a local
- * stamp from the future is not newer, it is wrong, and a tie goes to the cloud.
- * That way a device whose clock is a day ahead cannot pin stale progress in
- * place across every other device.
+ * Newest wins, with one asymmetry that the whole design rests on:
+ * `cloud.updatedAt` is the database's clock and `local.updatedAt` is the
+ * browser's. So a local stamp from the future is not newer, it is wrong, and a
+ * tie goes to the cloud.
+ *
+ * That asymmetry is only real because the cloud side cannot be written by a
+ * browser: watch_progress.updated_at is stamped by a trigger and withheld from
+ * the browser's column grants. Before that, this function trusted a value a
+ * modified client could have posted itself - a wrong local clock could be
+ * uploaded once and then win here forever, wearing the database's authority.
+ * If either of those database guarantees is ever removed, this comparison
+ * becomes ordinary last-writer-wins between two untrusted clocks.
+ *
+ * observedAt takes no part: it is a client clock on both sides and can prove
+ * nothing about order.
  *
  * Duration is merged rather than taken wholesale: a provider that reported a
  * length once and not the next time should not erase the progress bar.

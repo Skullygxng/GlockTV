@@ -47,18 +47,51 @@ nor writes it.
 
 | Layer | Who gets it | Where it lives |
 | --- | --- | --- |
-| Local | everybody, including guests with no account | `localStorage`, this device only |
-| Cloud | any account with a Supabase session | `watch_progress`, across devices |
+| Local | everybody, including guests and anonymous sessions | `localStorage`, this device only |
+| Cloud | **protected accounts only** | `watch_progress`, across devices |
 
 Nothing here signs anybody in. Pressing play never mints an account, so a
 visitor who has not signed in keeps their progress on the device and nowhere
 else - the same rule the account layer already follows.
 
+**An anonymous Supabase session is still a guest.** The watch party mints one
+the moment somebody opens a room, so "has a session" is not the same question
+as "has an account": an anonymous identity lives in this browser's storage, and
+syncing it across devices is a promise nothing could keep. Guests keep the
+local layer, which is why that layer exists.
+
+That boundary is enforced by RLS, not only by the client - the insert and
+update policies refuse a token whose `is_anonymous` claim is true, so a
+modified client posting straight to PostgREST with the same publishable key
+every visitor holds gets the same answer. The client check exists to avoid
+making requests it knows will be rejected.
+
+Protecting a guest account costs nothing and migrates nothing: Supabase keeps
+the same uid when an email is attached, so the rows this device already holds
+become eligible under the identity they were always keyed to. Nothing is
+deleted, and the uid Friends depends on is unchanged.
+
+### Which clock decides
+
 Both layers are read through one sanitizer and merged by one function. The
-newer record wins, with one asymmetry: the cloud's timestamp is the database's
-clock and the local one is the browser's, so a local stamp from the future does
-not win and an exact tie goes to the cloud. Without that, one device with a
-wrong clock would freeze a title in place across every other device.
+newer record wins, with one asymmetry the whole design rests on: the cloud's
+timestamp is the **database's** clock and the local one is the **browser's**,
+so a local stamp from the future does not win and an exact tie goes to the
+cloud. Without that, one device with a wrong clock would freeze a title in
+place across every other device.
+
+That asymmetry is only real because the cloud side cannot be written by a
+browser. `watch_progress.updated_at` is:
+
+- **stamped by a trigger** on every insert and update, so a value that arrives
+  in the payload is overwritten rather than stored; and
+- **absent from the browser's column grants**, so such a request is refused
+  before it gets that far.
+
+The column default alone would not be enough - it applies only when the value
+is omitted, and a modified client would simply name it. The browser's own idea
+of when it saw a position goes to `observed_at`, which nothing trusts and
+nothing compares.
 
 ### What the providers actually expose
 

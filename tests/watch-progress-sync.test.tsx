@@ -93,6 +93,7 @@ describe('the network is not asked on every frame', () => {
     const { service, saves } = cloudService();
     mount(service);
     await waitFor(() => expect(latest.ready).toBe(true));
+    await act(async () => { await latest.refresh(); });
     saves.length = 0;
 
     /* A player emits several of these a second. */
@@ -125,6 +126,7 @@ describe('the network is not asked on every frame', () => {
     const { service, saves } = cloudService();
     mount(service);
     await waitFor(() => expect(latest.ready).toBe(true));
+    await act(async () => { await latest.refresh(); });
     saves.length = 0;
 
     /* Pausing, finishing and closing all flush - waiting out the throttle is
@@ -140,6 +142,7 @@ describe('the network is not asked on every frame', () => {
     const { service, saves } = cloudService();
     mount(service);
     await waitFor(() => expect(latest.ready).toBe(true));
+    await act(async () => { await latest.refresh(); });
     saves.length = 0;
 
     await act(async () => {
@@ -155,6 +158,7 @@ describe('the network is not asked on every frame', () => {
     const { service, saves } = cloudService();
     mount(service);
     await waitFor(() => expect(latest.ready).toBe(true));
+    await act(async () => { await latest.refresh(); });
     saves.length = 0;
 
     await act(async () => {
@@ -269,6 +273,7 @@ describe('forgetting a title', () => {
     const { service, saves, removes } = cloudService([entry()]);
     mount(service);
     await waitFor(() => expect(latest.ready).toBe(true));
+    await act(async () => { await latest.refresh(); });
     saves.length = 0;
 
     await act(async () => {

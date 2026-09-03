@@ -289,6 +289,42 @@ There is none, deliberately. No paid email provider is introduced, and the
 ticket system works without one: replies appear in the panel. Notification
 delivery is a future adapter, not a dependency.
 
+## Reconciling migration history
+
+`supabase db push --dry-run` answers one question: which local versions the
+project's migration history does not record. It never says **why** they are
+missing, and the two reasons need opposite treatment:
+
+- the change was never made - it needs pushing;
+- the change was made another way (by hand, through the dashboard, or under a
+  different version string) - its **history** needs repairing, and pushing it
+  would re-run DDL against live objects.
+
+The **Apply Supabase migrations** workflow audits before it offers to do
+either. It runs `supabase migration list` for what the history records, then
+`scripts/audit-supabase-migrations.mjs`, which reads what each local migration
+creates - from the migration itself, not a hand-kept list - and asks the
+project which of those objects exist. Every statement it sends is a `SELECT`,
+and it refuses to send anything else.
+
+Each migration comes back as one of:
+
+| Verdict | Meaning | Action |
+| --- | --- | --- |
+| `represented` | everything it creates already exists | repair its history |
+| `absent` | none of it exists | push it |
+| `partial` | **some** of it exists | neither - decide per migration |
+| `inconclusive` | it creates nothing of its own (a policy, grant or index on an earlier migration's table) | follows the migration it amends |
+
+The audit prints the exact repair command. Supply those versions in the
+workflow's `repair_versions` input and dispatch it again: repair writes rows
+into `supabase_migrations.schema_migrations` and touches **no schema and no
+data**, then the dry run re-runs so you can see what genuinely remains.
+
+Repair is opt-in and runs on a dry run too, because repairing and re-checking
+the push is the point of doing it. Applying still needs `dry_run` unticked, and
+nothing about repairing can trigger an apply.
+
 ## Verifying the database boundaries
 
 Everything that stops one account reading another's watch history, stops a

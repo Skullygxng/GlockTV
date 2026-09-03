@@ -184,10 +184,15 @@ Supabase Edge Function secrets, set with `supabase secrets set`:
 - SUPABASE_URL
 - SUPABASE_SERVICE_ROLE_KEY
 
-GitHub Actions repository secrets, used only to deploy the functions:
+GitHub Actions repository secrets, used only to deploy the functions and to
+apply migrations:
 
 - SUPABASE_ACCESS_TOKEN
 - SUPABASE_PROJECT_REF
+- SUPABASE_DB_PASSWORD
+
+`SUPABASE_DB_PASSWORD` is read only by `apply-supabase-migrations.yml`; the
+function deploy does not need it.
 
 ### Setup still required before checkout works
 
@@ -196,15 +201,38 @@ Nothing below is done by this repository:
 1. Create the Stripe test-mode product and its recurring monthly price.
 2. Set `STRIPE_SECRET_KEY` and `STRIPE_PRICE_PREMIUM_MONTHLY` as Supabase
    function secrets.
-3. Apply `supabase/migrations` to the project.
-4. Add `SUPABASE_ACCESS_TOKEN` and `SUPABASE_PROJECT_REF` as Actions secrets and
-   let the workflow deploy the functions.
-5. Create a Stripe webhook endpoint pointing at the deployed `stripe-webhook`
-   URL, subscribed to the `customer.subscription.*` and `checkout.session.completed`
-   events, then set the endpoint's signing secret as `STRIPE_WEBHOOK_SECRET`.
-6. Set `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_URL` as function secrets.
+3. Add `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF` and
+   `SUPABASE_DB_PASSWORD` as Actions secrets.
+4. Apply `supabase/migrations` to the project by running the **Apply Supabase
+   migrations** workflow. Leave `dry_run` ticked the first time to see which
+   migrations the project is missing, then run it again with `dry_run`
+   unticked to apply them. Re-running applies nothing already recorded in the
+   project's migration history, so it is safe to repeat.
+5. Let **Deploy Supabase Edge Functions** run - it deploys on any push to
+   `main` that touches `supabase/functions`, and can also be dispatched by
+   hand. It now fails immediately, naming the secret, if step 3 was skipped.
+6. Create a Stripe webhook endpoint pointing at the deployed `stripe-webhook`
+   URL and subscribe it to exactly these six events, which are the only ones
+   the function acts on:
 
-Until all six are done the account panel shows Premium as unavailable rather
+   - `checkout.session.completed`
+   - `customer.subscription.created`
+   - `customer.subscription.updated`
+   - `customer.subscription.deleted`
+   - `invoice.payment_succeeded`
+   - `invoice.payment_failed`
+
+   The two invoice events are not optional. A renewal that fails moves the
+   subscription to `past_due`, which stays Premium while Stripe retries, and
+   the invoice events are what tell GlockTV the retry landed. Subscribing to
+   the subscription events alone leaves a recovered member waiting for the
+   next unrelated subscription change. Any event outside this list is
+   accepted, recorded and ignored, so subscribing to more is harmless but
+   pointless. Then set the endpoint's signing secret as
+   `STRIPE_WEBHOOK_SECRET`.
+7. Set `SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_URL` as function secrets.
+
+Until all seven are done the account panel shows Premium as unavailable rather
 than failing at the point of payment.
 
 ### Smoke test to run once the migrations are applied
@@ -223,3 +251,20 @@ halves for real:
 
 A failure of the first means every webhook silently 500s. A success of the
 second means anyone can set their own tier.
+
+`scripts/verify-billing-permissions.mjs` asks the project all three questions
+and exits non-zero if any answer is wrong. Export `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY` and `SUPABASE_PUBLISHABLE_KEY` into your shell -
+this file deliberately shows no assignment, so no secret name here is ever one
+careless edit away from carrying a real value - then run:
+
+```sh
+node scripts/verify-billing-permissions.mjs
+```
+
+It reads its keys from the environment only - nothing is written to a file and
+no key is committed. It signs in anonymously to obtain a real `auth.uid()` to
+key the write to, applies the `free` tier under an obvious `smoke_` namespace
+so no account is granted Premium by the test, and deletes the rows afterwards.
+Run it against the test-mode project after every migration change that touches
+the function or its grants.

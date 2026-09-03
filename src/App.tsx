@@ -11,6 +11,7 @@ import { useMediaSearchSuggestions } from './hooks/useMediaSearchSuggestions';
 import { useDialogBehavior } from './hooks/useDialogBehavior';
 import { AccountPanel } from './components/AccountPanel';
 import { AccountProvider, useAccount } from './components/AccountProvider';
+import { AdSlot } from './components/AdSlot';
 import { WatchProgressProvider } from './components/WatchProgressProvider';
 import type { WatchProgressService } from './lib/watchProgressService';
 import type { AccountService } from './lib/accountService';
@@ -1050,6 +1051,10 @@ const wheelLockedUntil = useRef(0);
             <Users /> Watch together
           </button>
         </section>
+
+        {/* Last in the column, so nothing about the product moves to make room
+            for it and a Premium member's layout is identical without it. */}
+        <AdSlot placement="context-rail" />
       </aside>
 
       <nav className="bottom-nav" aria-label="Mobile navigation">
@@ -1495,6 +1500,10 @@ function TitleModal({
               </div>
 
               {!!providers.length && <small>Streaming availability powered by JustWatch.</small>}
+
+              {/* Below everything the viewer opened this panel for. Never over
+                  the trailer, never over the actions. */}
+              <AdSlot placement="details-panel" />
             </div>
           </>
         )}

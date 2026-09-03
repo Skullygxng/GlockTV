@@ -37,6 +37,106 @@ The workflow in `.github/workflows/deploy-pages.yml` builds and publishes the si
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 
+## Resume and Continue Watching
+
+GlockTV remembers where you got to and offers to put you back there. Progress is
+personal: it is not watch-party state, and joining a friend's room neither reads
+nor writes it.
+
+### Two layers
+
+| Layer | Who gets it | Where it lives |
+| --- | --- | --- |
+| Local | everybody, including guests and anonymous sessions | `localStorage`, this device only |
+| Cloud | **protected accounts only** | `watch_progress`, across devices |
+
+Nothing here signs anybody in. Pressing play never mints an account, so a
+visitor who has not signed in keeps their progress on the device and nowhere
+else - the same rule the account layer already follows.
+
+**An anonymous Supabase session is still a guest.** The watch party mints one
+the moment somebody opens a room, so "has a session" is not the same question
+as "has an account": an anonymous identity lives in this browser's storage, and
+syncing it across devices is a promise nothing could keep. Guests keep the
+local layer, which is why that layer exists.
+
+That boundary is enforced by RLS, not only by the client - the insert and
+update policies refuse a token whose `is_anonymous` claim is true, so a
+modified client posting straight to PostgREST with the same publishable key
+every visitor holds gets the same answer. The client check exists to avoid
+making requests it knows will be rejected.
+
+Protecting a guest account costs nothing and migrates nothing: Supabase keeps
+the same uid when an email is attached, so the rows this device already holds
+become eligible under the identity they were always keyed to. Nothing is
+deleted, and the uid Friends depends on is unchanged.
+
+### Which clock decides
+
+Both layers are read through one sanitizer and merged by one function. The
+newer record wins, with one asymmetry the whole design rests on: the cloud's
+timestamp is the **database's** clock and the local one is the **browser's**,
+so a local stamp from the future does not win and an exact tie goes to the
+cloud. Without that, one device with a wrong clock would freeze a title in
+place across every other device.
+
+That asymmetry is only real because the cloud side cannot be written by a
+browser. `watch_progress.updated_at` is:
+
+- **stamped by a trigger** on every insert and update, so a value that arrives
+  in the payload is overwritten rather than stored; and
+- **absent from the browser's column grants**, so such a request is refused
+  before it gets that far.
+
+The column default alone would not be enough - it applies only when the value
+is omitted, and a modified client would simply name it. The browser's own idea
+of when it saw a position goes to `observed_at`, which nothing trusts and
+nothing compares.
+
+### What the providers actually expose
+
+Position is **observed**, never inferred. Clicking Watch records nothing; only a
+player that reports where it is produces an entry.
+
+| Server | Reports position | Resume | Notes |
+| --- | --- | --- | --- |
+| CineSrc | yes, `cinesrc:*` postMessage, origin-pinned | `?t=` | movies only - `resumeDisabledFor: ['tv']` |
+| VidZen backup | yes, `PLAYER_EVENT` / `mplayer` postMessage | `?startAt=` | both media types |
+| VidCore | no | none | the TV default, and it emits nothing |
+
+So **TV on the default server has no resume**, because that provider does not
+expose a position and GlockTV does not fabricate one. Nothing here scrapes a
+cross-origin iframe or works around provider isolation; a server that says
+nothing produces no entry, and Continue Watching stays empty rather than
+inventing a place in a film nobody watched.
+
+A resume is only offered into the server that observed it, so a position taken
+from one provider is never handed to another that would ignore it.
+
+### Rules
+
+- **Worth resuming** at 30 seconds. Below that, resuming is worse than starting.
+- **Finished** at whichever comes first of 95% or 90 seconds from the end, so a
+  two-hour feature is not "finished" with six minutes left and a 22-minute
+  episode is not still in progress during the credits. A finished title leaves
+  Continue Watching and starts from the beginning if opened again.
+- **No duration, no bar.** A player that reports a position but not a length
+  gets a timestamp and no progress bar, because the bar would need an invented
+  denominator.
+- **Throttled.** At most one cloud write per title per 10 seconds, with an
+  immediate send on pause, finish, episode change, player close and the tab
+  going away - so the last position is never the one that got throttled away.
+
+### Where to find it
+
+Inside **My List**, as a second tab, and in the desktop sidebar. It is
+deliberately not a sixth item in the mobile tab bar, which stays at exactly five
+product destinations.
+
+The next episode is offered when one finishes, but only when the season guide
+actually lists it - it is an offer rather than an auto-advance, and no episode
+number is assumed.
+
 ## Premium membership
 
 GlockTV Premium is one recurring monthly subscription whose only V1 benefit is

@@ -37,6 +37,97 @@ The workflow in `.github/workflows/deploy-pages.yml` builds and publishes the si
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 
+## Advertising
+
+Free accounts see ads. Premium does not - that is Premium's V1 benefit. The
+decision is made in one place, `shouldShowAds` in `src/lib/account.ts`, and
+`src/lib/ads.ts` asks it rather than restating it.
+
+Two separate questions, deliberately not collapsed:
+
+- **May this account be shown ads?** Fails closed. An account whose tier could
+  not be learned is treated as free, because the alternative gives away ad-free
+  GlockTV on every failed request.
+- **Is it yet time to run a third party's script?** Waits for the account layer
+  to settle. Rendering while entitlements are in flight would flash an ad at a
+  confirmed Premium member on every load - correct by the first rule, and
+  exactly what they paid to avoid.
+
+A resolved Premium member runs **no ad code at all**. The slot returns `null`,
+so there is no element to fetch the script - not a hidden one that loaded first.
+
+### Isolation
+
+Each slot is a `sandbox="allow-scripts"` iframe with no `allow-same-origin`,
+no `allow-popups` and no `allow-top-navigation`. That makes the privacy
+properties structural rather than promises:
+
+- the ad script runs at a null origin, so it cannot read this site's
+  `localStorage` or its Supabase session;
+- it is passed a zone id and nothing else - no email, account id, Stripe
+  customer or subscription id, or room code, none of which the slot has;
+- `referrerpolicy="no-referrer"` and a `no-referrer` meta, so the network is
+  not handed the page URL;
+- a popunder or a forced redirect cannot execute even if one is served.
+
+That last point is intentional. Formats that depend on opening a window will
+render nothing here rather than hijacking the page.
+
+**On CSP:** GitHub Pages serves no response headers we control, so a real
+`Content-Security-Policy` would have to be a `<meta http-equiv>` covering every
+existing third party at once - TMDB, Supabase, three playback providers, Google
+Fonts. That is worth doing and is not done here; the sandbox above is the
+enforcement for the one script this PR adds. Treat a site-wide CSP as
+outstanding, not as covered.
+
+### Configuration
+
+Zone identifiers and the snippet URL are **public publisher identifiers**, not
+secrets, and they are the only ad values this repository reads:
+
+- `VITE_ADS_SCRIPT_URL` - the per-zone script the HilltopAds dashboard
+  generates. There is no hard-coded default: the snippet is account-specific,
+  and a plausible-looking guess would either fail silently or load something
+  nobody chose.
+- `VITE_ADS_ZONE_CONTEXT_RAIL`, `VITE_ADS_ZONE_DETAILS_PANEL` - optional, for a
+  publisher running one zone per placement.
+
+The URL must be `https:`, carry no credentials and name a real host; a zone id
+must match `[A-Za-z0-9_-]{1,64}`. Anything else is refused rather than
+half-loaded. With nothing set, ads are off: no slot, no placeholder, no empty
+box, and development and CI run in exactly that state.
+
+### Choosing the zone type - read this before creating one
+
+**Do not use MultiTag Banner.** HilltopAds' own documentation describes it as
+containing "two ad formats - Banner and Popup", with the network choosing
+between them. Which format a viewer gets is then not the publisher's decision,
+and popup is not a format this product ships. Create a **banner/display zone**
+instead.
+
+If the only zone type available cannot avoid popup inventory, that is a
+provider constraint to raise rather than route around - the sandbox will
+suppress the popup half, so the result is paid-for inventory that renders
+nothing rather than a working banner.
+
+### Placements
+
+Two, both outside the player and outside the navigation:
+
+| Placement | Where | Size |
+| --- | --- | --- |
+| `context-rail` | last item in the desktop context column | 300x250 |
+| `details-panel` | below the actions in the title details overlay | 300x250 |
+
+Neither overlays anything. The slot's `z-index` is 1, below the bottom
+navigation at 40 and dialogs at 80, so an ad cannot cover a control.
+
+### Reporting
+
+There is none, and that is deliberate. Impressions, fill and revenue are the ad
+network's to report; this repository does not compute a CPM, and no revenue
+figure here would be anything but invented.
+
 ## Premium membership
 
 GlockTV Premium is one recurring monthly subscription whose only V1 benefit is

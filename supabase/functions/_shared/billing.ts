@@ -1,6 +1,5 @@
 import {
   FREE_ENTITLEMENT,
-  isNewerProviderState,
   subscriptionStateToEntitlement,
   type NormalizedSubscription,
 } from './entitlements.ts';
@@ -139,10 +138,6 @@ export async function applyStripeEvent({
   stripe: StripeClient;
   now?: Date;
 }): Promise<WebhookOutcome> {
-  /* Stripe retries until it gets a 2xx, so the same event arrives more than
-     once as a matter of course. */
-  if (await store.hasProcessedEvent(event.id)) return { handled: false, reason: 'replay' };
-
   const eventCreatedAt = typeof event.created === 'number'
     ? new Date(event.created * 1000).toISOString()
     : null;
@@ -175,23 +170,23 @@ export async function applyStripeEvent({
     return { handled: false, reason: 'unknown_customer' };
   }
 
-  /*
-   * Delivery is not ordered. An older event arriving after a newer one must
-   * not roll the subscription back - that is how a cancellation processed late
-   * would revoke a membership the member has already renewed.
-   */
-  const stored = await store.getSubscription(userId);
-  if (stored && !isNewerProviderState(subscription.providerUpdatedAt, stored.providerUpdatedAt)) {
-    await store.markEventProcessed({ providerEventId: event.id, eventType: event.type, providerCreatedAt: eventCreatedAt });
-    return { handled: false, reason: 'stale' };
-  }
-
   const entitlement = subscriptionStateToEntitlement(subscription, now);
 
-  await store.saveSubscription({ userId, subscription });
-  await store.saveEntitlement({ userId, entitlement });
-  await store.markEventProcessed({ providerEventId: event.id, eventType: event.type, providerCreatedAt: eventCreatedAt });
+  /*
+   * Ordering and replay are both decided by the database, in one statement
+   * holding the row lock. Deciding either of them here would be a
+   * read-then-write across two REST calls, which two concurrent invocations
+   * can interleave - and Stripe both retries and delivers out of order.
+   */
+  const result = await store.applyProviderState({
+    userId,
+    subscription,
+    entitlement,
+    event: { providerEventId: event.id, eventType: event.type, providerCreatedAt: eventCreatedAt },
+  });
 
+  if (result === 'replay') return { handled: false, reason: 'replay' };
+  if (result === 'stale') return { handled: false, reason: 'stale' };
   return { handled: true, reason: 'applied', userId, tier: entitlement.tier };
 }
 

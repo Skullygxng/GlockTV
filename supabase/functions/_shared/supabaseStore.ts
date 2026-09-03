@@ -33,6 +33,16 @@ export function createSupabaseBillingStore({
     return await response.json() as T[];
   }
 
+  async function rpc<T>(name: string, args: Record<string, unknown>): Promise<T> {
+    const response = await fetchImpl(`${rest}/rpc/${name}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(args),
+    });
+    if (!response.ok) throw new Error(`Billing write failed (${response.status}).`);
+    return await response.json() as T;
+  }
+
   async function upsert(table: string, row: unknown, onConflict: string): Promise<void> {
     const response = await fetchImpl(`${rest}/${table}?on_conflict=${onConflict}`, {
       method: 'POST',
@@ -66,44 +76,39 @@ export function createSupabaseBillingStore({
       }, 'user_id');
     },
 
-    async getSubscription(userId) {
-      const rows = await select<{ provider_updated_at: string | null }>(
-        `/billing_subscriptions?user_id=eq.${encodeURIComponent(userId)}&select=provider_updated_at&limit=1`,
-      );
-      return rows[0] ? { providerUpdatedAt: rows[0].provider_updated_at } : null;
-    },
+    /*
+     * One database call. The event claim, the ordering comparison and both
+     * writes happen inside apply_billing_provider_state, so concurrent
+     * invocations serialize on the row lock rather than racing between
+     * separate REST requests.
+     */
+    async applyProviderState({ userId, subscription, entitlement, event }: {
+      userId: string;
+      subscription: NormalizedSubscription;
+      entitlement: EntitlementRecord;
+      event: { providerEventId: string; eventType: string; providerCreatedAt: string | null };
+    }) {
+      const outcome = await rpc<string>('apply_billing_provider_state', {
+        p_user_id: userId,
+        p_provider: subscription.provider,
+        p_subscription_id: subscription.providerSubscriptionId,
+        p_customer_id: subscription.providerCustomerId,
+        p_status: subscription.status,
+        p_price_id: subscription.priceId,
+        p_current_period_end: subscription.currentPeriodEnd,
+        p_cancel_at_period_end: subscription.cancelAtPeriodEnd,
+        p_provider_updated_at: subscription.providerUpdatedAt,
+        /* An explicit free row rather than a delete: for a member who has ever
+           paid, "downgraded on this date" is worth keeping. */
+        p_tier: entitlement.tier,
+        p_ads_enabled: entitlement.ads_enabled,
+        p_event_id: event.providerEventId,
+        p_event_type: event.eventType,
+        p_event_created_at: event.providerCreatedAt,
+      });
 
-    async saveSubscription({ userId, subscription }: { userId: string; subscription: NormalizedSubscription }) {
-      await upsert('billing_subscriptions', {
-        user_id: userId,
-        provider: subscription.provider,
-        provider_subscription_id: subscription.providerSubscriptionId,
-        provider_customer_id: subscription.providerCustomerId,
-        status: subscription.status,
-        price_id: subscription.priceId,
-        current_period_end: subscription.currentPeriodEnd,
-        cancel_at_period_end: subscription.cancelAtPeriodEnd,
-        provider_updated_at: subscription.providerUpdatedAt,
-        updated_at: new Date().toISOString(),
-      }, 'user_id');
-    },
-
-    async saveEntitlement({ userId, entitlement }: { userId: string; entitlement: EntitlementRecord }) {
-      /* An explicit free row rather than a delete: for a member who has ever
-         paid, "downgraded on this date" is worth keeping. */
-      await upsert('account_entitlements', {
-        user_id: userId,
-        tier: entitlement.tier,
-        ads_enabled: entitlement.ads_enabled,
-        updated_at: new Date().toISOString(),
-      }, 'user_id');
-    },
-
-    async hasProcessedEvent(providerEventId) {
-      const rows = await select<{ provider_event_id: string }>(
-        `/billing_webhook_events?provider_event_id=eq.${encodeURIComponent(providerEventId)}&select=provider_event_id&limit=1`,
-      );
-      return rows.length > 0;
+      /* Anything the function does not recognise is treated as not applied. */
+      return outcome === 'applied' || outcome === 'stale' || outcome === 'replay' ? outcome : 'stale';
     },
 
     async markEventProcessed({ providerEventId, eventType, providerCreatedAt }) {

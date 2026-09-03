@@ -3,6 +3,7 @@ import { allowedOrigin, corsHeaders } from '../supabase/functions/_shared/cors.t
 import { createAccountService } from '../src/lib/accountService';
 import { createBillingService } from '../src/lib/billing';
 import migration from '../supabase/migrations/20260901120000_billing_premium.sql?raw';
+import atomicMigration from '../supabase/migrations/20260903020000_billing_atomic_and_expiry.sql?raw';
 import entitlementsMigration from '../supabase/migrations/20260901000000_account_entitlements.sql?raw';
 import checkoutSource from '../supabase/functions/create-checkout/index.ts?raw';
 import portalSource from '../supabase/functions/create-billing-portal/index.ts?raw';
@@ -242,6 +243,96 @@ describe('CORS on the browser-callable functions', () => {
   it('refuses a disallowed origin before doing any work', () => {
     for (const source of [checkoutSource, portalSource]) {
       expect(source).toMatch(/if \(!origin\) return new Response\('Origin not allowed', \{ status: 403 \}\)/);
+    }
+  });
+});
+
+describe('cancellation expiry is enforced by the database clock', () => {
+  const sql = atomicMigration.replace(/--[^\n]*/g, '').toLowerCase();
+
+  /*
+   * The gap this closes: subscriptionStateToEntitlement is only evaluated while
+   * a webhook is being handled. Once premium was stored, passing
+   * current_period_end changed nothing, so a member whose terminal
+   * cancellation webhook never arrived stayed Premium indefinitely.
+   */
+  it('recomputes the tier on every read instead of trusting the stored row', () => {
+    expect(sql).toContain('create or replace view public.account_entitlements_effective');
+    expect(sql).toMatch(/cancel_at_period_end[\s\S]{0,120}current_period_end <= now\(\)/);
+    expect(sql).toMatch(/when premium_expired then 'free' else tier end as tier/);
+    expect(sql).toMatch(/when premium_expired then true else ads_enabled end as ads_enabled/);
+  });
+
+  it('reads the clock from the database, never from a caller', () => {
+    // now() is the server's. Nothing in the view takes a time argument.
+    expect(sql).toContain('now()');
+    expect(sql).not.toMatch(/create or replace view[\s\S]*?\$\d|p_now|client_time/);
+  });
+
+  it('leaves a renewing subscription entitled, so a late renewal is not a downgrade', () => {
+    /* The expiry test requires cancel_at_period_end. A subscription that is
+       still renewing is deliberately not clock-checked. */
+    expect(sql).toMatch(/e\.tier = 'premium'\s*and coalesce\(s\.cancel_at_period_end, false\)/);
+  });
+
+  it('keeps the effective view read-only and scoped to the caller own row', () => {
+    expect(sql).toContain('security_invoker = on');
+    expect(sql).toContain('revoke all on public.account_entitlements_effective from public, anon');
+    const grants = sql.match(/grant [^;]*;/g) ?? [];
+    expect(grants).toEqual(['grant select on public.account_entitlements_effective to authenticated;']);
+  });
+
+  it('is what the app actually reads', () => {
+    expect(accountServiceSource).toContain("'account_entitlements_effective'");
+    expect(accountServiceSource).not.toMatch(/from\(\s*['"]account_entitlements['"]\s*\)/);
+  });
+});
+
+describe('atomic provider-state application', () => {
+  const sql = atomicMigration.replace(/--[^\n]*/g, '').toLowerCase();
+
+  it('claims the event and compares ordering inside one function', () => {
+    expect(sql).toContain('create or replace function public.apply_billing_provider_state');
+    expect(sql).toContain('insert into public.billing_webhook_events');
+    expect(sql).toContain('on conflict (provider_event_id) do nothing');
+  });
+
+  it('makes the ordering comparison part of the conditional write', () => {
+    /*
+     * The comparison sits in the WHERE of the conflict update, so Postgres
+     * evaluates it while holding the row lock. Two concurrent writers
+     * serialize there instead of both passing a check made earlier.
+     */
+    expect(sql).toMatch(/on conflict \(user_id\) do update set[\s\S]*?where existing\.provider_updated_at is null[\s\S]*?excluded\.provider_updated_at >= existing\.provider_updated_at/);
+  });
+
+  it('writes the entitlement only when the subscription write won', () => {
+    const applied = sql.indexOf("return 'stale'");
+    const entitlement = sql.indexOf('insert into public.account_entitlements');
+    expect(applied).toBeGreaterThan(-1);
+    expect(entitlement).toBeGreaterThan(applied);
+  });
+
+  it('is not callable from a browser', () => {
+    /* It writes account_entitlements directly, so exposing it would be handing
+       out the setPremium() this whole design exists to prevent. */
+    expect(sql).toMatch(/revoke all on function public\.apply_billing_provider_state[\s\S]*?from public, anon, authenticated/);
+    expect(sql).not.toMatch(/grant execute[^;]*apply_billing_provider_state/);
+  });
+
+  it('pins its search path, like the repository other definer functions', () => {
+    expect(sql).toContain('security definer');
+    expect(sql).toContain("set search_path = ''");
+  });
+
+  it('still leaves the browser no write path to billing or entitlement state', () => {
+    const base = migration.replace(/--[^\n]*/g, '').toLowerCase();
+    const grants = [...(base.match(/grant [^;]*;/g) ?? []), ...(sql.match(/grant [^;]*;/g) ?? [])];
+    for (const grant of grants) {
+      expect(grant).toContain('grant select');
+      for (const writer of ['insert', 'update', 'delete', 'all privileges']) {
+        expect(grant).not.toContain(writer);
+      }
     }
   });
 });

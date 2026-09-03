@@ -20,8 +20,18 @@ import type { StripeClient, StripeSubscriptionObject } from '../supabase/functio
 const SECRET = 'whsec_test_secret';
 const NOW = new Date('2026-09-01T12:00:00.000Z');
 
-/* An in-memory BillingStore that behaves like the real tables. */
-function makeStore() {
+/*
+ * An in-memory BillingStore that behaves like the real tables - including the
+ * property this delta is about.
+ *
+ * applyProviderState awaits first (standing in for the round trip two
+ * concurrent Edge Function invocations both make) and then runs its
+ * claim-compare-write body with no await inside it. That synchronous body is
+ * the model of the Postgres row lock: whatever order two callers arrive in,
+ * one completes its comparison and write before the other begins. A fake that
+ * awaited mid-body would be modelling the bug rather than the database.
+ */
+function makeStore({ latency = 0 }: { latency?: number } = {}) {
   const customers = new Map<string, string>();      // userId -> customerId
   const byCustomer = new Map<string, string>();     // customerId -> userId
   const subscriptions = new Map<string, { providerUpdatedAt: string | null; status: string }>();
@@ -43,23 +53,32 @@ function makeStore() {
       customers.set(userId, providerCustomerId);
       byCustomer.set(providerCustomerId, userId);
     },
-    async getSubscription(userId) {
-      return subscriptions.get(userId) ?? null;
-    },
-    async saveSubscription({ userId, subscription }) {
+
+    async applyProviderState({ userId, subscription, entitlement, event }) {
+      await new Promise((resolve) => setTimeout(resolve, latency));
+
+      // --- atomic from here; no await until it returns ---
+      if (events.has(event.providerEventId)) return 'replay';
+      events.add(event.providerEventId);
+
+      const stored = subscriptions.get(userId);
+      const incoming = subscription.providerUpdatedAt ? Date.parse(subscription.providerUpdatedAt) : NaN;
+      const committed = stored?.providerUpdatedAt ? Date.parse(stored.providerUpdatedAt) : NaN;
+      if (Number.isFinite(committed) && (!Number.isFinite(incoming) || incoming < committed)) {
+        return 'stale';
+      }
+
       writes.push(`subscription:${userId}:${subscription.status}`);
       subscriptions.set(userId, {
         providerUpdatedAt: subscription.providerUpdatedAt,
         status: subscription.status,
       });
-    },
-    async saveEntitlement({ userId, entitlement }) {
       writes.push(`entitlement:${userId}:${entitlement.tier}`);
       entitlements.set(userId, entitlement);
+      return 'applied';
+      // --- atomic to here ---
     },
-    async hasProcessedEvent(id) {
-      return events.has(id);
-    },
+
     async markEventProcessed({ providerEventId }) {
       events.add(providerEventId);
     },
@@ -395,5 +414,91 @@ describe('webhook application', () => {
       now: new Date('2026-09-20T00:00:00Z'),
     });
     expect(laterEntitlements.get('user-1')?.tier).toBe('free');
+  });
+});
+
+describe('concurrent webhook delivery', () => {
+  /* Stripe delivers in parallel and retries; two invocations can be in flight
+     at once, so ordering cannot be decided by a read followed by a write. */
+  function subscriptionEvent(id: string, status: string, at: string) {
+    return {
+      event: event({ id, type: 'customer.subscription.updated', created: Math.floor(Date.parse(at) / 1000) }),
+      stripe: makeStripe(stripeSubscription({ status })).client,
+    };
+  }
+
+  it('cannot leave older state committed, whichever order the two finish in', async () => {
+    for (const olderFirst of [true, false]) {
+      const { store, entitlements, subscriptions } = makeStore({ latency: 5 });
+      await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+
+      const newer = subscriptionEvent('evt_new', 'active', '2026-09-01T12:00:00Z');
+      const older = subscriptionEvent('evt_old', 'canceled', '2026-09-01T11:00:00Z');
+      const [first, second] = olderFirst ? [older, newer] : [newer, older];
+
+      /* Both started before either completes - the interleaving the previous
+         read-compare-write could not survive. */
+      await Promise.all([
+        applyStripeEvent({ event: first.event, store, stripe: first.stripe, now: NOW }),
+        applyStripeEvent({ event: second.event, store, stripe: second.stripe, now: NOW }),
+      ]);
+
+      expect(subscriptions.get('user-1')?.status, `olderFirst=${olderFirst}`).toBe('active');
+      expect(entitlements.get('user-1')?.tier, `olderFirst=${olderFirst}`).toBe('premium');
+    }
+  });
+
+  it('cannot be raced into an older state by many interleavings', async () => {
+    /* Eight events, applied concurrently in a shuffled order. Whatever the
+       scheduler does, the newest must win. */
+    const { store, subscriptions, entitlements } = makeStore({ latency: 2 });
+    await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+
+    const hours = [9, 13, 10, 16, 11, 14, 12, 15];
+    await Promise.all(hours.map((hour, index) => {
+      const at = `2026-09-01T${String(hour).padStart(2, '0')}:00:00Z`;
+      const status = hour === 16 ? 'active' : 'canceled';
+      const { event: e, stripe } = subscriptionEvent(`evt_${index}`, status, at);
+      return applyStripeEvent({ event: e, store, stripe, now: NOW });
+    }));
+
+    // 16:00 is the latest, and it is the active one.
+    expect(subscriptions.get('user-1')?.providerUpdatedAt).toBe('2026-09-01T16:00:00.000Z');
+    expect(subscriptions.get('user-1')?.status).toBe('active');
+    expect(entitlements.get('user-1')?.tier).toBe('premium');
+  });
+
+  it('stays idempotent when the same event is delivered twice at once', async () => {
+    const { store, writes } = makeStore({ latency: 5 });
+    await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+    const a = subscriptionEvent('evt_same', 'active', '2026-09-01T12:00:00Z');
+    const b = subscriptionEvent('evt_same', 'active', '2026-09-01T12:00:00Z');
+
+    const outcomes = await Promise.all([
+      applyStripeEvent({ event: a.event, store, stripe: a.stripe, now: NOW }),
+      applyStripeEvent({ event: b.event, store, stripe: b.stripe, now: NOW }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.handled)).toHaveLength(1);
+    expect(outcomes.filter((outcome) => !outcome.handled && outcome.reason === 'replay')).toHaveLength(1);
+    // Exactly one subscription write and one entitlement write.
+    expect(writes.filter((write) => write.startsWith('subscription:'))).toHaveLength(1);
+    expect(writes.filter((write) => write.startsWith('entitlement:'))).toHaveLength(1);
+  });
+
+  it('leaves ordering and replay to the database rather than deciding them itself', () => {
+    /*
+     * The regression this guards: a read of the stored timestamp, compared in
+     * TypeScript, followed by a separate write. Two invocations can interleave
+     * between those steps no matter how the comparison is written.
+     */
+    const source = applyStripeEvent.toString();
+    expect(source).toContain('applyProviderState');
+    /* store.getSubscription is gone; stripe.getSubscription stays - re-reading
+       the authoritative subscription from Stripe is the point. */
+    expect(source).not.toMatch(/store\.getSubscription/);
+    expect(source).toMatch(/stripe\.getSubscription/);
+    expect(source).not.toMatch(/hasProcessedEvent/);
+    expect(source).not.toMatch(/isNewerProviderState/);
   });
 });

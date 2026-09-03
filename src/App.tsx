@@ -812,6 +812,10 @@ const wheelLockedUntil = useRef(0);
                   >
                     <Filter />
                   </button>
+                  {/* The topbar is hidden on phones, so the account lives with
+                      the other top controls rather than taking a tab-bar slot
+                      from a product destination. */}
+                  <MobileAccountButton onOpen={() => setAccountOpen(true)} />
                 </>
               )}
             </div>
@@ -949,9 +953,7 @@ const wheelLockedUntil = useRef(0);
         >
           <Bookmark /><span>My List</span>
         </button>
-        {/* The topbar is hidden on phones, so the account needs its own way in
-            here or it is unreachable below the breakpoint. */}
-        <MobileAccountButton onOpen={() => setAccountOpen(true)} />
+        {/* Live TV portals its button in here as the fifth destination. */}
       </nav>
 
       <AnimatePresence>
@@ -1044,15 +1046,24 @@ function AccountButton({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-/* The same account, reached from the mobile tab bar. */
+/*
+ * The account, as a header control on phones.
+ *
+ * A guest gets the invitation spelled out - "Sign up" next to the avatar -
+ * because a bare avatar tells somebody with no account nothing. Once there is
+ * an account the label drops away and it becomes the avatar alone, so the
+ * header stays balanced against All / Movies / TV Shows / Search / Filter.
+ */
 function MobileAccountButton({ onOpen }: { onOpen: () => void }) {
   const { account, entitlements } = useAccount();
   const isPremium = entitlements.tier === 'premium';
   const isGuest = !account || account.isAnonymous;
+  const initial = account?.email?.trim()?.[0]?.toUpperCase() ?? '';
 
   return (
     <button
       type="button"
+      className={`mobile-account${isGuest ? ' mobile-account--guest' : ''}${isPremium ? ' mobile-account--premium' : ''}`}
       aria-label={
         isPremium
           ? 'Your account, Premium'
@@ -1060,8 +1071,10 @@ function MobileAccountButton({ onOpen }: { onOpen: () => void }) {
       }
       onClick={onOpen}
     >
-      {isPremium ? <Sparkles /> : <CircleUser />}
-      <span>{isPremium ? 'Premium' : isGuest ? 'Guest' : 'Account'}</span>
+      <span className="mobile-account__mark" aria-hidden="true">
+        {isPremium ? <Sparkles /> : isGuest ? <CircleUser /> : initial}
+      </span>
+      {isGuest && <span className="mobile-account__label">Sign up</span>}
     </button>
   );
 }

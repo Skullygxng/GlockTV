@@ -94,7 +94,9 @@ describe('account service entitlement reads', () => {
       entitlements: { tier: 'premium', adsEnabled: false },
       error: '',
     });
-    expect(fake.from).toHaveBeenCalledWith('account_entitlements');
+    // The effective view, which applies cancellation expiry against the
+    // database clock rather than returning whatever the last webhook stored.
+    expect(fake.from).toHaveBeenCalledWith('account_entitlements_effective');
   });
 
   it('falls back to free with ads on when the fetch errors', async () => {
@@ -305,5 +307,73 @@ describe('account identity helpers', () => {
     expect(isSignedIn({ id: 'u1', email: null, isAnonymous: true, createdAt: null })).toBe(false);
     expect(isSignedIn(null)).toBe(false);
     expect(isSignedIn({ id: 'u1', email: 'a@b.c', isAnonymous: false, createdAt: null })).toBe(true);
+  });
+});
+
+describe('the app reads the effective entitlement, not the stored row', () => {
+  /*
+   * The stored row records what the last webhook decided. A membership set to
+   * cancel stops being entitled when its period ends, and no webhook is
+   * guaranteed at that moment - so the database recomputes it on read. These
+   * prove the client takes that answer and never substitutes its own.
+   */
+  function clientWhere(rows: Record<string, unknown | null>) {
+    const asked: string[] = [];
+    return {
+      asked,
+      client: {
+        auth: {
+          getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'u1', email: null, is_anonymous: false } }, error: null }),
+          updateUser: vi.fn(), signInWithOtp: vi.fn(), getSession: vi.fn(),
+          onAuthStateChange: vi.fn(() => ({ data: { subscription: { unsubscribe: vi.fn() } } })),
+        },
+        from: vi.fn((table: string) => {
+          asked.push(table);
+          return { select: () => ({ maybeSingle: async () => ({ data: rows[table] ?? null, error: null }) }) };
+        }),
+      },
+    };
+  }
+
+  it('asks the view, not the table', async () => {
+    const { client, asked } = clientWhere({ account_entitlements_effective: { tier: 'premium', ads_enabled: false } });
+    await createAccountService(client as never).loadEntitlements();
+
+    expect(asked).toEqual(['account_entitlements_effective']);
+    expect(asked).not.toContain('account_entitlements');
+  });
+
+  it('reports Free once the database says the premium period expired', async () => {
+    /*
+     * The stored row still says premium - the terminal webhook never came.
+     * The view applies the clock and answers free, and that is what the app
+     * must surface.
+     */
+    const { client } = clientWhere({
+      account_entitlements: { tier: 'premium', ads_enabled: false },
+      account_entitlements_effective: { tier: 'free', ads_enabled: true, premium_expired: true },
+    });
+
+    const result = await createAccountService(client as never).loadEntitlements();
+    expect(result.entitlements).toEqual({ tier: 'free', adsEnabled: true });
+    expect(shouldShowAds(result.entitlements)).toBe(true);
+  });
+
+  it('still reports Premium before that period ends', async () => {
+    const { client } = clientWhere({
+      account_entitlements_effective: { tier: 'premium', ads_enabled: false, premium_expired: false },
+    });
+
+    const result = await createAccountService(client as never).loadEntitlements();
+    expect(result.entitlements).toEqual({ tier: 'premium', adsEnabled: false });
+    expect(shouldShowAds(result.entitlements)).toBe(false);
+  });
+
+  it('cannot be talked into Premium by anything the view did not say', async () => {
+    for (const row of [null, { tier: 'free', ads_enabled: false }, { tier: 'Premium' }, { premium_expired: false }]) {
+      const { client } = clientWhere({ account_entitlements_effective: row });
+      const result = await createAccountService(client as never).loadEntitlements();
+      expect(result.entitlements.tier).toBe('free');
+    }
   });
 });

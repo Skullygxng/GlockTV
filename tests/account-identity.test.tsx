@@ -294,16 +294,17 @@ describe('global account surface', () => {
     expect(protect).toBeEnabled();
   });
 
-  it('is reachable from the mobile tab bar, where the topbar is hidden', async () => {
+  it('is reachable from the mobile header, where the topbar is hidden', async () => {
     render(<App client={client()} accountService={accountService(guest)} />);
     await ready();
 
     /*
-     * The topbar is display:none on phones. Without its own entry in the tab
-     * bar the account would simply be unreachable below the breakpoint.
+     * The topbar is display:none on phones, so the account needs its own way
+     * in below the breakpoint. It sits with the other top controls rather than
+     * in the tab bar, which is reserved for product destinations.
      */
-    const bar = screen.getByRole('navigation', { name: 'Mobile navigation' });
-    const trigger = within(bar).getByRole('button', { name: 'Your account, guest' });
+    const header = document.querySelector('.mobile-tabs') as HTMLElement;
+    const trigger = within(header).getByRole('button', { name: 'Your account, guest' });
     fireEvent.click(trigger);
 
     const dialog = await screen.findByRole('dialog', { name: 'Your GlockTV account' });
@@ -314,8 +315,24 @@ describe('global account surface', () => {
     render(<App client={client()} accountService={accountService(member, { tier: 'premium', adsEnabled: false })} />);
     await ready();
 
-    const bar = screen.getByRole('navigation', { name: 'Mobile navigation' });
-    expect(await within(bar).findByRole('button', { name: 'Your account, Premium' })).toBeInTheDocument();
+    const header = document.querySelector('.mobile-tabs') as HTMLElement;
+    expect(await within(header).findByRole('button', { name: 'Your account, Premium' })).toBeInTheDocument();
+  });
+
+  it('spells out the invitation for a guest and drops it once there is an account', async () => {
+    /* A bare avatar tells somebody with no account nothing; a signed-in member
+       does not need the header repeating it. */
+    const { unmount } = render(<App client={client()} accountService={accountService(guest)} />);
+    await ready();
+    const guestHeader = document.querySelector('.mobile-tabs') as HTMLElement;
+    expect(within(guestHeader).getByRole('button', { name: 'Your account, guest' }).textContent).toMatch(/sign up/i);
+    unmount();
+
+    render(<App client={client()} accountService={accountService(member)} />);
+    await ready();
+    const memberHeader = document.querySelector('.mobile-tabs') as HTMLElement;
+    const control = await within(memberHeader).findByRole('button', { name: /^Your account, viewer/ });
+    expect(control.textContent).not.toMatch(/sign up/i);
   });
 
   it('runs as a guest when there is no account backend at all', async () => {

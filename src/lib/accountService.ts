@@ -31,7 +31,16 @@ export interface AccountService {
   onAuthChange(listener: () => void): () => void;
 }
 
-const ENTITLEMENTS_TABLE = 'account_entitlements';
+/*
+ * The view, not the table.
+ *
+ * The stored row records what the last webhook decided. A membership set to
+ * cancel stops being entitled when its period ends, and no webhook is
+ * guaranteed to arrive at that moment - the view recomputes it against the
+ * database clock on every read, so expiry does not depend on Stripe telling us
+ * a second time.
+ */
+const ENTITLEMENTS_SOURCE = 'account_entitlements_effective';
 
 export function createAccountService(client: SupabaseClient): AccountService {
   /*
@@ -80,7 +89,7 @@ export function createAccountService(client: SupabaseClient): AccountService {
          * client-held id would imply the id is what protects the row.
          */
         const { data, error } = await client
-          .from(ENTITLEMENTS_TABLE)
+          .from(ENTITLEMENTS_SOURCE)
           .select('tier, ads_enabled')
           .maybeSingle();
 

@@ -3,6 +3,7 @@ import appStyles from '../src/styles.css?raw';
 import liveTvStyles from '../src/live-tv.css?raw';
 import premiumStyles from '../src/premium.css?raw';
 import appSource from '../src/App.tsx?raw';
+import appStylesRaw from '../src/styles.css?raw';
 import liveTvIntegration from '../src/components/LiveTvIntegration.tsx?raw';
 
 /*
@@ -89,5 +90,52 @@ describe('the space the tab bar occupies is defined once', () => {
     expect(appStyles).toContain('calc(100svh - var(--bottom-nav-h))');
     expect(appStyles).toContain('padding-bottom:var(--bottom-nav-h)');
     expect(liveTvStyles).toContain('bottom:var(--bottom-nav-h)');
+  });
+});
+
+describe('the tab bar holds product destinations only', () => {
+  /*
+   * Five slots, five places to go. The account briefly took one of them, which
+   * both pushed Live TV onto a second row and spent a navigation slot on
+   * something that is not a destination.
+   */
+  function navMarkup(): string {
+    return appSource.match(/<nav className="bottom-nav"[\s\S]*?<\/nav>/)?.[0] ?? '';
+  }
+
+  it('declares exactly four buttons and expects Live TV to supply the fifth', () => {
+    const markup = navMarkup();
+    expect(markup).not.toBe('');
+    // Live TV portals its own button in, so four are written here.
+    expect(markup.match(/<button/g) ?? []).toHaveLength(4);
+    expect(liveTvIntegration).toContain("document.querySelector('.bottom-nav')");
+  });
+
+  it('routes to Discover, Friends, Vibe and My List', () => {
+    const markup = navMarkup();
+    for (const destination of ['Discover', 'Friends', 'Vibe', 'My List']) {
+      expect(markup).toContain(destination);
+    }
+  });
+
+  it('has no account entry in the tab bar', () => {
+    const markup = navMarkup();
+    expect(markup).not.toContain('MobileAccountButton');
+    expect(markup).not.toMatch(/account|guest|sign\s*up/i);
+  });
+
+  it('puts the account with the other top controls instead', () => {
+    /* The mobile header, alongside All / Movies / TV Shows / Search / Filter. */
+    const header = appSource.match(/aria-label="Open mobile filters"[\s\S]{0,700}/)?.[0] ?? '';
+    expect(header).toContain('MobileAccountButton');
+  });
+
+  it('keeps the header controls on one line at narrow widths', () => {
+    // "TV Shows" wrapped inside its own pill once the account joined the row.
+    expect(appStylesRaw).toMatch(/\.mobile-tabs button\{[^}]*white-space:nowrap/);
+  });
+
+  it('pushes the account control to the right of the header', () => {
+    expect(appStylesRaw).toMatch(/\.mobile-tabs \.mobile-account\{[^}]*margin-left:auto/);
   });
 });

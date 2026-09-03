@@ -106,3 +106,20 @@ Nothing below is done by this repository:
 
 Until all six are done the account panel shows Premium as unavailable rather
 than failing at the point of payment.
+
+### Smoke test to run once the migrations are applied
+
+`apply_billing_provider_state` writes `account_entitlements` directly, so its
+execute permission is the difference between the webhook working and a browser
+being able to grant itself Premium. That permission lives in the database, not
+in this repository, and no amount of reading the migration proves what the
+database actually did with it. Against the test-mode project, confirm both
+halves for real:
+
+- calling `/rest/v1/rpc/apply_billing_provider_state` with the **service-role**
+  key succeeds;
+- the same call with the **publishable** key is refused, both signed out and
+  signed in as an ordinary account.
+
+A failure of the first means every webhook silently 500s. A success of the
+second means anyone can set their own tier.

@@ -502,3 +502,105 @@ describe('concurrent webhook delivery', () => {
     expect(source).not.toMatch(/isNewerProviderState/);
   });
 });
+
+describe('an event that cannot prove it is newer', () => {
+  /*
+   * Stripe events normally carry a created timestamp, but a malformed or
+   * hand-crafted payload need not. An event with no usable timestamp has no
+   * claim to be newer than what is committed, so it must not overwrite it -
+   * the SQL briefly allowed exactly that.
+   */
+  function untimestamped(id: string, status: string) {
+    return {
+      // No `created`, so nothing downstream can derive a provider timestamp.
+      event: { id, type: 'customer.subscription.updated', data: { object: stripeSubscription({ status }) as unknown as Record<string, unknown> } } as StripeEvent,
+      stripe: makeStripe(stripeSubscription({ status })).client,
+    };
+  }
+
+  async function commitTimestamped(store: BillingStore, status: string, at: string) {
+    const stripe = makeStripe(stripeSubscription({ status })).client;
+    return applyStripeEvent({
+      event: event({ id: `evt_${at}`, created: Math.floor(Date.parse(at) / 1000) }),
+      store, stripe, now: NOW,
+    });
+  }
+
+  it('cannot overwrite committed timestamped state', async () => {
+    const { store, subscriptions, entitlements } = makeStore();
+    await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+    await commitTimestamped(store, 'active', '2026-09-01T12:00:00Z');
+    expect(entitlements.get('user-1')?.tier).toBe('premium');
+
+    const forged = untimestamped('evt_no_ts', 'canceled');
+    const outcome = await applyStripeEvent({ event: forged.event, store, stripe: forged.stripe, now: NOW });
+
+    expect(outcome).toEqual({ handled: false, reason: 'stale' });
+    expect(subscriptions.get('user-1')?.status).toBe('active');
+    expect(entitlements.get('user-1')?.tier).toBe('premium');
+  });
+
+  it('cannot overwrite committed state even when it would upgrade', async () => {
+    /* Fail closed in both directions: the rule is about trustworthiness, not
+       about which way the change happens to go. */
+    const { store, entitlements } = makeStore();
+    await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+    await commitTimestamped(store, 'canceled', '2026-09-01T12:00:00Z');
+    expect(entitlements.get('user-1')?.tier).toBe('free');
+
+    const forged = untimestamped('evt_no_ts_up', 'active');
+    const outcome = await applyStripeEvent({ event: forged.event, store, stripe: forged.stripe, now: NOW });
+
+    expect(outcome).toEqual({ handled: false, reason: 'stale' });
+    expect(entitlements.get('user-1')?.tier).toBe('free');
+  });
+
+  it('may still establish the first state when nothing is committed', async () => {
+    /* A null on the committed side means nothing is established yet, which is
+       a different thing from an incoming event that cannot date itself. */
+    const { store, entitlements, subscriptions } = makeStore();
+    await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+
+    const first = untimestamped('evt_first', 'active');
+    const outcome = await applyStripeEvent({ event: first.event, store, stripe: first.stripe, now: NOW });
+
+    expect(outcome).toMatchObject({ handled: true, tier: 'premium' });
+    expect(subscriptions.get('user-1')?.providerUpdatedAt).toBeNull();
+    expect(entitlements.get('user-1')?.tier).toBe('premium');
+  });
+
+  it('lets a properly timestamped event take over from an untimestamped first state', async () => {
+    const { store, entitlements, subscriptions } = makeStore();
+    await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+    const first = untimestamped('evt_first2', 'active');
+    await applyStripeEvent({ event: first.event, store, stripe: first.stripe, now: NOW });
+
+    await commitTimestamped(store, 'canceled', '2026-09-01T12:00:00Z');
+
+    expect(subscriptions.get('user-1')?.status).toBe('canceled');
+    expect(entitlements.get('user-1')?.tier).toBe('free');
+  });
+
+  it('cannot win a race against a timestamped event, in either arrival order', async () => {
+    for (const forgedFirst of [true, false]) {
+      const { store, entitlements, subscriptions } = makeStore({ latency: 5 });
+      await store.saveCustomer({ userId: 'user-1', providerCustomerId: 'cus_1' });
+      await commitTimestamped(store, 'active', '2026-09-01T10:00:00Z');
+
+      const forged = untimestamped('evt_race_null', 'canceled');
+      const real = {
+        event: event({ id: 'evt_race_real', created: Math.floor(Date.parse('2026-09-01T12:00:00Z') / 1000) }),
+        stripe: makeStripe(stripeSubscription({ status: 'active' })).client,
+      };
+      const [a, b] = forgedFirst ? [forged, real] : [real, forged];
+
+      await Promise.all([
+        applyStripeEvent({ event: a.event, store, stripe: a.stripe, now: NOW }),
+        applyStripeEvent({ event: b.event, store, stripe: b.stripe, now: NOW }),
+      ]);
+
+      expect(subscriptions.get('user-1')?.status, `forgedFirst=${forgedFirst}`).toBe('active');
+      expect(entitlements.get('user-1')?.tier, `forgedFirst=${forgedFirst}`).toBe('premium');
+    }
+  });
+});

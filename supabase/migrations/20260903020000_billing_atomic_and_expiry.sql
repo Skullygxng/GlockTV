@@ -126,9 +126,16 @@ begin
     cancel_at_period_end = excluded.cancel_at_period_end,
     provider_updated_at = excluded.provider_updated_at,
     updated_at = now()
+  -- Fail closed on an unknown incoming timestamp. Only a null on the
+  -- committed side means "nothing established yet, anything may set it";
+  -- a null on the incoming side is an event that cannot prove it is newer,
+  -- and letting it through would let an untimestamped payload overwrite
+  -- known-good state.
   where existing.provider_updated_at is null
-     or excluded.provider_updated_at is null
-     or excluded.provider_updated_at >= existing.provider_updated_at;
+     or (
+       excluded.provider_updated_at is not null
+       and excluded.provider_updated_at >= existing.provider_updated_at
+     );
 
   get diagnostics v_applied = row_count;
   if v_applied = 0 then
@@ -156,3 +163,12 @@ revoke all on function public.apply_billing_provider_state(
   uuid, text, text, text, text, text, timestamptz, boolean, timestamptz,
   text, boolean, text, text, timestamptz
 ) from public, anon, authenticated;
+
+-- Revoking from PUBLIC removes the default execute grant, so the one caller
+-- that is meant to run this needs it back explicitly. The webhook reaches it
+-- through PostgREST with the service-role key; nothing a browser can present
+-- resolves to this role.
+grant execute on function public.apply_billing_provider_state(
+  uuid, text, text, text, text, text, timestamptz, boolean, timestamptz,
+  text, boolean, text, text, timestamptz
+) to service_role;

@@ -278,8 +278,11 @@ describe('cancellation expiry is enforced by the database clock', () => {
   it('keeps the effective view read-only and scoped to the caller own row', () => {
     expect(sql).toContain('security_invoker = on');
     expect(sql).toContain('revoke all on public.account_entitlements_effective from public, anon');
-    const grants = sql.match(/grant [^;]*;/g) ?? [];
-    expect(grants).toEqual(['grant select on public.account_entitlements_effective to authenticated;']);
+    /* Table and view grants only - the function's execute grant is checked
+       separately, and goes to a role no browser can present. */
+    const relationGrants = (sql.match(/grant [^;]*;/g) ?? [])
+      .filter((grant) => !grant.includes('on function'));
+    expect(relationGrants).toEqual(['grant select on public.account_entitlements_effective to authenticated;']);
   });
 
   it('is what the app actually reads', () => {
@@ -306,6 +309,19 @@ describe('atomic provider-state application', () => {
     expect(sql).toMatch(/on conflict \(user_id\) do update set[\s\S]*?where existing\.provider_updated_at is null[\s\S]*?excluded\.provider_updated_at >= existing\.provider_updated_at/);
   });
 
+  it('fails closed when the incoming state has no provider timestamp', () => {
+    /*
+     * The regression this catches: an `or excluded.provider_updated_at is null`
+     * arm let an event that cannot prove it is newer overwrite committed,
+     * timestamped state. A null on the committed side is different - it means
+     * nothing is established yet - so only that arm is unconditional.
+     */
+    const where = sql.match(/where existing\.provider_updated_at is null[\s\S]*?;/)?.[0] ?? '';
+    expect(where).not.toBe('');
+    expect(where).not.toMatch(/or\s+excluded\.provider_updated_at is null/);
+    expect(where).toMatch(/excluded\.provider_updated_at is not null\s*and\s*excluded\.provider_updated_at >= existing\.provider_updated_at/);
+  });
+
   it('writes the entitlement only when the subscription write won', () => {
     const applied = sql.indexOf("return 'stale'");
     const entitlement = sql.indexOf('insert into public.account_entitlements');
@@ -313,11 +329,34 @@ describe('atomic provider-state application', () => {
     expect(entitlement).toBeGreaterThan(applied);
   });
 
-  it('is not callable from a browser', () => {
+  it('is not executable by public, anon or authenticated', () => {
     /* It writes account_entitlements directly, so exposing it would be handing
        out the setPremium() this whole design exists to prevent. */
     expect(sql).toMatch(/revoke all on function public\.apply_billing_provider_state[\s\S]*?from public, anon, authenticated/);
-    expect(sql).not.toMatch(/grant execute[^;]*apply_billing_provider_state/);
+
+    const grants = sql.match(/grant execute on function[^;]*;/g) ?? [];
+    for (const grant of grants) {
+      for (const role of ['public', 'anon', 'authenticated']) {
+        expect(grant).not.toMatch(new RegExp(`to[^;]*\\b${role}\\b`));
+      }
+    }
+  });
+
+  it('is explicitly executable by the service role that actually calls it', () => {
+    /*
+     * Revoking from PUBLIC removes the default execute grant, so without this
+     * the webhook's own PostgREST call would fail - the function would be
+     * unreachable by anyone at all.
+     */
+    const grants = sql.match(/grant execute on function[^;]*;/g) ?? [];
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toContain('public.apply_billing_provider_state');
+    expect(grants[0]).toMatch(/to service_role;$/);
+
+    // Granted after the revoke, or the revoke would take it straight back.
+    expect(sql.indexOf('grant execute on function')).toBeGreaterThan(
+      sql.indexOf('revoke all on function public.apply_billing_provider_state'),
+    );
   });
 
   it('pins its search path, like the repository other definer functions', () => {
@@ -327,12 +366,22 @@ describe('atomic provider-state application', () => {
 
   it('still leaves the browser no write path to billing or entitlement state', () => {
     const base = migration.replace(/--[^\n]*/g, '').toLowerCase();
-    const grants = [...(base.match(/grant [^;]*;/g) ?? []), ...(sql.match(/grant [^;]*;/g) ?? [])];
-    for (const grant of grants) {
+    const all = [...(base.match(/grant [^;]*;/g) ?? []), ...(sql.match(/grant [^;]*;/g) ?? [])];
+
+    /* Everything a browser can reach - anon and authenticated are the two
+       roles a publishable key resolves to. */
+    const browserGrants = all.filter((grant) => /\bto\b[^;]*\b(anon|authenticated|public)\b/.test(grant));
+    expect(browserGrants.length).toBeGreaterThan(0);
+    for (const grant of browserGrants) {
       expect(grant).toContain('grant select');
-      for (const writer of ['insert', 'update', 'delete', 'all privileges']) {
+      for (const writer of ['insert', 'update', 'delete', 'execute', 'all privileges']) {
         expect(grant).not.toContain(writer);
       }
+    }
+
+    /* And the only thing granted beyond that is execute, to the service role. */
+    for (const grant of all.filter((grant) => !browserGrants.includes(grant))) {
+      expect(grant).toMatch(/grant execute on function[^;]*to service_role;/);
     }
   });
 });

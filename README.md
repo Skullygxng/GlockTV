@@ -37,6 +37,67 @@ The workflow in `.github/workflows/deploy-pages.yml` builds and publishes the si
 This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 
+## Support tickets
+
+Customers open tickets from the account panel, choose a category, and follow the
+conversation. Support is part of the account surface, not a sixth destination -
+the mobile tab bar stays at exactly five product slots.
+
+Categories are the product's own areas: Account, Billing, Playback, Live TV,
+PPV, Friends, Bug report, Other.
+
+### What a browser cannot do
+
+The design turns on one question: what stops an ordinary account from answering
+its own ticket as staff, or marking it resolved? The answer is that neither is
+reachable, rather than being guarded by a check the browser is asked to respect.
+
+| Escalation | Why it fails |
+| --- | --- |
+| make myself staff | `staff_members` has **no grant** to `anon` or `authenticated`, so PostgREST refuses the relation before RLS is consulted. There is no RPC that adds a member. |
+| reply as staff | `author_role` is **not read from the payload**. A `BEFORE INSERT` trigger derives it from staff membership, so a request claiming `staff` is overwritten. |
+| resolve my own ticket | `authenticated` is granted `select, insert` on `support_tickets` and **no update at all**, so there is no policy mistake that could become self-service. |
+| read another customer's ticket | every policy is scoped to `auth.uid()` or `is_support_staff()`; messages are reachable only through a ticket the caller may already see. |
+| edit or delete the transcript | no `update` or `delete` grant on `support_messages`. |
+
+`is_support_staff()` is `SECURITY DEFINER` with `search_path` pinned empty. It
+answers only about the caller, so it cannot enumerate staff or test anybody
+else.
+
+### Staff
+
+Membership is granted out of band by a trusted caller - the service role or the
+SQL console:
+
+```sql
+insert into public.staff_members (user_id, role) values ('<auth uid>', 'agent');
+```
+
+There is deliberately no UI and no RPC for this. **A staff console is not built
+here.** The seam it needs exists and is enforced by the database - staff already
+read every ticket and their replies are already attributed correctly - so the
+remaining work is a console, not a security model. That is the explicit
+follow-up.
+
+Status transitions are likewise a staff action with no browser path today. A
+customer cannot close their own ticket in V1: allowing it means a status write,
+and a narrow one is still a wider surface than none. Worth revisiting once the
+staff console exists.
+
+### Guests
+
+A ticket needs somebody who can be reached and who can come back to it, and an
+anonymous session that clears its storage loses the ticket and every reply on
+it. So a protected account is required. The panel explains this, and the insert
+policy enforces it against the JWT's `is_anonymous` claim - because the UI is
+not where it is decided.
+
+### Email
+
+There is none, deliberately. No paid email provider is introduced, and the
+ticket system works without one: replies appear in the panel. Notification
+delivery is a future adapter, not a dependency.
+
 ## Premium membership
 
 GlockTV Premium is one recurring monthly subscription whose only V1 benefit is

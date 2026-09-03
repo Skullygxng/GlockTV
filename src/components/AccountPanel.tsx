@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from 'react';
-import { CreditCard, LoaderCircle, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { CreditCard, LifeBuoy, LoaderCircle, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
 import { useAccount } from './AccountProvider';
 import { useDialogBehavior } from '../hooks/useDialogBehavior';
 import { createDefaultBillingService, type BillingService } from '../lib/billing';
@@ -17,9 +17,12 @@ function getDefaultBilling(): BillingService | null {
 
 export function AccountPanel({
   onClose,
+  onOpenSupport,
   billing: providedBilling,
 }: {
   onClose: () => void;
+  /* Support is part of the account surface rather than a sixth destination. */
+  onOpenSupport?: () => void;
   /* Omit for the app's own billing client; pass null to run with no backend. */
   billing?: BillingService | null;
 }) {
@@ -210,6 +213,14 @@ export function AccountPanel({
           {status && <small role="status">{status}</small>}
           {actionError && <small className="account-panel__error" role="alert">{actionError}</small>}
         </form>
+
+        {onOpenSupport && (
+          <div className="account-panel__actions">
+            <button type="button" onClick={onOpenSupport}>
+              <LifeBuoy /> Contact support
+            </button>
+          </div>
+        )}
       </section>
     </div>
   );

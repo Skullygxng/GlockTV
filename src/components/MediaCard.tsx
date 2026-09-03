@@ -10,6 +10,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { imageUrl, type MediaItem } from '../lib/media';
+import { formatProgressPosition, progressPercent, type ProgressEntry } from '../lib/watchProgress';
 import {
   createYouTubePlayer,
   type PartyPlayer,
@@ -42,6 +43,13 @@ export interface MediaCardProps {
   item: MediaItem;
   match: number;
   saved: boolean;
+  /*
+   * Where this viewer got to, when the card is standing in for something they
+   * are partway through. Absent everywhere else, so the ordinary Discover card
+   * is unchanged.
+   */
+  progress?: ProgressEntry | null;
+  onForgetProgress?: () => void;
   trailerKey?: string | null;
   onToggleList: (item: MediaItem) => void;
   onWatch: (item: MediaItem) => void;
@@ -67,6 +75,8 @@ export function MediaCard({
   item,
   match,
   saved,
+  progress,
+  onForgetProgress,
   trailerKey = null,
   onToggleList,
   onWatch,
@@ -307,6 +317,43 @@ export function MediaCard({
             || 'Discover why this title belongs in your next watch.'}
         </p>
 
+        {/*
+          * A progress bar only where there is real progress to draw. percent is
+          * null when the provider reported a position but never a length, and a
+          * bar with an invented denominator would be a lie about how much is
+          * left - so that case shows the timestamp alone.
+          */}
+        {progress && (
+          <div className="media-card__progress">
+            {progressPercent(progress) !== null && (
+              <div
+                className="media-card__progress-track"
+                role="progressbar"
+                aria-label="Watched"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={progressPercent(progress)!}
+              >
+                <i style={{ width: `${progressPercent(progress)}%` }} />
+              </div>
+            )}
+            <small>
+              {item.mediaType === 'tv' && `S${progress.seasonNumber} / E${progress.episodeNumber} - `}
+              {formatProgressPosition(progress.positionSeconds)}
+              {progress.durationSeconds ? ` of ${formatProgressPosition(progress.durationSeconds)}` : ' in'}
+            </small>
+            {onForgetProgress && (
+              <button
+                type="button"
+                className="media-card__progress-remove"
+                onClick={onForgetProgress}
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        )}
+
         <button
           className="media-card__watch"
           type="button"
@@ -317,9 +364,11 @@ export function MediaCard({
             fill="currentColor"
           />
 
-          {item.mediaType === 'movie'
-            ? 'Watch movie'
-            : 'Watch episode'}
+          {progress
+            ? `Resume ${item.mediaType === 'movie' ? 'movie' : 'episode'}`
+            : item.mediaType === 'movie'
+              ? 'Watch movie'
+              : 'Watch episode'}
         </button>
 
         <button

@@ -1,0 +1,58 @@
+/*
+ * Advertising, kept in its lane.
+ *
+ * Every rule here is about staying out of the way: the slot occupies layout it
+ * was given rather than overlaying anything, it never sits above the player or
+ * the navigation in the stacking order, and it cannot grow past the column it
+ * is in. A slot that renders nothing takes no space at all, because the
+ * component returns null rather than an empty box.
+ */
+.ad-slot {
+  display: block;
+  max-width: 100%;
+  margin: 0 0 4px;
+  /* Deliberately low. Dialogs sit at 80 and the bottom navigation at 40; an ad
+     must never be able to cover either. */
+  position: relative;
+  z-index: 1;
+}
+
+.ad-slot > small {
+  display: block;
+  margin: 0 0 6px;
+  color: #6f6a78;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.ad-slot iframe {
+  display: block;
+  max-width: 100%;
+  border: 1px solid #1b1920;
+  border-radius: 8px;
+  background: #0b0b10;
+  color-scheme: dark;
+}
+
+.ad-slot--context-rail {
+  margin-top: auto;
+}
+
+.ad-slot--details-panel {
+  margin: 18px 0 0;
+}
+
+@media (max-width: 700px) {
+  /* The details overlay is the only slot that reaches a phone, and it centres
+     rather than stretching, so a 300px creative never forces the panel wider
+     than the viewport. */
+  .ad-slot--details-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-top: 16px;
+  }
+  .ad-slot--details-panel > small { align-self: flex-start; }
+}

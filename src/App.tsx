@@ -2,7 +2,7 @@ import { FormEvent, lazy, Suspense, type TouchEvent, type WheelEvent, useCallbac
 import { AnimatePresence, motion } from 'motion/react';
 import {
   Bell, Bookmark, ChevronDown, ChevronRight, ChevronUp, CircleUser, Clapperboard,
-  Compass, Film, Filter, LoaderCircle, Play, Search,
+  Compass, Film, Filter, History, LoaderCircle, Play, Search,
   SlidersHorizontal, Sparkles, Star, Users, X, Zap,
 } from 'lucide-react';
 import { MediaCard } from './components/MediaCard';
@@ -12,6 +12,9 @@ import { useDialogBehavior } from './hooks/useDialogBehavior';
 import { AccountPanel } from './components/AccountPanel';
 import { SupportPanel } from './components/SupportPanel';
 import { AccountProvider, useAccount } from './components/AccountProvider';
+import { AdSlot } from './components/AdSlot';
+import { WatchProgressProvider } from './components/WatchProgressProvider';
+import type { WatchProgressService } from './lib/watchProgressService';
 import type { AccountService } from './lib/accountService';
 import type { BillingService } from './lib/billing';
 import type { SupportService } from './lib/support';
@@ -20,6 +23,8 @@ import { PlaybackModal } from './components/PlaybackModal';
 import { type DiscoveryFilters, type ReleaseEra, type RuntimeFilter } from './lib/discovery';
 import { composeDiscoverFeed } from './lib/feed';
 import { imageUrl, scoreMatch, type MediaItem } from './lib/media';
+import { useWatchProgress } from './components/WatchProgressProvider';
+import { entryToMediaItem, type ProgressEntry } from './lib/watchProgress';
 import { getPlaybackConfig, type PlaybackConfig } from './lib/playback';
 import {
   initialSessionState,
@@ -45,6 +50,8 @@ export interface AppProps {
   accountService?: AccountService | null;
   /* Omit for the app's own billing client; pass null to run with no backend. */
   billingService?: BillingService | null;
+  /* Omit for the app's own progress layer; pass null for device-local only. */
+  watchProgressService?: WatchProgressService | null;
   /* Omit for the app's own support layer; pass null to run with no backend. */
   supportService?: SupportService | null;
 }
@@ -110,10 +117,15 @@ function LoadingState() {
  * The account layer wraps the whole shell, so identity and entitlements are
  * owned here rather than fetched again by each feature that needs them.
  */
-export function App({ accountService, ...props }: AppProps) {
+export function App({ accountService, watchProgressService, ...props }: AppProps) {
   return (
+    /* Progress sits inside the account, not beside it: it re-syncs when the
+       session changes, and a guest's device-local history is the same code
+       path with no service under it. */
     <AccountProvider service={accountService}>
-      <AppShell {...props} />
+      <WatchProgressProvider service={watchProgressService}>
+        <AppShell {...props} />
+      </WatchProgressProvider>
     </AccountProvider>
   );
 }
@@ -142,6 +154,23 @@ function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, b
   const [previewContext, setPreviewContext] = useState<PreviewContext | null>(null);
   const [modalMode, setModalMode] = useState<'details' | 'trailer' | 'channel' | null>(null);
   const [playbackItem, setPlaybackItem] = useState<MediaItem | null>(null);
+  /*
+   * Which episode the player should open on.
+   *
+   * Only ever set from a Continue Watching card, where the entry names a real
+   * season and episode. Everywhere else this is null and the player opens
+   * where it always has - a series at its first episode. Without it, resuming
+   * a show you are four episodes into would drop you back at S1/E1 with the
+   * right title and the wrong story.
+   */
+  const [playbackStart, setPlaybackStart] = useState<{ season: number; episode: number } | null>(null);
+
+  const openPlayback = useCallback((item: MediaItem, entry?: ProgressEntry | null) => {
+    setPlaybackStart(entry && entry.mediaType === 'tv'
+      ? { season: entry.seasonNumber, episode: entry.episodeNumber }
+      : null);
+    setPlaybackItem(item);
+  }, []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -150,6 +179,13 @@ function AppShell({ client, partyService, playbackConfig, partyPlaybackConfig, b
   /* Opened from the account panel, which closes as it opens - two stacked
      right-hand sheets would trap focus between them. */
   const [supportOpen, setSupportOpen] = useState(false);
+  /*
+   * My List has two things in it that are both "yours": what you saved, and
+   * what you are partway through. They share a destination rather than taking
+   * a sixth slot in a five-slot tab bar, and they render through the same card
+   * feed so Continue Watching needs no second visual language.
+   */
+  const [listTab, setListTab] = useState<'saved' | 'continue'>('saved');
   /*
    * Stripe's hosted pages come back with a marker. It is a cue to re-ask the
    * server what this account is entitled to and nothing else - a member who
@@ -277,8 +313,36 @@ const wheelLockedUntil = useRef(0);
     };
   }, [api]);
 
+  const watchProgress = useWatchProgress();
+
+  /*
+   * Continue Watching, as cards.
+   *
+   * A tile prefers a title this session already knows - the feed, or My List -
+   * because that carries the overview, rating and genres a card shows. The
+   * stored snapshot is the fallback, and it is what makes the surface work on
+   * a device that has never loaded this title, or with no TMDB key at all.
+   */
+  const continueItems = useMemo(() => {
+    const known = new Map<string, MediaItem>();
+    for (const item of [...items, ...session.myList]) known.set(mediaKey(item), item);
+    return watchProgress.continueWatching.map(
+      (entry) => entryToMediaItem(entry, known.get(mediaKey({ id: entry.mediaId, mediaType: entry.mediaType }))),
+    );
+  }, [items, session.myList, watchProgress.continueWatching]);
+
+  /*
+   * Episodes share their series' id, so a card list keyed by media key would
+   * collapse three episodes of one show into one card. The entry list stays
+   * alongside, in the same order, and the card at an index is described by the
+   * entry at that index.
+   */
+  const activeProgressEntry = view === 'list' && listTab === 'continue'
+    ? watchProgress.continueWatching[activeIndex] ?? null
+    : null;
+
   const currentItems = view === 'list'
-    ? session.myList
+    ? listTab === 'continue' ? continueItems : session.myList
     : items.filter((item) => !session.skippedKeys.includes(mediaKey(item)));
 
   useEffect(() => {
@@ -287,6 +351,8 @@ const wheelLockedUntil = useRef(0);
       return Math.min(index, currentItems.length - 1);
     });
   }, [currentItems.length]);
+
+  useEffect(() => { setActiveIndex(0); }, [listTab]);
 
   const current = currentItems[Math.min(activeIndex, Math.max(0, currentItems.length - 1))];
   const saved = current
@@ -675,6 +741,20 @@ const wheelLockedUntil = useRef(0);
             <Zap /> Trending
           </button>
 
+          {/* Desktop only, by virtue of living in the sidebar. On a phone the
+              same surface is the Continue Watching tab inside My List. */}
+          {!!watchProgress.continueWatching.length && (
+            <button
+              className={view === 'list' && listTab === 'continue' ? 'active' : ''}
+              onClick={() => {
+                setListTab('continue');
+                setNav('list');
+              }}
+            >
+              <History /> Continue Watching
+            </button>
+          )}
+
           <button
             onClick={() => {
               const next: DiscoveryFilters = {
@@ -829,8 +909,31 @@ const wheelLockedUntil = useRef(0);
 
             {view === 'list' && (
               <div className="view-title">
-                <span>Saved for this session</span>
-                <h2>Your List</h2>
+                <span>{listTab === 'continue' ? 'Pick up where you left off' : 'Saved for this session'}</span>
+                <h2>{listTab === 'continue' ? 'Continue Watching' : 'Your List'}</h2>
+                <div className="view-tabs" role="tablist" aria-label="My List sections">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={listTab === 'saved'}
+                    className={listTab === 'saved' ? 'active' : ''}
+                    onClick={() => setListTab('saved')}
+                  >
+                    My List
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={listTab === 'continue'}
+                    className={listTab === 'continue' ? 'active' : ''}
+                    onClick={() => setListTab('continue')}
+                  >
+                    Continue Watching
+                    {!!watchProgress.continueWatching.length && (
+                      <i>{watchProgress.continueWatching.length}</i>
+                    )}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -849,9 +952,13 @@ const wheelLockedUntil = useRef(0);
                   item={current}
                   match={match}
                   saved={saved}
+                  progress={activeProgressEntry}
+                  onForgetProgress={activeProgressEntry
+                    ? () => { void watchProgress.forgetProgress(activeProgressEntry); }
+                    : undefined}
                   trailerKey={previewTrailerKey}
                   onToggleList={(item) => dispatch({ type: 'toggle-list', item })}
-                  onWatch={setPlaybackItem}
+                  onWatch={(chosen) => openPlayback(chosen, activeProgressEntry)}
                   onDetails={(item) => void openContext(item, 'details')}
                   onTrailer={(item) => void openContext(item, 'trailer')}
                   onLike={(item) => {
@@ -866,11 +973,21 @@ const wheelLockedUntil = useRef(0);
             ) : (
               <div className="state-panel">
                 <Bookmark />
-                <strong>{view === 'list' ? 'Your list is empty' : 'No matches yet'}</strong>
+                <strong>{
+                  view !== 'list'
+                    ? 'No matches yet'
+                    : listTab === 'continue'
+                      ? 'Nothing in progress'
+                      : 'Your list is empty'
+                }</strong>
                 <span>
-                  {view === 'list'
-                    ? 'Save a title from Discover and it will appear here.'
-                    : 'Try clearing a few filters.'}
+                  {view !== 'list'
+                    ? 'Try clearing a few filters.'
+                    : listTab === 'continue'
+                      /* Honest about the limit: position comes from the player,
+                         and not every provider reports one. */
+                      ? 'Start something and leave partway through. Titles appear here once a player reports where you got to.'
+                      : 'Save a title from Discover and it will appear here.'}
                 </span>
               </div>
             )}
@@ -941,6 +1058,10 @@ const wheelLockedUntil = useRef(0);
             <Users /> Watch together
           </button>
         </section>
+
+        {/* Last in the column, so nothing about the product moves to make room
+            for it and a Premium member's layout is identical without it. */}
+        <AdSlot placement="context-rail" />
       </aside>
 
       <nav className="bottom-nav" aria-label="Mobile navigation">
@@ -1009,10 +1130,13 @@ const wheelLockedUntil = useRef(0);
         {playbackItem && (
           <PlaybackModal
             item={playbackItem}
+            initialSeason={playbackStart?.season}
+            initialEpisode={playbackStart?.episode}
             config={playback}
             client={api}
-            onClose={() => setPlaybackItem(null)}
-            onSelect={setPlaybackItem}
+            onClose={() => { setPlaybackItem(null); setPlaybackStart(null); }}
+            /* A recommendation is a different title, so it starts fresh. */
+            onSelect={(next) => openPlayback(next)}
           />
         )}
       </AnimatePresence>
@@ -1396,6 +1520,10 @@ function TitleModal({
               </div>
 
               {!!providers.length && <small>Streaming availability powered by JustWatch.</small>}
+
+              {/* Below everything the viewer opened this panel for. Never over
+                  the trailer, never over the actions. */}
+              <AdSlot placement="details-panel" />
             </div>
           </>
         )}

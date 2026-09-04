@@ -289,6 +289,103 @@ There is none, deliberately. No paid email provider is introduced, and the
 ticket system works without one: replies appear in the panel. Notification
 delivery is a future adapter, not a dependency.
 
+## Reconciling migration history
+
+`supabase db push --dry-run` answers one question: which local versions the
+project's migration history does not record. It never says **why** they are
+missing, and the two reasons need opposite treatment:
+
+- the change was never made - it needs pushing;
+- the change was made another way (by hand, through the dashboard, or under a
+  different version string) - its **history** needs repairing, and pushing it
+  would re-run DDL against live objects.
+
+The **Apply Supabase migrations** workflow audits before it offers to do
+either. It runs `supabase migration list` for what the history records, then
+`scripts/audit-supabase-migrations.mjs`, which reads what each local migration
+creates - from the migration itself, not a hand-kept list - and asks the
+project which of those objects exist. Every statement it sends is a `SELECT`,
+and it refuses to send anything else.
+
+### The audit is diagnostic only
+
+It produces **evidence, not authorization**. It never prints or constructs a
+`supabase migration repair` command, and no status it reports means "proven
+equivalent" — because this parser cannot establish that.
+
+Names and existence are syntax; equivalence is semantics, and the audit reads
+only the first. It does **not** verify:
+
+- policy `USING` / `WITH CHECK` expressions
+- function bodies, or `EXECUTE` grants on them
+- column-level grants, or `REVOKE` state beyond a role holding no table privilege
+- constraints added or changed by `ALTER TABLE`, or `FORCE ROW LEVEL SECURITY`
+- object ownership
+- which function a trigger fires, and when
+- index columns, order, uniqueness and predicates
+
+A policy with the right name and an inverted `USING` clause passes every check
+the audit makes and grants the world read access. That list is printed with
+every run, next to the results, so a "present" column is never read as a clean
+bill of health.
+
+You decide which versions may be repaired, and pass that hand-reviewed list to
+the workflow's `repair_versions` input. The audit does not produce it.
+
+### Object existence is not equivalence
+
+A migration establishes far more than the objects it names: RLS policies,
+grants and revokes, triggers, indexes, and whether a function is
+`SECURITY DEFINER` with a pinned `search_path`. Every one of those can be
+absent while the table sits there looking correct - and in this repository the
+security rests on those parts rather than on the tables. Marking such a
+migration applied writes it out of the history with its policies still missing,
+and nothing will ever apply them.
+
+So the audit reports every artifact a migration declares, and every verdict
+except `history_match` is a lead for a person rather than an instruction:
+
+| Verdict | Meaning |
+| --- | --- |
+| `history_match` | the exact version is already recorded; no action |
+| `same_name_candidate` | a remote entry shares this name under a different version; **manual equivalence review required** |
+| `schema_present_candidate` | everything the audit can look for is present, which is suggestive and proves nothing |
+| `partial` | some of its primary objects exist; investigate |
+| `absent` | none do; clearly pending, push it |
+| `unverifiable` | it declares nothing the audit can look for |
+
+Grant evidence keeps **`public` and `anon`** — this repository secures a table
+by revoking from exactly those roles and granting narrowly back, so dropping
+them would discard the half that matters. A revoke the same migration grants
+back to is excluded, because the end state for that role is granted.
+
+The audit also reports two things a dry run cannot:
+
+- **same name, different version** - a lead for a human, never grounds for
+  repair on its own. A shared name says somebody applied something with this
+  purpose, not that they applied this content.
+- **remote-only history entries** - changes the database has that this
+  repository does not, which a push touching the same objects could contradict.
+
+### When the dry run and the dashboard disagree
+
+The audit prints the project's identity first - masked ref, name, region,
+connected database - because "the history says X" means nothing without knowing
+which database said it, and a dry run that contradicts the dashboard is usually
+two different projects. Exact version matches are called out separately: if
+`db push` lists a version the history already records, the push and the audit
+are reading different histories, and that must be resolved before anything is
+repaired or pushed.
+
+Supply a **hand-reviewed** list of versions in the workflow's `repair_versions`
+input and dispatch it again: repair writes rows into
+`supabase_migrations.schema_migrations` and touches **no schema and no data**,
+then the dry run re-runs so you can see what genuinely remains.
+
+Repair is opt-in and runs on a dry run too, because repairing and re-checking
+the push is the point of doing it. Applying still needs `dry_run` unticked, and
+nothing about repairing can trigger an apply.
+
 ## Verifying the database boundaries
 
 Everything that stops one account reading another's watch history, stops a

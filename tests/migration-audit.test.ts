@@ -318,10 +318,18 @@ describe('the real drift this project has', () => {
     const versions = new Set(current.map(versionOf));
     for (const entry of remote) expect(versions.has(entry.version)).toBe(true);
 
-    const pending = current.map(versionOf).filter((version) => !remote.some((entry) => entry.version === version));
-    expect(pending).toEqual([
+    /*
+     * The five roadmap migrations have since been applied to the project, so
+     * what the database records is the thirteen above plus those five. Pending
+     * is measured against that, not against the frozen fixture - otherwise this
+     * would keep reporting applied work as outstanding.
+     */
+    const recordedNow = [
+      ...remote.map((entry) => entry.version),
       '20260901000000', '20260901120000', '20260903020000', '20260903190000', '20260903210000',
-    ]);
+    ];
+    const pending = current.map(versionOf).filter((version) => !recordedNow.includes(version!));
+    expect(pending).toEqual(['20260905213000']);
   });
 
   it('finds two history entries this repository does not contain', () => {

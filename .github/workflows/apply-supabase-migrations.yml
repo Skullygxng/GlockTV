@@ -94,6 +94,19 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: node scripts/audit-supabase-migrations.mjs
 
+      # The audit above reads names and existence and says plainly that this is
+      # not equivalence. This reads the SQL the project actually ran, which
+      # Supabase records in supabase_migrations.schema_migrations.statements, and
+      # compares it with the local file text. That turns "these share a name"
+      # into a verdict, and it prints in full any recorded migration this
+      # repository has no file for - the only copy of which is the database.
+      # One SELECT, through the same read-only guard.
+      - name: Compare local migrations against the recorded SQL
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: node scripts/compare-remote-migration-sql.mjs
+
       # Opt-in, and history-only: `migration repair` writes rows into
       # supabase_migrations.schema_migrations and touches no schema and no
       # data. It runs on a dry run too, because repairing and then re-checking

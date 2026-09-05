@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import loungeAuthMigrationSource from '../supabase/migrations/20260828020000_official_lounge_vote_authorization.sql?raw';
-import privateTitleMigrationSource from '../supabase/migrations/20260811123000_full_title_watch_rooms.sql?raw';
+import loungeAuthMigrationSource from '../supabase/migrations/20260828044659_official_lounge_vote_authorization_hotfix.sql?raw';
+import conflictHotfixSource from '../supabase/migrations/20260828045110_official_lounge_vote_conflict_hotfix.sql?raw';
+import privateTitleMigrationSource from '../supabase/migrations/20260811163336_full_title_watch_rooms.sql?raw';
 import { officialBallotTallies, officialBallotWinner } from '../src/lib/lounge';
 import type { OfficialLoungeBallotEntry } from '../src/lib/watchParty';
 
@@ -114,11 +115,22 @@ describe('official lounge vote authorization', () => {
     expect(sql).toContain('select counted.votes as votes, b.*');
     expect(sql).toContain('into v_winner');
     expect(sql).toContain('coalesce(v_winner.votes, 0)');
-    expect(sql).toContain('on conflict on constraint official_lounge_votes_pkey');
     expect(sql).not.toContain('v_winner public.official_lounge_ballot%rowtype;');
     expect(sql).not.toContain('v_winner_votes integer;');
     expect(sql).not.toContain('into v_winner_votes, v_winner');
-    expect(sql).not.toContain('on conflict (room_id, cycle_started_at, user_id)');
+  });
+
+  /*
+   * The vote upsert's conflict target is the one thing these two migrations
+   * disagree about, and the order matters: the project ran the column-list form
+   * first and replaced it minutes later with the constraint name. Splitting the
+   * assertion keeps that history checkable instead of collapsing it into the
+   * end state.
+   */
+  it('arbitrates the vote upsert on the primary key constraint, as the later hotfix does', () => {
+    expect(conflictHotfixSource).toContain('on conflict on constraint official_lounge_votes_pkey');
+    expect(conflictHotfixSource).not.toContain('on conflict (room_id, cycle_started_at, user_id)');
+    expect(loungeAuthMigrationSource).toContain('on conflict (room_id, cycle_started_at, user_id)');
   });
 
   it('serializes official title rotation against the locked room row', () => {

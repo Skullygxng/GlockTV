@@ -1,3 +1,15 @@
+-- Recovered from supabase_migrations.schema_migrations.statements on the live
+-- project: this is what production ran, and until now the database held the
+-- only copy. Rebuilding this project from the repository would have lost it.
+--
+-- It differs from the file it supersedes in exactly one statement -
+-- cast_official_lounge_vote arbitrates its upsert on the column list
+-- (room_id, cycle_started_at, user_id) rather than on the primary key
+-- constraint by name. The constraint form arrived minutes later in
+-- 20260828045110, which is why both are recorded separately here rather than
+-- folded into one file: replaying a merged version would not reproduce the
+-- history the project actually has.
+--
 -- Authoritative official-lounge ballot. Members can only vote for current-cycle
 -- catalog candidates. Chat is no longer the vote-write API. Title metadata comes
 -- from ballot rows, not client arguments. Chat is not deleted on rotation.
@@ -232,7 +244,7 @@ begin
     room_id, cycle_started_at, user_id, media_type, title_id
   )
   values (p_room_id, v_room.playback_updated_at, auth.uid(), p_media_type, p_title_id)
-  on conflict on constraint official_lounge_votes_pkey
+  on conflict (room_id, cycle_started_at, user_id)
   do update set media_type = excluded.media_type, title_id = excluded.title_id, created_at = now();
 
   return query select * from public.get_official_lounge_ballot(p_room_id);

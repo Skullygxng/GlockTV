@@ -15,8 +15,8 @@ import {
 } from '../scripts/lib/migration-audit.mjs';
 import auditScript from '../scripts/audit-supabase-migrations.mjs?raw';
 import workflow from '../.github/workflows/apply-supabase-migrations.yml?raw';
-import watchParties from '../supabase/migrations/20260811010000_watch_parties.sql?raw';
-import publicRoomGrant from '../supabase/migrations/20260811125500_public_room_select_grant.sql?raw';
+import watchParties from '../supabase/migrations/20260811044118_watch_parties.sql?raw';
+import publicRoomGrant from '../supabase/migrations/20260811164102_public_room_select_grant.sql?raw';
 import watchProgress from '../supabase/migrations/20260903190000_watch_progress.sql?raw';
 import supportTickets from '../supabase/migrations/20260903210000_support_tickets.sql?raw';
 
@@ -294,6 +294,34 @@ describe('the real drift this project has', () => {
     const summary = auditSummary(renamed.map((entry) => ({ ...entry, status: 'same_name_candidate' } as AuditRow)));
     expect(summary.sameNameCandidates).toHaveLength(8);
     expect(summary).not.toHaveProperty('repairable');
+  });
+
+  /*
+   * The fixtures above are the drift as it stood before this reconciliation and
+   * are deliberately frozen there. This one reads the directory as it is now,
+   * so the two cannot silently converge on a stale answer: once the local files
+   * carry the versions the project recorded, there is nothing left to rename and
+   * no history entry without a file. If someone adds a migration whose version
+   * collides with recorded history, or removes one of the recovered hotfixes,
+   * this fails.
+   */
+  it('leaves no drift in the migrations directory as it stands now', () => {
+    const current = Object.keys(import.meta.glob('../supabase/migrations/*.sql', { eager: false }))
+      .map((path) => path.split('/').pop()!)
+      .sort();
+
+    expect(renameCandidates(current, remote)).toEqual([]);
+    expect(remoteOnly(current, remote)).toEqual([]);
+
+    /* Every recorded version now has a file, so a push can only be the roadmap
+       migrations that were never applied. */
+    const versions = new Set(current.map(versionOf));
+    for (const entry of remote) expect(versions.has(entry.version)).toBe(true);
+
+    const pending = current.map(versionOf).filter((version) => !remote.some((entry) => entry.version === version));
+    expect(pending).toEqual([
+      '20260901000000', '20260901120000', '20260903020000', '20260903190000', '20260903210000',
+    ]);
   });
 
   it('finds two history entries this repository does not contain', () => {

@@ -197,18 +197,64 @@ export async function applyStripeEvent({
   return { handled: true, reason: 'applied', userId, tier: entitlement.tier };
 }
 
+/*
+ * Which subscription an event is about.
+ *
+ * customer.subscription.* events carry the subscription itself; checkout and
+ * invoice events reference one. Getting this wrong is expensive in a specific
+ * way: a wrong id is not ignored, it is fetched, and Stripe answers "No such
+ * subscription" with a 404 that becomes a thrown error and a 500. Stripe then
+ * retries the delivery, so a misread shape turns into a webhook that can never
+ * succeed rather than one that quietly does nothing.
+ *
+ * That is what an earlier version did. Its last resort accepted any object with
+ * an id and a status as a subscription, and an Invoice has both - id "in_...",
+ * status "paid" - so every invoice whose reference it failed to find was sent
+ * to Stripe as though the invoice were a subscription.
+ */
 function resolveSubscriptionId(object: Record<string, unknown>): string | null {
-  /* customer.subscription.* events carry the subscription itself; checkout and
-     invoice events reference it. */
-  if (typeof object.id === 'string' && typeof object.status === 'string' && 'items' in object) return object.id;
-  const referenced = object.subscription;
-  if (typeof referenced === 'string') return referenced;
-  if (referenced && typeof referenced === 'object' && typeof (referenced as { id?: unknown }).id === 'string') {
-    return (referenced as { id: string }).id;
+  /* Identified by being a subscription, never by merely resembling one. */
+  if (isSubscriptionObject(object)) return typeof object.id === 'string' ? object.id : null;
+
+  /*
+   * Both invoice shapes. Before 2025-03-31.basil an invoice carried
+   * `subscription` at the top level; that field was removed in Basil and the
+   * reference moved under `parent`, guarded by parent.type. Checkout sessions
+   * still use the top-level field, so both are read and neither is preferred -
+   * whichever is present wins.
+   */
+  return referencedId(object.subscription) ?? referencedId(subscriptionDetailsOf(object)?.subscription) ?? null;
+}
+
+/*
+ * `object: 'subscription'` is what Stripe actually sends. The items check is
+ * for payloads that omit the discriminator - this repository's own fixtures do
+ * - and is still narrow, because an invoice has `lines`, not `items`.
+ */
+function isSubscriptionObject(object: Record<string, unknown>): boolean {
+  if (object.object === 'subscription') return true;
+  return 'items' in object && typeof object.id === 'string' && typeof object.status === 'string';
+}
+
+/* A Stripe reference is either the id or the expanded object. */
+function referencedId(value: unknown): string | null {
+  if (typeof value === 'string' && value) return value;
+  if (value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string') {
+    const id = (value as { id: string }).id;
+    return id || null;
   }
-  /* A subscription object without items still identifies itself. */
-  if (typeof object.id === 'string' && typeof object.status === 'string') return object.id;
   return null;
+}
+
+/* invoice.parent.subscription_details, only when parent says that is what it
+   holds - parent is a tagged union and the other arms reference other things. */
+function subscriptionDetailsOf(object: Record<string, unknown>): Record<string, unknown> | null {
+  const parent = object.parent;
+  if (!parent || typeof parent !== 'object') return null;
+  const tag = (parent as { type?: unknown }).type;
+  if (typeof tag === 'string' && tag !== 'subscription_details') return null;
+  const details = (parent as { subscription_details?: unknown }).subscription_details;
+  return details && typeof details === 'object' ? details as Record<string, unknown> : null;
 }
 
 async function resolveUserId(

@@ -64,6 +64,13 @@ jobs:
         run: |
           supabase secrets list --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
 
+      # Which functions the project is actually serving, and in what state.
+      - name: Report deployed function status
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          supabase functions list --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
       # Named explicitly rather than deploying everything under functions/, so
       # a new directory cannot reach production without a deliberate change here.
       - name: Deploy billing functions
@@ -76,3 +83,43 @@ jobs:
             --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
           supabase functions deploy stripe-webhook \
             --project-ref "${{ secrets.SUPABASE_PROJECT_REF }}"
+
+      # Unauthenticated probes of the three live endpoints. They create nothing
+      # and charge nothing: each function checks its configuration first, then
+      # rejects the caller, so the status code alone distinguishes "secrets
+      # missing" from "secrets loaded, caller not signed in".
+      #
+      #   create-checkout        500 = not configured | 401 = configured
+      #   create-billing-portal  500 = not configured | 401 = configured
+      #   stripe-webhook         500 = not configured | 400 = signature enforced
+      #
+      # The 400 from the webhook is the important one: it is reached only after
+      # the secrets load, and only by failing signature verification, which
+      # proves the signature path is on rather than bypassed. No response body
+      # here contains a secret.
+      - name: Probe the deployed endpoints
+        env:
+          BASE: https://${{ secrets.SUPABASE_PROJECT_REF }}.supabase.co/functions/v1
+          ORIGIN: https://skullygxng.github.io
+        run: |
+          probe() {
+            name="$1"; shift
+            echo "----- $name -----"
+            code=$(curl -sS -o /tmp/body.txt -w '%{http_code}' "$@")
+            echo "HTTP $code"
+            echo "body: $(head -c 400 /tmp/body.txt)"
+            echo
+          }
+          probe create-checkout -X POST "$BASE/create-checkout" \
+            -H "Origin: $ORIGIN" -H 'Content-Type: application/json' -d '{}'
+          probe create-billing-portal -X POST "$BASE/create-billing-portal" \
+            -H "Origin: $ORIGIN" -H 'Content-Type: application/json' -d '{}'
+          probe stripe-webhook-unsigned -X POST "$BASE/stripe-webhook" \
+            -H 'Content-Type: application/json' \
+            -d '{"id":"evt_probe","type":"checkout.session.completed"}'
+          probe stripe-webhook-forged-signature -X POST "$BASE/stripe-webhook" \
+            -H 'Content-Type: application/json' \
+            -H 'stripe-signature: t=1,v1=0000000000000000000000000000000000000000000000000000000000000000' \
+            -d '{"id":"evt_probe","type":"checkout.session.completed"}'
+          probe create-checkout-disallowed-origin -X POST "$BASE/create-checkout" \
+            -H 'Origin: https://attacker.example' -H 'Content-Type: application/json' -d '{}'

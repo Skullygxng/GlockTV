@@ -246,13 +246,20 @@ function referencedId(value: unknown): string | null {
   return null;
 }
 
-/* invoice.parent.subscription_details, only when parent says that is what it
-   holds - parent is a tagged union and the other arms reference other things. */
+/*
+ * invoice.parent.subscription_details, and only when parent says that is what
+ * it holds.
+ *
+ * parent is a tagged union whose other arms reference other things, so the tag
+ * is required to equal subscription_details exactly. An earlier version only
+ * rejected a tag that was present and different, which let an untagged parent
+ * through on the strength of a subscription_details key alone - reading a field
+ * whose meaning is defined by a discriminator that was not there to confirm it.
+ */
 function subscriptionDetailsOf(object: Record<string, unknown>): Record<string, unknown> | null {
   const parent = object.parent;
   if (!parent || typeof parent !== 'object') return null;
-  const tag = (parent as { type?: unknown }).type;
-  if (typeof tag === 'string' && tag !== 'subscription_details') return null;
+  if ((parent as { type?: unknown }).type !== 'subscription_details') return null;
   const details = (parent as { subscription_details?: unknown }).subscription_details;
   return details && typeof details === 'object' ? details as Record<string, unknown> : null;
 }

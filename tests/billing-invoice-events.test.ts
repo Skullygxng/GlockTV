@@ -158,6 +158,64 @@ describe.each(INVOICE_EVENTS)('%s', (eventType) => {
   });
 });
 
+/*
+ * parent is a tagged union. Basil's migration note is explicit that the tag has
+ * to be checked before the arm is read, so the tag is asserted here in all
+ * three states rather than only when it disagrees.
+ */
+describe('the parent discriminator is required, not merely non-contradictory', () => {
+  const invoiceWithParent = (parent: unknown) => ({
+    id: 'evt_tag', type: 'invoice.payment_succeeded' as const, created: Math.floor(NOW.getTime() / 1000),
+    data: { object: { id: 'in_tag', object: 'invoice', status: 'paid', parent } },
+  });
+
+  it('resolves the nested subscription when the tag says subscription_details', async () => {
+    const h = harness();
+    const outcome = await applyStripeEvent({
+      event: invoiceWithParent({ type: 'subscription_details', subscription_details: { subscription: 'sub_live' } }),
+      stripe: h.stripe, store: h.store, now: NOW,
+    });
+    expect(h.asked).toEqual(['sub_live']);
+    expect(outcome).toMatchObject({ handled: true, reason: 'applied' });
+  });
+
+  it('ignores a quote_details parent even though it carries subscription_details', async () => {
+    const h = harness();
+    const outcome = await applyStripeEvent({
+      event: invoiceWithParent({
+        type: 'quote_details',
+        quote_details: { quote: 'qt_1' },
+        subscription_details: { subscription: 'sub_live' },
+      }),
+      stripe: h.stripe, store: h.store, now: NOW,
+    });
+    expect(h.asked).toEqual([]);
+    expect(outcome).toEqual({ handled: false, reason: 'no_subscription' });
+  });
+
+  it('ignores a parent with no type at all, even carrying subscription_details', async () => {
+    /* The delta this test was added for: a missing tag used to fall through. */
+    const h = harness();
+    const outcome = await applyStripeEvent({
+      event: invoiceWithParent({ subscription_details: { subscription: 'sub_live' } }),
+      stripe: h.stripe, store: h.store, now: NOW,
+    });
+    expect(h.asked).toEqual([]);
+    expect(h.stripe.getSubscription).not.toHaveBeenCalled();
+    expect(outcome).toEqual({ handled: false, reason: 'no_subscription' });
+    expect(h.marked).toEqual([{ providerEventId: 'evt_tag', eventType: 'invoice.payment_succeeded' }]);
+  });
+
+  it('ignores a non-string tag', async () => {
+    const h = harness();
+    await applyStripeEvent({
+      event: invoiceWithParent({ type: null, subscription_details: { subscription: 'sub_live' } }),
+      stripe: h.stripe, store: h.store, now: NOW,
+    });
+    expect(h.asked).toEqual([]);
+  });
+});
+
 describe('direct subscription events keep working', () => {
   it.each(['customer.subscription.created', 'customer.subscription.updated', 'customer.subscription.deleted'])(
     '%s resolves the subscription from the object itself',

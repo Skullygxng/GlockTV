@@ -197,3 +197,26 @@ export function parsePlaybackProgressEvent(raw: unknown) {
     return null;
   }
 }
+
+/*
+ * Drop every locally stored position for this browser.
+ *
+ * Watch progress is kept under one key that is not scoped to an account, and
+ * WatchProgressProvider uploads whatever it finds locally to whoever is signed
+ * in. On a shared browser that combination means the next person to sign in
+ * inherits the previous person's history AND pushes it into their own cloud
+ * account, permanently. Signing out is the moment to make sure there is
+ * nothing left to inherit.
+ *
+ * The trade, stated plainly: a position recorded in the seconds before sign-out
+ * and not yet synced is lost. Losing one resume point is a far smaller harm
+ * than handing someone else's viewing history to the next user of the machine.
+ */
+export function clearLocalPlaybackProgress(): void {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.removeItem(PLAYBACK_PROGRESS_KEY);
+  } catch {
+    /* Blocked or unavailable storage. Nothing to clear that we could reach. */
+  }
+}

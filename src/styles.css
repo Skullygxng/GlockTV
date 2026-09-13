@@ -72,3 +72,31 @@ html{scrollbar-width:none}html::-webkit-scrollbar{display:none}
 .mobile-account--premium{border-color:#8b31d8;background:rgba(60,14,105,.5)}
 .mobile-account--premium .mobile-account__mark{background:linear-gradient(140deg,#e5b8ff,#7a17e0)}
 }
+
+/* The render-crash fallback. Deliberately plain and dependency-free: it has to
+   render correctly when the rest of the app could not. */
+.app-crash{
+  max-width:420px;
+  margin:18vh auto;
+  padding:0 20px;
+  text-align:center;
+  color:#e6dcf5;
+  font-family:Inter,system-ui,sans-serif;
+}
+.app-crash h1{
+  margin:0 0 10px;
+  font:700 26px/1.1 'Barlow Condensed',Inter,sans-serif;
+  text-transform:uppercase;
+}
+.app-crash p{margin:0 0 16px;color:#a99fb8;font-size:12px;line-height:1.6}
+.app-crash button{
+  border:1px solid #4a3a5e;
+  border-radius:999px;
+  background:#1a1424;
+  color:#e6dcf5;
+  padding:10px 20px;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.04em;
+  cursor:pointer;
+}

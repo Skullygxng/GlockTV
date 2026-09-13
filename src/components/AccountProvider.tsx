@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { FREE_ENTITLEMENTS, type Entitlements, type GlockTvAccount } from '../lib/account';
 import { createDefaultAccountService, type AccountService } from '../lib/accountService';
+import { clearLocalPlaybackProgress } from '../lib/playbackProgress';
 
 /*
  * The one owner of "who is this and what are they entitled to".
@@ -215,6 +216,17 @@ export function AccountProvider({
   const signOut = useCallback(async () => {
     if (!service) throw new Error('Accounts are unavailable right now.');
     await service.signOut();
+    /*
+     * Clear this device's local watch progress on the way out.
+     *
+     * Progress is stored under one key that is not scoped to an account, and
+     * WatchProgressProvider uploads whatever it finds locally to whoever signs
+     * in next. Without this, the next person to use a shared browser inherits
+     * the previous person's viewing history and pushes it into their own cloud
+     * account. Sign-out is the only moment we know an identity is being handed
+     * over, so it is the only place this can be done honestly.
+     */
+    clearLocalPlaybackProgress();
     await load();
   }, [service, load]);
 

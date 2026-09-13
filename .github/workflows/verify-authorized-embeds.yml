@@ -42,7 +42,21 @@ jobs:
           probe 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0'
           probe 'https://player.twitch.tv/?channel=twitch&parent=skullygxng.github.io&autoplay=false'
           probe 'https://player.kick.com/xqc'
-          probe 'https://rumble.com/embed/v1a59rb/'
+          # Rumble needs its real embed id, which is NOT the watch-page slug -
+          # the same distinction rumbleVideoIdFrom refuses to guess across. Ask
+          # Rumble's own oEmbed API for the embed it emits, then probe that and
+          # check our builder produces the same shape.
+          oembed=$(curl -sS -m 30 -A 'Mozilla/5.0 (compatible; GlockTV-embed-check)' \
+            'https://wn0.rumble.com/api/Media/oembed.json?url=https://rumble.com/v1a59rb-rumble-basics-how-to-embed-your-video.html' \
+            || echo '')
+          rumble_src=$(printf '%s' "$oembed" | grep -oE 'https://rumble\.com/embed/[A-Za-z0-9.]+/?' | head -1)
+          if [ -z "$rumble_src" ]; then
+            echo 'Rumble oEmbed returned no embed URL; cannot verify the endpoint.'
+            fail=1
+          else
+            echo "Rumble oEmbed emitted: $rumble_src"
+            probe "$rumble_src"
+          fi
           probe 'https://player.vimeo.com/video/76979871'
           echo
           if [ "$fail" -ne 0 ]; then

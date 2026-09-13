@@ -12,6 +12,11 @@ name: Verify authorized embed endpoints
 
 on:
   workflow_dispatch:
+  # workflow_dispatch alone is not dispatchable until the file reaches the
+  # default branch, so the branch this was developed on triggers it directly.
+  push:
+    branches: [claude/hello-rluoto]
+    paths: ['.github/workflows/verify-authorized-embeds.yml']
 
 permissions:
   contents: read

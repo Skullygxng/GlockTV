@@ -61,6 +61,19 @@ describe('platform link parsing', () => {
     expect(rumbleVideoIdFrom('https://rumble.com/v1a59rb-some-title.html')).toBe('');
   });
 
+  /*
+   * Not a hand-written fixture: this is the exact embed URL Rumble's own
+   * oEmbed API emitted for a public video, captured by the
+   * verify-authorized-embeds workflow (run 34733798628, 200 OK). The first
+   * probe run used a watch-page slug instead and got 410 - the same mistake
+   * rumbleVideoIdFrom exists to refuse.
+   */
+  it('parses the embed URL Rumble itself emits', () => {
+    const fromRumble = 'https://rumble.com/embed/v17j3tt/';
+    expect(rumbleVideoIdFrom(fromRumble)).toBe('v17j3tt');
+    expect(rumbleEmbedUrl('v17j3tt')).toBe(fromRumble);
+  });
+
   it('reads a Vimeo id from either link shape', () => {
     expect(vimeoVideoIdFrom('https://vimeo.com/76979871')).toBe('76979871');
     expect(vimeoVideoIdFrom('https://player.vimeo.com/video/76979871')).toBe('76979871');

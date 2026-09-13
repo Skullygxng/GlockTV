@@ -93,9 +93,22 @@ describe('the browser billing client can only ask', () => {
       from: () => ({ select: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }),
     } as never);
 
-    // Unchanged by this PR: still no way to write an entitlement from a browser.
+    /*
+     * Still no way to write an entitlement from a browser. The email/password
+     * methods widened this surface, and every one of them goes to Supabase
+     * Auth - not to account_entitlements, which stays server-authoritative.
+     */
     expect(Object.keys(account).sort()).toEqual([
-      'linkEmail', 'loadAccount', 'loadEntitlements', 'onAuthChange', 'sendSignInLink',
+      'linkEmail',
+      'loadAccount',
+      'loadEntitlements',
+      'onAuthChange',
+      'sendPasswordReset',
+      'sendSignInLink',
+      'setPassword',
+      'signInWithPassword',
+      'signOut',
+      'signUpWithPassword',
     ]);
   });
 

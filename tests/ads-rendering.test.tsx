@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { passwordAuthStubs } from './support/accountStubs';
 import { render, screen, waitFor } from '@testing-library/react';
 import { AccountProvider } from '../src/components/AccountProvider';
 import { AdSlot } from '../src/components/AdSlot';
@@ -25,10 +26,11 @@ function deferredService(entitlements: Entitlements) {
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const service: AccountService = {
-    loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null }),
+    loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true }),
     loadEntitlements: async () => { await gate; return { entitlements, error: '' }; },
     linkEmail: async () => {},
     sendSignInLink: async () => {},
+    ...passwordAuthStubs(),
     onAuthChange: () => () => {},
   };
   return { service, release: () => release() };
@@ -36,10 +38,11 @@ function deferredService(entitlements: Entitlements) {
 
 function settledService(entitlements: Entitlements): AccountService {
   return {
-    loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null }),
+    loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true }),
     loadEntitlements: async () => ({ entitlements, error: '' }),
     linkEmail: async () => {},
     sendSignInLink: async () => {},
+    ...passwordAuthStubs(),
     onAuthChange: () => () => {},
   };
 }
@@ -75,10 +78,11 @@ describe('a Premium member executes no ad code', () => {
     let entitlements = FREE_ENTITLEMENTS;
     let notify = () => {};
     const service: AccountService = {
-      loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null }),
+      loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true }),
       loadEntitlements: async () => ({ entitlements, error: '' }),
       linkEmail: async () => {},
       sendSignInLink: async () => {},
+      ...passwordAuthStubs(),
       onAuthChange: (listener) => { notify = listener; return () => {}; },
     };
     mount(service);

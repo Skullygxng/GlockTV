@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { passwordAuthStubs } from './support/accountStubs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
@@ -29,8 +30,8 @@ function client(): TmdbClient {
   } as TmdbClient;
 }
 
-const guest: GlockTvAccount = { id: 'user-1', email: null, isAnonymous: true, createdAt: null };
-const member: GlockTvAccount = { id: 'user-1', email: 'viewer@example.com', isAnonymous: false, createdAt: null };
+const guest: GlockTvAccount = { id: 'user-1', email: null, isAnonymous: true, createdAt: null, emailConfirmed: false, hasPassword: false };
+const member: GlockTvAccount = { id: 'user-1', email: 'viewer@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true };
 
 interface FakeAccountService extends AccountService {
   fire: () => void;
@@ -47,6 +48,7 @@ function accountService(
     loadEntitlements: vi.fn(async () => ({ entitlements, error: '' })),
     linkEmail: vi.fn(async (_email: string) => {}),
     sendSignInLink: vi.fn(async (_email: string) => {}),
+    ...passwordAuthStubs(),
     onAuthChange: (next: () => void) => { listener = next; return () => { listener = null; }; },
     ...overrides,
     /* Simulate Supabase reporting a session change. */
@@ -106,13 +108,19 @@ describe('global account surface', () => {
      * once for one user action. The request-version guard has to leave the
      * newest answer standing rather than an in-flight older one.
      */
-    let identity: GlockTvAccount | null = null;
-    const service = accountService(null);
+    /*
+     * Starts as an existing guest, because that is who the two-event path
+     * belongs to now: a visitor with an anonymous session upgrading it. The
+     * subject of the test is unchanged - one user action, several reloads, and
+     * the newest answer has to be the one left standing.
+     */
+    let identity: GlockTvAccount | null = guest;
+    const service = accountService(guest);
     service.loadAccount = vi.fn(async () => identity);
     service.linkEmail = vi.fn(async (email: string) => {
-      identity = { id: 'anon-new', email: null, isAnonymous: true, createdAt: null };
-      service.fire();                            // SIGNED_IN, still anonymous
-      identity = { id: 'anon-new', email, isAnonymous: false, createdAt: null };
+      identity = { id: 'user-1', email: null, isAnonymous: true, createdAt: null, emailConfirmed: false, hasPassword: false };
+      service.fire();                            // still anonymous
+      identity = { id: 'user-1', email, isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true };
       service.fire();                            // USER_UPDATED, now linked
     });
 
@@ -123,7 +131,7 @@ describe('global account surface', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
       target: { value: 'viewer@example.com' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: /Protect guest account/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add email/ }));
 
     expect(await within(dialog).findByText('viewer@example.com')).toBeInTheDocument();
     await waitFor(() => expect(within(dialog).queryByText('Guest')).not.toBeInTheDocument());
@@ -199,11 +207,32 @@ describe('global account surface', () => {
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
       target: { value: 'viewer@example.com' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: /Protect guest account/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add email/ }));
     await waitFor(() => expect(service.linkEmail).toHaveBeenCalledWith('viewer@example.com'));
     expect(await within(dialog).findByText(/Check your email/)).toBeInTheDocument();
+  });
 
-    fireEvent.click(within(dialog).getByRole('button', { name: /Email sign-in link/ }));
+  it('offers the sign-in link to a visitor with no session, not to a guest with data', async () => {
+    /*
+     * A magic link signs you in as whoever owns that address. Offering it to
+     * an anonymous guest would invite them to walk away from the identity
+     * their rooms and history are keyed to, so it lives with the sign-in form.
+     */
+    const guestService = accountService(guest);
+    render(<App client={client()} accountService={guestService} />);
+    await ready();
+    const guestDialog = await openAccount();
+    expect(within(guestDialog).queryByRole('button', { name: /sign-in link/i })).toBeNull();
+    cleanup();
+
+    const service = accountService(null);
+    render(<App client={client()} accountService={service} />);
+    await ready();
+    const dialog = await openAccount();
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
+      target: { value: 'viewer@example.com' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /sign-in link/i }));
     await waitFor(() => expect(service.sendSignInLink).toHaveBeenCalledWith('viewer@example.com'));
     expect(await within(dialog).findByText(/Sign-in link sent/)).toBeInTheDocument();
   });
@@ -216,7 +245,7 @@ describe('global account surface', () => {
     const dialog = await openAccount();
 
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), { target: { value: 'taken@example.com' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: /Protect guest account/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add email/ }));
 
     expect(await within(dialog).findByText('That email is already in use.')).toBeInTheDocument();
     // The rest of the app is untouched by an account action failing.
@@ -244,21 +273,20 @@ describe('global account surface', () => {
     expect(within(dialog).getByText(/Premium · ad-free/)).toBeInTheDocument();
   });
 
-  it('protects a first-time visitor who has never opened a watch party', async () => {
+  it('lets a first-time visitor create a real account, with no session in the way', async () => {
     /*
-     * The path the red-team caught: this visitor reached the account panel
-     * without ever creating or joining a room, so nothing has minted them an
-     * identity yet. Protecting the account has to work anyway - that is the
-     * whole reason the surface is global.
+     * The path the red-team caught, now served properly. This visitor reached
+     * the account panel without ever creating or joining a room, so nothing
+     * has minted them an identity. With no guest data to preserve there is
+     * nothing to orphan, so they get an ordinary email/password sign-up rather
+     * than an anonymous user with an address bolted on.
      */
     let identity: GlockTvAccount | null = null;
-    const linked: string[] = [];
     const service = accountService(null);
     service.loadAccount = vi.fn(async () => identity);
-    service.linkEmail = vi.fn(async (email: string) => {
-      // What the real service does: mint the anonymous user, then attach.
-      identity = { id: 'anon-new', email, isAnonymous: false, createdAt: null };
-      linked.push(email);
+    service.signUpWithPassword = vi.fn(async (email: string) => {
+      identity = { id: 'user-new', email, isAnonymous: false, createdAt: null, emailConfirmed: false, hasPassword: true };
+      return { needsConfirmation: true };
     });
 
     render(<App client={client()} accountService={service} />);
@@ -267,31 +295,57 @@ describe('global account surface', () => {
     const dialog = await openAccount();
     expect(within(dialog).getByText('Guest')).toBeInTheDocument();
 
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Create account' }));
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
       target: { value: 'viewer@example.com' },
     });
-    fireEvent.click(within(dialog).getByRole('button', { name: /Protect guest account/ }));
+    fireEvent.change(within(dialog).getByLabelText('Password'), {
+      target: { value: 'a-strong-password' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create account' }));
 
-    await waitFor(() => expect(linked).toEqual(['viewer@example.com']));
-    expect(await within(dialog).findByText(/Check your email/)).toBeInTheDocument();
-    // The panel now reflects the identity that protecting it created.
+    await waitFor(() =>
+      expect(service.signUpWithPassword).toHaveBeenCalledWith('viewer@example.com', 'a-strong-password'),
+    );
     expect(await within(dialog).findByText('viewer@example.com')).toBeInTheDocument();
   });
 
-  it('offers Protect guest account to a visitor with no session at all', async () => {
-    // Never solved by hiding the control until Friends has made a session.
+  it('offers sign in and create account to a visitor with no session at all', async () => {
+    // Never solved by hiding the controls until Friends has made a session.
     render(<App client={client()} accountService={accountService(null)} />);
     await ready();
     const dialog = await openAccount();
 
     expect(within(dialog).getByText('Guest')).toBeInTheDocument();
     expect(within(dialog).getByText('Free')).toBeInTheDocument();
-    const protect = within(dialog).getByRole('button', { name: /Protect guest account/ });
-    expect(protect).toBeInTheDocument();
+    expect(within(dialog).getByRole('tab', { name: 'Sign in' })).toHaveAttribute('aria-selected', 'true');
+    expect(within(dialog).getByRole('tab', { name: 'Create account' })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Password')).toBeInTheDocument();
+  });
+
+  it('never offers sign-up to a guest who has data to lose', async () => {
+    /*
+     * The whole reason the guest path is an upgrade and not a sign-up:
+     * Supabase's signUp would mint a SECOND user, and the anonymous id that
+     * this visitor's rooms, hosting, watch history and any entitlement row are
+     * keyed to would be stranded with no way back to it.
+     */
+    const service = accountService(guest);
+    render(<App client={client()} accountService={service} />);
+    await ready();
+    const dialog = await openAccount();
+
+    expect(within(dialog).queryByRole('tab', { name: 'Create account' })).toBeNull();
+    expect(within(dialog).queryByLabelText('Password')).toBeNull();
+    expect(within(dialog).getByRole('button', { name: /Add email/ })).toBeInTheDocument();
+
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Account email' }), {
       target: { value: 'viewer@example.com' },
     });
-    expect(protect).toBeEnabled();
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add email/ }));
+
+    await waitFor(() => expect(service.linkEmail).toHaveBeenCalledWith('viewer@example.com'));
+    expect(service.signUpWithPassword).not.toHaveBeenCalled();
   });
 
   it('is reachable from the mobile header, where the topbar is hidden', async () => {

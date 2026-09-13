@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { passwordAuthStubs } from './support/accountStubs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RESUME_NOTICE_MS } from '../src/components/PlaybackModal';
 import { App } from '../src/App';
@@ -15,10 +16,11 @@ import { FREE_ENTITLEMENTS } from '../src/lib/account';
  * the scenario to be the one it is describing.
  */
 const protectedAccountService: AccountService = {
-  loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null }),
+  loadAccount: async () => ({ id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true }),
   loadEntitlements: async () => ({ entitlements: FREE_ENTITLEMENTS, error: '' }),
   linkEmail: async () => {},
   sendSignInLink: async () => {},
+  ...passwordAuthStubs(),
   onAuthChange: () => () => {},
 };
 

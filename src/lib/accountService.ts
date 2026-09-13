@@ -27,8 +27,49 @@ export interface AccountService {
   linkEmail(email: string): Promise<void>;
   /* Send a returning sign-in link. */
   sendSignInLink(email: string): Promise<void>;
+  /*
+   * Create a brand new email/password account.
+   *
+   * Refuses outright when a session already exists. Supabase's signUp would
+   * mint a SECOND user, and the guest's id - which their rooms, hosting,
+   * watch history and any entitlement row are keyed to - would be silently
+   * orphaned. A visitor in that state has to go through the upgrade path
+   * instead, and the refusal is what makes sure they do.
+   */
+  signUpWithPassword(email: string, password: string): Promise<{ needsConfirmation: boolean }>;
+  /* Sign in an existing email/password account. */
+  signInWithPassword(email: string, password: string): Promise<void>;
+  /*
+   * Set a password on the signed-in account.
+   *
+   * Supabase requires the email identity to be verified before a password can
+   * be attached to an account that started out anonymous, which is why this is
+   * a separate step from linkEmail rather than one call with both fields.
+   */
+  setPassword(password: string): Promise<void>;
+  /* Send a password reset email. */
+  sendPasswordReset(email: string): Promise<void>;
+  signOut(): Promise<void>;
   /* Fires whenever the session changes; returns an unsubscribe. */
   onAuthChange(listener: () => void): () => void;
+}
+
+/*
+ * Thrown when signUpWithPassword is called with a session already in place.
+ * Typed so the UI can route the visitor to the upgrade path rather than
+ * showing a raw message and leaving them stuck.
+ */
+export const SIGN_UP_WOULD_ORPHAN =
+  'You already have a guest account here. Add an email to that account instead, so your rooms and history come with you.';
+
+/* Supabase's own floor is 6; this is the app's, and it is not lower. */
+export const MIN_PASSWORD_LENGTH = 8;
+
+export function validatePassword(password: string): string {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return `Use at least ${MIN_PASSWORD_LENGTH} characters.`;
+  }
+  return '';
 }
 
 /*
@@ -41,6 +82,16 @@ export interface AccountService {
  * a second time.
  */
 const ENTITLEMENTS_SOURCE = 'account_entitlements_effective';
+
+/*
+ * Where an emailed link lands. BASE_URL matters: GlockTV is served from a
+ * project subpath on Pages, so the bare origin would drop the visitor outside
+ * the app. Every email-bearing call routes through here so none of them can
+ * disagree about it.
+ */
+function redirectUrl(): string {
+  return `${window.location.origin}${import.meta.env.BASE_URL}`;
+}
 
 export function createAccountService(client: SupabaseClient): AccountService {
   /*
@@ -73,11 +124,21 @@ export function createAccountService(client: SupabaseClient): AccountService {
       const { data, error } = await client.auth.getUser();
       if (error || !data.user) return null;
       const user = data.user as typeof data.user & { is_anonymous?: boolean };
+      const identities = Array.isArray(user.identities) ? user.identities : [];
       return {
         id: user.id,
         email: user.email ?? null,
         isAnonymous: user.is_anonymous === true,
         createdAt: user.created_at ?? null,
+        emailConfirmed: Boolean(user.email_confirmed_at),
+        /*
+         * Supabase does not expose "has a password" directly. An email
+         * identity is the thing a password can be attached to, and it only
+         * appears once the address is confirmed - so this reports what the
+         * account can actually do (sign in again elsewhere) rather than
+         * guessing at a stored credential.
+         */
+        hasPassword: identities.some((identity) => identity.provider === 'email'),
       };
     },
 
@@ -120,11 +181,64 @@ export function createAccountService(client: SupabaseClient): AccountService {
     },
 
     async sendSignInLink(email: string) {
-      const redirect = `${window.location.origin}${import.meta.env.BASE_URL}`;
       const { error } = await client.auth.signInWithOtp({
         email: email.trim(),
-        options: { emailRedirectTo: redirect },
+        options: { emailRedirectTo: redirectUrl() },
       });
+      if (error) throw new Error(error.message);
+    },
+
+    async signUpWithPassword(email: string, password: string) {
+      /*
+       * The orphan guard. This is checked against the live session rather than
+       * anything React is holding, because the question is whether Supabase
+       * would create a second user - and only Supabase's own view of the
+       * session answers that.
+       */
+      const { data: sessionData } = await client.auth.getSession();
+      if (sessionData.session?.user) throw new Error(SIGN_UP_WOULD_ORPHAN);
+
+      const invalid = validatePassword(password);
+      if (invalid) throw new Error(invalid);
+
+      const { data, error } = await client.auth.signUp({
+        email: email.trim(),
+        password,
+        options: { emailRedirectTo: redirectUrl() },
+      });
+      if (error) throw new Error(error.message);
+      /*
+       * With confirmations on, signUp returns a user and no session. Reporting
+       * which happened lets the panel say "check your email" only when that is
+       * actually true, instead of always claiming it.
+       */
+      return { needsConfirmation: Boolean(data.user) && !data.session };
+    },
+
+    async signInWithPassword(email: string, password: string) {
+      const { error } = await client.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async setPassword(password: string) {
+      const invalid = validatePassword(password);
+      if (invalid) throw new Error(invalid);
+      const { error } = await client.auth.updateUser({ password });
+      if (error) throw new Error(error.message);
+    },
+
+    async sendPasswordReset(email: string) {
+      const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: redirectUrl(),
+      });
+      if (error) throw new Error(error.message);
+    },
+
+    async signOut() {
+      const { error } = await client.auth.signOut();
       if (error) throw new Error(error.message);
     },
 

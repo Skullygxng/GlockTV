@@ -137,8 +137,23 @@ describe('account service entitlement reads', () => {
      * is the assertion.
      */
     expect(Object.keys(service).sort()).toEqual([
-      'linkEmail', 'loadAccount', 'loadEntitlements', 'onAuthChange', 'sendSignInLink',
+      'linkEmail',
+      'loadAccount',
+      'loadEntitlements',
+      'onAuthChange',
+      'sendPasswordReset',
+      'sendSignInLink',
+      'setPassword',
+      'signInWithPassword',
+      'signOut',
+      'signUpWithPassword',
     ]);
+    /*
+     * The password methods added for email/password accounts all act on
+     * auth.users through Supabase Auth. None of them touches the entitlements
+     * table, which is what the select-only assertion below proves for the
+     * whole surface rather than method by method.
+     */
     for (const name of Object.keys(service)) {
       expect(/premium|tier|entitle.*(set|update|grant)|upgrade/i.test(name)).toBe(false);
     }
@@ -304,9 +319,9 @@ describe('entitlement migration keeps write authority on the server', () => {
 
 describe('account identity helpers', () => {
   it('treats an anonymous account as not signed in', () => {
-    expect(isSignedIn({ id: 'u1', email: null, isAnonymous: true, createdAt: null })).toBe(false);
+    expect(isSignedIn({ id: 'u1', email: null, isAnonymous: true, createdAt: null, emailConfirmed: false, hasPassword: false })).toBe(false);
     expect(isSignedIn(null)).toBe(false);
-    expect(isSignedIn({ id: 'u1', email: 'a@b.c', isAnonymous: false, createdAt: null })).toBe(true);
+    expect(isSignedIn({ id: 'u1', email: 'a@b.c', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true })).toBe(true);
   });
 });
 

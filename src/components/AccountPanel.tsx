@@ -1,5 +1,15 @@
 import { type FormEvent, useState } from 'react';
-import { CreditCard, LifeBuoy, LoaderCircle, Mail, ShieldCheck, Sparkles, X } from 'lucide-react';
+import {
+  CreditCard,
+  KeyRound,
+  LifeBuoy,
+  LoaderCircle,
+  LogOut,
+  Mail,
+  ShieldCheck,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { useAccount } from './AccountProvider';
 import { useDialogBehavior } from '../hooks/useDialogBehavior';
 import { createDefaultBillingService, type BillingService } from '../lib/billing';
@@ -30,10 +40,18 @@ export function AccountPanel({
     account, entitlements, loading, error,
     confirmingMembership, confirmationTimedOut,
     linkEmail, sendSignInLink,
+    signUpWithPassword, signInWithPassword, setPassword, sendPasswordReset, signOut,
   } = useAccount();
   const billing = providedBilling === undefined ? getDefaultBilling() : providedBilling;
 
   const [email, setEmail] = useState(account?.email ?? '');
+  const [password, setPasswordDraft] = useState('');
+  /*
+   * Which form a visitor with no session sees. Signing in is the default
+   * because most people opening this panel already have an account; creating
+   * one is the deliberate choice.
+   */
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [status, setStatus] = useState('');
   const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -47,8 +65,13 @@ export function AccountPanel({
   const isGuest = !account || account.isAnonymous;
   const isPremium = entitlements.tier === 'premium';
 
-  const run = async (action: () => Promise<void>, done: string) => {
-    if (busy || !email.trim()) return;
+  /*
+   * One runner for every identity action. `done` may be empty for actions
+   * whose result is the changed panel itself - saying "signed in" under a
+   * panel that now shows the account would be noise.
+   */
+  const run = async (action: () => Promise<void>, done: string, needsEmail = true) => {
+    if (busy || (needsEmail && !email.trim())) return;
     setBusy(true); setStatus(''); setActionError('');
     try {
       await action();
@@ -62,7 +85,36 @@ export function AccountPanel({
 
   const protectAccount = (event: FormEvent) => {
     event.preventDefault();
-    void run(() => linkEmail(email), 'Check your email to finish protecting this account.');
+    void run(() => linkEmail(email), 'Check your email to confirm the address.');
+  };
+
+  const submitCredentials = (event: FormEvent) => {
+    event.preventDefault();
+    if (mode === 'signin') {
+      void run(async () => {
+        await signInWithPassword(email, password);
+        setPasswordDraft('');
+      }, '');
+      return;
+    }
+    void run(async () => {
+      const { needsConfirmation } = await signUpWithPassword(email, password);
+      setPasswordDraft('');
+      /*
+       * Only claim an email was sent when one was. With confirmations off the
+       * account is usable immediately, and telling someone to check their
+       * inbox would send them looking for a message that never arrives.
+       */
+      setStatus(needsConfirmation ? 'Check your email to confirm your account.' : '');
+    }, '');
+  };
+
+  const submitNewPassword = (event: FormEvent) => {
+    event.preventDefault();
+    void run(async () => {
+      await setPassword(password);
+      setPasswordDraft('');
+    }, 'Password set. You can sign in with it anywhere.', false);
   };
 
   /*
@@ -180,39 +232,165 @@ export function AccountPanel({
           {billingError && <small className="account-panel__error" role="alert">{billingError}</small>}
         </section>
 
-        <form onSubmit={protectAccount}>
-          <p>
-            {isGuest
-              ? 'Add an email to keep this identity across devices. Your rooms, hosting and history stay with you.'
-              : 'Need to sign in somewhere else? Send yourself a link.'}
-          </p>
-          <label>
-            Account email
-            <input
-              type="email"
-              aria-label="Account email"
-              value={email}
-              onChange={(event) => { setEmail(event.target.value); setStatus(''); setActionError(''); }}
-              placeholder="you@example.com"
-            />
-          </label>
-          <div className="account-panel__actions">
-            {isGuest && (
-              <button type="submit" disabled={busy || !email.trim()}>
-                <ShieldCheck /> Protect guest account
+        {/*
+          * Three genuinely different situations, not one form with branches.
+          *
+          *  - Nobody signed in: an ordinary sign in / create account pair.
+          *  - A guest with data: an UPGRADE, never a sign-up. Supabase's signUp
+          *    would mint a second user and strand the guest's id, which their
+          *    rooms, hosting and history are keyed to. And because a password
+          *    can only be attached once the email is verified, the upgrade is
+          *    necessarily two steps - that is Supabase's rule, not a choice.
+          *  - Signed in for real: manage the account.
+          */}
+        {!account ? (
+          <form onSubmit={submitCredentials} aria-label={mode === 'signin' ? 'Sign in' : 'Create account'}>
+            <div className="account-panel__tabs" role="tablist" aria-label="Account access">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'signin'}
+                onClick={() => { setMode('signin'); setStatus(''); setActionError(''); }}
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={mode === 'signup'}
+                onClick={() => { setMode('signup'); setStatus(''); setActionError(''); }}
+              >
+                Create account
+              </button>
+            </div>
+            <label>
+              Email
+              <input
+                type="email"
+                aria-label="Account email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => { setEmail(event.target.value); setStatus(''); setActionError(''); }}
+                placeholder="you@example.com"
+              />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                aria-label="Password"
+                autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
+                value={password}
+                onChange={(event) => { setPasswordDraft(event.target.value); setStatus(''); setActionError(''); }}
+              />
+            </label>
+            <div className="account-panel__actions">
+              <button type="submit" disabled={busy || !email.trim() || !password}>
+                {busy ? <LoaderCircle className="spin" /> : <ShieldCheck />}
+                {mode === 'signin' ? 'Sign in' : 'Create account'}
+              </button>
+              {mode === 'signin' && (
+                <button
+                  type="button"
+                  disabled={busy || !email.trim()}
+                  onClick={() => void run(
+                    () => sendPasswordReset(email),
+                    'If that address has an account, a reset link is on its way.',
+                  )}
+                >
+                  <KeyRound /> Forgot password
+                </button>
+              )}
+            </div>
+            {mode === 'signin' && (
+              <button
+                type="button"
+                className="account-panel__link"
+                disabled={busy || !email.trim()}
+                onClick={() => void run(() => sendSignInLink(email), 'Sign-in link sent. Open it on this device.')}
+              >
+                <Mail /> Email me a sign-in link instead
               </button>
             )}
-            <button
-              type="button"
-              disabled={busy || !email.trim()}
-              onClick={() => void run(() => sendSignInLink(email), 'Sign-in link sent. Open it on this device.')}
-            >
-              <Mail /> Email sign-in link
-            </button>
+            {status && <small role="status">{status}</small>}
+            {actionError && <small className="account-panel__error" role="alert">{actionError}</small>}
+          </form>
+        ) : account.isAnonymous ? (
+          <form onSubmit={protectAccount} aria-label="Protect guest account">
+            <p>
+              You are browsing as a guest. Add an email to keep this identity - your rooms,
+              hosting and history stay with you, on the same account.
+            </p>
+            <label>
+              Email
+              <input
+                type="email"
+                aria-label="Account email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => { setEmail(event.target.value); setStatus(''); setActionError(''); }}
+                placeholder="you@example.com"
+              />
+            </label>
+            <div className="account-panel__actions">
+              <button type="submit" disabled={busy || !email.trim()}>
+                {busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} Add email
+              </button>
+            </div>
+            <p className="account-panel__note">
+              You will set a password after confirming the address — a password can only be
+              added to a guest account once its email is verified.
+            </p>
+            {status && <small role="status">{status}</small>}
+            {actionError && <small className="account-panel__error" role="alert">{actionError}</small>}
+          </form>
+        ) : (
+          <div className="account-panel__manage">
+            {!account.hasPassword || !account.emailConfirmed ? (
+              account.emailConfirmed ? (
+                <form onSubmit={submitNewPassword} aria-label="Set a password">
+                  <p>Set a password so you can sign in on another device.</p>
+                  <label>
+                    New password
+                    <input
+                      type="password"
+                      aria-label="New password"
+                      autoComplete="new-password"
+                      value={password}
+                      onChange={(event) => { setPasswordDraft(event.target.value); setStatus(''); setActionError(''); }}
+                    />
+                  </label>
+                  <div className="account-panel__actions">
+                    <button type="submit" disabled={busy || !password}>
+                      {busy ? <LoaderCircle className="spin" /> : <KeyRound />} Set password
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <p className="account-panel__note" role="status">
+                  Confirm {account.email ?? 'your email'} from the message we sent, then reopen
+                  this panel to set a password.
+                </p>
+              )
+            ) : (
+              <p>Signed in as {account.email}.</p>
+            )}
+            <div className="account-panel__actions">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void run(() => sendPasswordReset(account.email ?? email), 'Reset link sent.')}
+              >
+                <KeyRound /> Change password
+              </button>
+              <button type="button" disabled={busy} onClick={() => void run(signOut, '', false)}>
+                <LogOut /> Sign out
+              </button>
+            </div>
+            {status && <small role="status">{status}</small>}
+            {actionError && <small className="account-panel__error" role="alert">{actionError}</small>}
           </div>
-          {status && <small role="status">{status}</small>}
-          {actionError && <small className="account-panel__error" role="alert">{actionError}</small>}
-        </form>
+        )}
 
         {onOpenSupport && (
           <div className="account-panel__actions">

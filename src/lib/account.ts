@@ -9,6 +9,17 @@ export interface GlockTvAccount {
   email: string | null;
   isAnonymous: boolean;
   createdAt: string | null;
+  /*
+   * Whether the email on this account has been confirmed.
+   *
+   * This gates a real Supabase rule, not a display choice: a password can only
+   * be set on an anonymous account once its email identity is verified, so a
+   * guest upgrade is necessarily two steps and this is what says which step
+   * the account is on.
+   */
+  emailConfirmed: boolean;
+  /* True once this account can sign in again on another device. */
+  hasPassword: boolean;
 }
 
 export type AccountTier = 'free' | 'premium';

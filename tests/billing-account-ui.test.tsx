@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { passwordAuthStubs } from './support/accountStubs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../src/App';
 import type { MediaItem } from '../src/lib/media';
@@ -33,8 +34,8 @@ function client(): TmdbClient {
   } as TmdbClient;
 }
 
-const guest: GlockTvAccount = { id: 'user-1', email: null, isAnonymous: true, createdAt: null };
-const member: GlockTvAccount = { id: 'user-1', email: 'viewer@example.com', isAnonymous: false, createdAt: null };
+const guest: GlockTvAccount = { id: 'user-1', email: null, isAnonymous: true, createdAt: null, emailConfirmed: false, hasPassword: false };
+const member: GlockTvAccount = { id: 'user-1', email: 'viewer@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true };
 const PREMIUM: Entitlements = { tier: 'premium', adsEnabled: false };
 
 function accountService(account: GlockTvAccount | null, entitlements: Entitlements = FREE_ENTITLEMENTS): AccountService {
@@ -43,6 +44,7 @@ function accountService(account: GlockTvAccount | null, entitlements: Entitlemen
     loadEntitlements: vi.fn(async () => ({ entitlements, error: '' })),
     linkEmail: vi.fn(async (_email: string) => {}),
     sendSignInLink: vi.fn(async (_email: string) => {}),
+    ...passwordAuthStubs(),
     onAuthChange: () => () => {},
   };
 }

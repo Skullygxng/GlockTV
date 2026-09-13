@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { passwordAuthStubs } from './support/accountStubs';
 import { act, render, waitFor } from '@testing-library/react';
 import { AccountProvider } from '../src/components/AccountProvider';
 import {
@@ -47,6 +48,7 @@ function accountService(account: GlockTvAccount | null): AccountService {
     loadEntitlements: async () => ({ entitlements: FREE_ENTITLEMENTS, error: '' }),
     linkEmail: async () => {},
     sendSignInLink: async () => {},
+    ...passwordAuthStubs(),
     onAuthChange: () => () => {},
   };
 }
@@ -69,7 +71,7 @@ function Probe() {
   return null;
 }
 
-function mount(service: WatchProgressService | null, account: GlockTvAccount | null = { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null }) {
+function mount(service: WatchProgressService | null, account: GlockTvAccount | null = { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true }) {
   return render(
     <AccountProvider service={accountService(account)}>
       <WatchProgressProvider service={service}>
@@ -228,13 +230,13 @@ describe('one account cannot see another', () => {
      * account's rows, so nothing from the previous one survives on screen.
      */
     const first = cloudService([entry({ mediaId: 111, title: 'A-only' })]);
-    const view = mount(first.service, { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null });
+    const view = mount(first.service, { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true });
     await waitFor(() => expect(latest.entries.some((item) => item.mediaId === 111)).toBe(true));
     view.unmount();
 
     window.localStorage.clear();
     const second = cloudService([entry({ mediaId: 222, title: 'B-only' })]);
-    mount(second.service, { id: 'user-b', email: 'b@example.com', isAnonymous: false, createdAt: null });
+    mount(second.service, { id: 'user-b', email: 'b@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true });
 
     await waitFor(() => expect(latest.entries.some((item) => item.mediaId === 222)).toBe(true));
     expect(latest.entries.some((item) => item.mediaId === 111)).toBe(false);

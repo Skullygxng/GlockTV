@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { passwordAuthStubs } from './support/accountStubs';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AccountProvider } from '../src/components/AccountProvider';
@@ -14,8 +15,8 @@ import {
   type SupportTicket,
 } from '../src/lib/support';
 
-const protectedAccount: GlockTvAccount = { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null };
-const guestAccount: GlockTvAccount = { id: 'guest-1', email: null, isAnonymous: true, createdAt: null };
+const protectedAccount: GlockTvAccount = { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true };
+const guestAccount: GlockTvAccount = { id: 'guest-1', email: null, isAnonymous: true, createdAt: null, emailConfirmed: false, hasPassword: false };
 
 function accountService(account: GlockTvAccount | null): AccountService {
   return {
@@ -23,6 +24,7 @@ function accountService(account: GlockTvAccount | null): AccountService {
     loadEntitlements: async () => ({ entitlements: FREE_ENTITLEMENTS, error: '' }),
     linkEmail: async () => {},
     sendSignInLink: async () => {},
+    ...passwordAuthStubs(),
     onAuthChange: () => () => {},
   };
 }

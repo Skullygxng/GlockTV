@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { passwordAuthStubs } from './support/accountStubs';
 import { act, render, waitFor } from '@testing-library/react';
 import { AccountProvider } from '../src/components/AccountProvider';
 import { WatchProgressProvider, useWatchProgress, type WatchProgressState } from '../src/components/WatchProgressProvider';
@@ -25,8 +26,8 @@ import serviceSource from '../src/lib/watchProgressService.ts?raw';
 
 const statements = migration.replace(/^\s*--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
 
-const protectedAccount: GlockTvAccount = { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null };
-const anonymousAccount: GlockTvAccount = { id: 'user-a', email: null, isAnonymous: true, createdAt: null };
+const protectedAccount: GlockTvAccount = { id: 'user-a', email: 'a@example.com', isAnonymous: false, createdAt: null, emailConfirmed: true, hasPassword: true };
+const anonymousAccount: GlockTvAccount = { id: 'user-a', email: null, isAnonymous: true, createdAt: null, emailConfirmed: false, hasPassword: false };
 
 const movie = { id: 550, mediaType: 'movie' as const, title: 'Fight Club', posterPath: null, backdropPath: null };
 
@@ -62,6 +63,7 @@ function mutableAccountService(initial: GlockTvAccount | null) {
     loadEntitlements: async () => ({ entitlements: FREE_ENTITLEMENTS, error: '' }),
     linkEmail: async () => {},
     sendSignInLink: async () => {},
+    ...passwordAuthStubs(),
     onAuthChange: (listener) => { notify = listener; return () => {}; },
   };
   return {

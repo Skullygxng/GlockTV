@@ -35,6 +35,11 @@ export interface AccountState {
   confirmMembership: () => Promise<void>;
   linkEmail: (email: string) => Promise<void>;
   sendSignInLink: (email: string) => Promise<void>;
+  signUpWithPassword: (email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
+  signInWithPassword: (email: string, password: string) => Promise<void>;
+  setPassword: (password: string) => Promise<void>;
+  sendPasswordReset: (email: string) => Promise<void>;
+  signOut: () => Promise<void>;
 }
 
 /*
@@ -183,6 +188,36 @@ export function AccountProvider({
     await service.sendSignInLink(email);
   }, [service]);
 
+  const signUpWithPassword = useCallback(async (email: string, password: string) => {
+    if (!service) throw new Error('Accounts are unavailable right now.');
+    const result = await service.signUpWithPassword(email, password);
+    await load();
+    return result;
+  }, [service, load]);
+
+  const signInWithPassword = useCallback(async (email: string, password: string) => {
+    if (!service) throw new Error('Accounts are unavailable right now.');
+    await service.signInWithPassword(email, password);
+    await load();
+  }, [service, load]);
+
+  const setPassword = useCallback(async (password: string) => {
+    if (!service) throw new Error('Accounts are unavailable right now.');
+    await service.setPassword(password);
+    await load();
+  }, [service, load]);
+
+  const sendPasswordReset = useCallback(async (email: string) => {
+    if (!service) throw new Error('Accounts are unavailable right now.');
+    await service.sendPasswordReset(email);
+  }, [service]);
+
+  const signOut = useCallback(async () => {
+    if (!service) throw new Error('Accounts are unavailable right now.');
+    await service.signOut();
+    await load();
+  }, [service, load]);
+
   const value = useMemo<AccountState>(() => ({
     account,
     entitlements,
@@ -195,10 +230,16 @@ export function AccountProvider({
     confirmMembership,
     linkEmail,
     sendSignInLink,
+    signUpWithPassword,
+    signInWithPassword,
+    setPassword,
+    sendPasswordReset,
+    signOut,
   }), [
     account, entitlements, loading, error, ready,
     confirmingMembership, confirmationTimedOut,
     load, confirmMembership, linkEmail, sendSignInLink,
+    signUpWithPassword, signInWithPassword, setPassword, sendPasswordReset, signOut,
   ]);
 
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
@@ -219,5 +260,10 @@ export function useAccount(): AccountState {
     confirmMembership: async () => {},
     linkEmail: async () => { throw new Error('Accounts are unavailable right now.'); },
     sendSignInLink: async () => { throw new Error('Accounts are unavailable right now.'); },
+    signUpWithPassword: async () => { throw new Error('Accounts are unavailable right now.'); },
+    signInWithPassword: async () => { throw new Error('Accounts are unavailable right now.'); },
+    setPassword: async () => { throw new Error('Accounts are unavailable right now.'); },
+    sendPasswordReset: async () => { throw new Error('Accounts are unavailable right now.'); },
+    signOut: async () => { throw new Error('Accounts are unavailable right now.'); },
   };
 }

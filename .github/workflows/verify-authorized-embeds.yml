@@ -1,0 +1,47 @@
+name: Verify authorized embed endpoints
+
+# Manual only. Proves that every URL shape in PPV_AUTHORIZED_EMBED_HOSTS is a
+# real, serving endpoint on the platform's own origin - the container this was
+# developed in has no egress to these hosts, so the check has to run somewhere
+# that does.
+#
+# What a 200 here does and does not mean: it means the platform's player page
+# exists and serves. It does NOT mean a given broadcast is embeddable - a
+# rights holder can disable embedding per video, and that is decided inside a
+# cross-origin frame we cannot see into.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe each authorized embed endpoint
+        run: |
+          set -u
+          fail=0
+          probe() {
+            url="$1"
+            code=$(curl -sS -o /dev/null -w '%{http_code}' -m 30 \
+              -A 'Mozilla/5.0 (compatible; GlockTV-embed-check)' "$url" || echo 000)
+            printf '%-6s %s\n' "$code" "$url"
+            case "$code" in
+              2*|3*) ;;
+              *) fail=1 ;;
+            esac
+          }
+          probe 'https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0'
+          probe 'https://player.twitch.tv/?channel=twitch&parent=skullygxng.github.io&autoplay=false'
+          probe 'https://player.kick.com/xqc'
+          probe 'https://rumble.com/embed/v1a59rb/'
+          probe 'https://player.vimeo.com/video/76979871'
+          echo
+          if [ "$fail" -ne 0 ]; then
+            echo 'At least one authorized embed endpoint did not serve.'
+            exit 1
+          fi
+          echo 'All authorized embed endpoints served.'

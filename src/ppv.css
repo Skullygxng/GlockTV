@@ -245,3 +245,70 @@
 /* The sweep line is live status, not a warning, so it reads a shade brighter
    than the stall notice it replaces while a sweep is running. */
 .ppv-player__stall--sweep{color:#d7d0e0;background:#1a1226}
+/* Add-a-link form. Sits under the meta row so it is reachable whether or not
+   a frame is mounted - an event with no sources is exactly when it matters. */
+.ppv-player__linkform{
+  padding:10px 16px;
+  border-top:1px solid #1d1922;
+  background:#150f1e;
+}
+.ppv-player__linkform label{
+  display:block;
+  color:#a99fb8;
+  font-size:8px;
+  font-weight:700;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  margin-bottom:6px;
+}
+.ppv-player__linkrow{display:flex;gap:8px;flex-wrap:wrap}
+.ppv-player__linkrow input{
+  flex:1 1 220px;
+  min-width:0;
+  border:1px solid #3a2f48;
+  border-radius:8px;
+  background:#100c17;
+  color:#e6dcf5;
+  padding:8px 10px;
+  font-size:10px;
+}
+.ppv-player__linkrow button{
+  border:1px solid #4a3a5e;
+  border-radius:8px;
+  background:#1a1424;
+  color:#e6dcf5;
+  padding:8px 16px;
+  font-size:9px;
+  font-weight:700;
+  cursor:pointer;
+}
+.ppv-player__linkhint{margin:8px 0 0;color:#7a7480;font-size:8px;line-height:1.5}
+.ppv-player__linkerror{margin:6px 0 0;color:#f0a3a3;font-size:9px}
+.ppv-player__links{
+  list-style:none;
+  margin:0;
+  padding:8px 16px;
+  border-top:1px solid #1d1922;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.ppv-player__links li{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  border:1px solid #3a2f48;
+  border-radius:999px;
+  padding:5px 6px 5px 12px;
+  font-size:9px;
+  color:#d7d0e0;
+}
+.ppv-player__links button{
+  border:0;
+  border-radius:999px;
+  background:#2a2136;
+  color:#c9bedd;
+  padding:4px 10px;
+  font-size:8px;
+  cursor:pointer;
+}

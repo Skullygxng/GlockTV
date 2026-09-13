@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CircleStop,
   ExternalLink,
+  Link2,
   LoaderCircle,
   Radio,
   RotateCw,
@@ -33,6 +34,17 @@ import {
   PPV_IFRAME_REFERRER_POLICY,
   PPV_IFRAME_SANDBOX,
 } from '../lib/ppvEmbedPolicy';
+import {
+  PPV_AUTHORIZED_PLATFORMS,
+  describeLinkRejection,
+  type PpvLinkRejection,
+} from '../lib/ppvAuthorizedEmbeds';
+import {
+  addUserLink,
+  loadUserLinks,
+  removeUserLink,
+  type PpvUserLink,
+} from '../lib/ppvUserLinks';
 import { mergePpvPlaybackSources } from '../lib/ppvProviders';
 import {
   ppvEmbedToPlaybackSource,
@@ -95,7 +107,9 @@ export function PpvPlayer({
   debug,
   catalogDiagnostics,
 }: PpvPlayerProps) {
-  const [sources, setSources] = useState<PpvPlaybackSource[]>(() => inlineSourcesFor(event));
+  const [resolvedSources, setResolvedSources] = useState<PpvPlaybackSource[]>(() =>
+    inlineSourcesFor(event),
+  );
   const [loading, setLoading] = useState(!inlineSourcesFor(event).length);
   const [error, setError] = useState('');
   const [index, setIndex] = useState(0);
@@ -114,6 +128,17 @@ export function PpvPlayer({
    */
   const [sweeping, setSweeping] = useState(false);
   const [sweepFinished, setSweepFinished] = useState(false);
+  /*
+   * Operator-supplied authorized links. No configured catalog provider fills
+   * in a YouTube video id, a Twitch channel or any other authorized
+   * identifier, so without this the authorized path never yields a source at
+   * all. Adding one here is validated against the authorized platform table -
+   * it is not a second way into the hosted-embed allowlist.
+   */
+  const [userLinks, setUserLinks] = useState<PpvUserLink[]>([]);
+  const [linkDraft, setLinkDraft] = useState('');
+  const [linkError, setLinkError] = useState('');
+  const [addingLink, setAddingLink] = useState(false);
 
   const debugEnabled = debug ?? isPpvDebugEnabled();
   const officialWatchUrl = event.officialWatchUrl ?? '';
@@ -166,7 +191,7 @@ export function PpvPlayer({
       void resolve(target)
         .then((result) => {
           if (generation.current !== ticket) return;
-          setSources(result.sources);
+          setResolvedSources(result.sources);
           setDiagnostics(result.diagnostics);
           setIndex(0);
           setFailover({ ...emptyFailoverDiagnostics(), sourceCount: result.sources.length });
@@ -174,7 +199,7 @@ export function PpvPlayer({
         })
         .catch(() => {
           if (generation.current !== ticket) return;
-          setSources([]);
+          setResolvedSources([]);
           setError(zeroSourceHint(target));
         })
         .finally(() => {
@@ -196,19 +221,45 @@ export function PpvPlayer({
     userSelected.current = false;
     setSweeping(false);
     setSweepFinished(false);
+    setLinkDraft('');
+    setLinkError('');
+    setAddingLink(false);
+    setUserLinks(loadUserLinks(`${target.provider}:${target.providerEventId}`));
     setIframeTrace(emptyIframeDiagnostics());
     setFailover(emptyFailoverDiagnostics());
     const inline = inlineSourcesFor(target);
     if (inline.length) {
       generation.current += 1;
-      setSources(inline);
+      setResolvedSources(inline);
       setFailover({ ...emptyFailoverDiagnostics(), sourceCount: inline.length });
       setLoading(false);
       return;
     }
-    setSources([]);
+    setResolvedSources([]);
     runLoad(target);
   }, [eventKey, runLoad]);
+
+  /*
+   * Operator links come first. They are the only sources anyone has actually
+   * vouched for, so making the viewer step past a list of aggregator entries
+   * to reach one would be backwards.
+   */
+  const userSources = useMemo<PpvPlaybackSource[]>(
+    () =>
+      userLinks.map((link) => ({
+        providerId: link.platformId,
+        label: `${link.label} · added`,
+        kind: 'authorized_embed' as const,
+        url: link.url,
+        sourceName: link.platformId,
+      })),
+    [userLinks],
+  );
+
+  const sources = useMemo(
+    () => mergePpvPlaybackSources([...userSources, ...resolvedSources]),
+    [resolvedSources, userSources],
+  );
 
   const source = sources[Math.min(index, Math.max(0, sources.length - 1))];
   const sourceUrl = source?.url ?? '';
@@ -385,6 +436,39 @@ export function PpvPlayer({
 
   /* Stopping parks the sweep on whatever is on screen right now. */
   const stopSweep = () => setSweeping(false);
+
+  /*
+   * Adding a link. Validation lives in the authorized platform table, so this
+   * only routes the answer: on success the new source is prepended and
+   * selected, because someone who just named a broadcast wants to watch it,
+   * not to find it at position twelve.
+   */
+  const submitLink = () => {
+    const outcome = addUserLink(
+      eventKey,
+      linkDraft,
+      (reason) => describeLinkRejection(reason as PpvLinkRejection),
+    );
+    if (!outcome.ok) {
+      setLinkError(outcome.error);
+      return;
+    }
+    userSelected.current = true;
+    setUserLinks(outcome.links);
+    setLinkDraft('');
+    setLinkError('');
+    setAddingLink(false);
+    setSweeping(false);
+    setSweepFinished(false);
+    setFailover(emptyFailoverDiagnostics());
+    setIndex(outcome.links.length - 1);
+  };
+
+  const dropLink = (url: string) => {
+    setUserLinks(removeUserLink(eventKey, url));
+    setFailover(emptyFailoverDiagnostics());
+    setIndex(0);
+  };
 
   /*
    * The sweep driver. It only ever moves the index - it never reports that a
@@ -590,6 +674,18 @@ export function PpvPlayer({
                 Try all
               </button>
             ))}
+          <button
+            type="button"
+            onClick={() => {
+              setAddingLink((current) => !current);
+              setLinkError('');
+            }}
+            aria-label="Add an official stream link"
+            aria-expanded={addingLink}
+          >
+            <Link2 />
+            Add link
+          </button>
           <button type="button" onClick={() => runLoad(eventRef.current)} aria-label="Reload PPV embeds">
             <RotateCw />
             Reload
@@ -607,6 +703,58 @@ export function PpvPlayer({
           )}
         </div>
       </div>
+      {addingLink && (
+        <form
+          className="ppv-player__linkform"
+          aria-label="Add an official stream link"
+          onSubmit={(submitted) => {
+            submitted.preventDefault();
+            submitLink();
+          }}
+        >
+          <label htmlFor="ppv-official-link">Official stream link</label>
+          <div className="ppv-player__linkrow">
+            <input
+              id="ppv-official-link"
+              type="url"
+              inputMode="url"
+              autoComplete="off"
+              placeholder={PPV_AUTHORIZED_PLATFORMS[0]?.example ?? ''}
+              value={linkDraft}
+              onChange={(changed) => {
+                setLinkDraft(changed.target.value);
+                setLinkError('');
+              }}
+            />
+            <button type="submit">Add</button>
+          </div>
+          <p className="ppv-player__linkhint">
+            {PPV_AUTHORIZED_PLATFORMS.map((platform) => platform.label).join(', ')} only. The
+            platform decides whether it will play here; GlockTV cannot see inside the frame.
+          </p>
+          {linkError && (
+            <p className="ppv-player__linkerror" role="alert">
+              {linkError}
+            </p>
+          )}
+        </form>
+      )}
+      {userLinks.length > 0 && (
+        <ul className="ppv-player__links" aria-label="Added official stream links">
+          {userLinks.map((link) => (
+            <li key={link.url}>
+              <span>{link.label}</span>
+              <button
+                type="button"
+                onClick={() => dropLink(link.url)}
+                aria-label={`Remove added ${link.label} link`}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {debugEnabled && (
         <PpvDiagnosticsPanel
           catalog={catalogDiagnostics ?? null}

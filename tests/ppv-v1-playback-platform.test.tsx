@@ -327,7 +327,17 @@ describe('embed policy separation', () => {
   });
 
   it('does not let the authorized policy reach the hosted-embed hosts', () => {
-    expect(PPV_AUTHORIZED_EMBED_HOSTS).toEqual(['www.youtube-nocookie.com', 'player.twitch.tv']);
+    /* Pinned exactly, not with toContain: widening this list is a reviewed
+       change and this assertion is what forces the review. Kick, Rumble and
+       Vimeo were added deliberately, each to that platform's own documented
+       iframe endpoint. */
+    expect(PPV_AUTHORIZED_EMBED_HOSTS).toEqual([
+      'www.youtube-nocookie.com',
+      'player.twitch.tv',
+      'player.kick.com',
+      'rumble.com',
+      'player.vimeo.com',
+    ]);
     expect(isAllowedAuthorizedEmbedUrl('https://embed.st/embed/delta/a/1')).toBe(false);
     expect(isAllowedAuthorizedEmbedUrl('http://www.youtube-nocookie.com/embed/x')).toBe(false);
     expect(isAllowedAuthorizedEmbedUrl('https://www.youtube-nocookie.com.evil.example/')).toBe(false);

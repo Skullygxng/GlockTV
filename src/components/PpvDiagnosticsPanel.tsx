@@ -316,6 +316,10 @@ export function PpvDiagnosticsPanel({
             />
             <Row label="source" value={sourceCount ? `${sourceIndex}/${sourceCount}` : '0/0'} />
             <Row label="frame error event" value={iframe?.loadErrorEvent ?? false} />
+            <Row
+              label="deadline passed after load"
+              value={iframe?.deadlineElapsedAfterLoad ?? false}
+            />
             <p className="ppv-diag__warn">
               A document load event only means the frame document loaded. It is not proof of playback.
             </p>

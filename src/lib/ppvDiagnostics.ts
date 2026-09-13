@@ -321,6 +321,15 @@ export interface PpvIframeDiagnostics {
   loadErrorEvent: boolean;
   presentAfterProbe: boolean | null;
   unmountedBeforeProbe: boolean;
+  /*
+   * The load deadline elapsed while a document load event was already on
+   * record for this source, so no failover was attempted. This is NOT a
+   * playback failure signal - a healthy stream sits in exactly this state for
+   * its whole run. It records only that the deadline passed with nothing
+   * further observable from outside a cross-origin frame, which is also what
+   * a dead source looks like. The player uses it to say that much, no more.
+   */
+  deadlineElapsedAfterLoad: boolean;
 }
 
 export const PPV_IFRAME_PROBE_MS = 5000;
@@ -371,6 +380,7 @@ export function emptyIframeDiagnostics(): PpvIframeDiagnostics {
     loadErrorEvent: false,
     presentAfterProbe: null,
     unmountedBeforeProbe: false,
+    deadlineElapsedAfterLoad: false,
   };
 }
 

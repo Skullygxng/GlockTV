@@ -277,7 +277,21 @@ export function PpvPlayer({
     // cross-origin frame reliably exposes. Its presence proves only that a
     // document loaded, so it is never recorded as playback.
     const deadline = setTimeout(() => {
-      if (unmounted || userSelected.current || documentLoaded.current.has(index)) return;
+      if (unmounted || userSelected.current) return;
+      if (documentLoaded.current.has(index)) {
+        /*
+         * The frame loaded a document and then told us nothing further. That
+         * is not a load failure, so it must never trigger failover - a stream
+         * that is playing perfectly sits in exactly this state. But it is also
+         * indistinguishable from a dead source, and the previous behaviour -
+         * returning here and leaving a silent black rectangle mounted forever
+         * with no message, no retry and no official link - made the player's
+         * promise that the viewer is told simply untrue. Record it, and let
+         * the viewer be told what we actually know.
+         */
+        setIframeTrace((current) => ({ ...current, deadlineElapsedAfterLoad: true }));
+        return;
+      }
       advance(index, 'no_load_event_within_deadline');
     }, PPV_SOURCE_LOAD_DEADLINE_MS);
 
@@ -331,6 +345,21 @@ export function PpvPlayer({
   const idle = !source || exhausted;
   const showWatch = idle && !loading && Boolean(officialWatchUrl);
   const showInfo = idle && !loading && !showWatch && Boolean(officialInfoUrl);
+
+  /*
+   * A validated official destination is reachable whenever the event has one,
+   * not only from the idle panel. A mounted frame that never paints is the
+   * commonest real failure and it never reaches the idle state, so gating the
+   * only way out on that state left the viewer with nowhere to go.
+   */
+  const officialHref = officialWatchUrl || officialInfoUrl;
+  const officialLabel = officialWatchUrl ? 'Open official provider' : 'Open official page';
+
+  /*
+   * The deadline passed with a document load on record. Says nothing about
+   * playback in either direction - the notice below is worded accordingly.
+   */
+  const stalled = !idle && Boolean(source) && iframeTrace.deadlineElapsedAfterLoad;
 
   const retrySources = () => runLoad(eventRef.current);
 
@@ -423,6 +452,12 @@ export function PpvPlayer({
           </div>
         )}
       </div>
+      {stalled && (
+        <p className="ppv-player__stall" role="status">
+          This source loaded, but GlockTV cannot see inside a third-party player. If the
+          picture is still black, try another source, reload, or open the official page.
+        </p>
+      )}
       <div className="live-player__meta">
         <span className={`live-badge${event.status === 'live' ? '' : ' live-badge--idle'}`}>
           <Radio />
@@ -447,6 +482,17 @@ export function PpvPlayer({
             <RotateCw />
             Reload
           </button>
+          {!idle && officialHref && (
+            <a
+              className="ppv-player__official ppv-player__official--inline"
+              href={officialHref}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <ExternalLink />
+              {officialLabel}
+            </a>
+          )}
         </div>
       </div>
       {debugEnabled && (

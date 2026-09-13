@@ -30,6 +30,10 @@
 .ppv-player__actions{
   margin-left:auto;
   display:flex;
+  /* Three controls (Source, Reload, official destination) must not push the
+     meta row into a horizontal overflow on a phone. */
+  flex-wrap:wrap;
+  justify-content:flex-end;
   gap:8px;
 }
 .ppv-player__actions button{
@@ -211,3 +215,18 @@
 }
 .ppv-player__idle-actions button svg{width:13px}
 .ppv-player__idle-actions .ppv-player__official{margin-top:0}
+/* The same pill in the action bar beside Source and Reload, where it stays
+   reachable while a frame is mounted. */
+.ppv-player__official--inline{margin-top:0;padding:6px 12px}
+.ppv-player__official--inline svg{width:13px}
+/* Shown when the load deadline passed with a document already loaded. It is a
+   statement about what we can observe, never a claim that playback failed. */
+.ppv-player__stall{
+  margin:0;
+  padding:8px 16px;
+  border-top:1px solid #1d1922;
+  background:#150f1e;
+  color:#a99fb8;
+  font-size:9px;
+  line-height:1.5;
+}

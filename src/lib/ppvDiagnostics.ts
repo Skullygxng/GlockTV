@@ -306,6 +306,18 @@ export function emptyFailoverDiagnostics(): PpvFailoverDiagnostics {
 export const PPV_SOURCE_LOAD_DEADLINE_MS = 12_000;
 
 /*
+ * How long a swept source is left on screen before the sweep moves on.
+ *
+ * The sweep exists because nothing in the browser can tell us whether a
+ * cross-origin frame is actually painting video - but the person watching can.
+ * So the sweep supplies the one thing automation cannot: it mounts each source
+ * in turn and gives the viewer long enough to see a picture, and the viewer
+ * stops it on the one that works. Long enough for a stream to start, short
+ * enough that fifteen sources is a minute and a half, not ten.
+ */
+export const PPV_SWEEP_DWELL_MS = 6000;
+
+/*
  * A cross-origin iframe load event only proves the frame document loaded. It
  * says nothing about whether video is playing, so no field here is named or
  * worded as playback success.

@@ -230,3 +230,18 @@
   font-size:9px;
   line-height:1.5;
 }
+/* Direct source picker. With a long list, stepping to number twelve one press
+   at a time is the problem the picker exists to remove. */
+.ppv-player__picker{
+  border:1px solid #3a2f48;
+  background:#15131a;
+  color:#d7d0e0;
+  border-radius:8px;
+  padding:8px 10px;
+  font-size:8px;
+  max-width:150px;
+  cursor:pointer;
+}
+/* The sweep line is live status, not a warning, so it reads a shade brighter
+   than the stall notice it replaces while a sweep is running. */
+.ppv-player__stall--sweep{color:#d7d0e0;background:#1a1226}

@@ -2,7 +2,11 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PpvPlayer } from '../src/components/PpvPlayer';
 import type { PpvEvent } from '../src/lib/ppv';
-import { PPV_SOURCE_LOAD_DEADLINE_MS, emptyIframeDiagnostics } from '../src/lib/ppvDiagnostics';
+import {
+  PPV_SOURCE_LOAD_DEADLINE_MS,
+  PPV_SWEEP_DWELL_MS,
+  emptyIframeDiagnostics,
+} from '../src/lib/ppvDiagnostics';
 import ppvCss from '../src/ppv.css?raw';
 
 /*
@@ -204,5 +208,159 @@ describe('stall diagnostics and styling', () => {
   it('lets the action bar wrap rather than overflow on a phone', () => {
     const block = ppvCss.slice(ppvCss.indexOf('.ppv-player__actions{'));
     expect(block.slice(0, block.indexOf('}'))).toContain('flex-wrap:wrap');
+  });
+});
+
+/*
+ * The long-dead-list problem: fifteen sources, and finding out whether any of
+ * them paints means clicking Next fifteen times and staring at each one.
+ *
+ * Nothing in the browser can tell a black cross-origin frame from a working
+ * one, so the sweep does not try to. It mounts each source in turn and the
+ * viewer - who can see the picture - stops it. These tests pin that the sweep
+ * only ever moves the index, terminates, and never claims to know whether any
+ * source played.
+ */
+describe('sweeping a long source list', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const many = (count: number): PpvEvent =>
+    eventWith({
+      embeds: Array.from({ length: count }, (_, position) => ({
+        provider: 'streamed' as const,
+        source: `s${position}`,
+        url: `https://embed.st/embed/delta/garcia/${position}`,
+      })),
+    });
+
+  function sweepButton() {
+    return screen.getByRole('button', { name: 'Try all PPV sources' });
+  }
+
+  /*
+   * One dwell per act call. Batching several dwells into a single advance
+   * races the effect that schedules the next timer, which is a property of
+   * the test clock, not of the sweep.
+   */
+  async function dwell(times = 1) {
+    for (let step = 0; step < times; step += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PPV_SWEEP_DWELL_MS + 1);
+      });
+    }
+  }
+
+  it('walks every source in turn, one dwell apart', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<PpvPlayer event={many(4)} />);
+
+    await act(async () => {
+      fireEvent.click(sweepButton());
+    });
+    expect(frame()?.getAttribute('src')).toBe('https://embed.st/embed/delta/garcia/0');
+
+    for (const expected of [1, 2, 3]) {
+      await dwell();
+      expect(frame()?.getAttribute('src')).toBe(`https://embed.st/embed/delta/garcia/${expected}`);
+    }
+  });
+
+  it('stops after one pass instead of cycling forever', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<PpvPlayer event={many(3)} />);
+    await act(async () => {
+      fireEvent.click(sweepButton());
+    });
+
+    await dwell(6);
+    expect(frame()?.getAttribute('src')).toBe('https://embed.st/embed/delta/garcia/2');
+    expect(screen.getByRole('button', { name: 'Try all PPV sources' })).toBeInTheDocument();
+    expect(screen.getByText(/Tried all 3 sources/i)).toBeInTheDocument();
+  });
+
+  it('parks on the source showing when the viewer stops it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<PpvPlayer event={many(5)} />);
+    await act(async () => {
+      fireEvent.click(sweepButton());
+    });
+    await dwell(2);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop sweeping PPV sources' }));
+    });
+
+    const parked = frame()?.getAttribute('src');
+    expect(parked).toBe('https://embed.st/embed/delta/garcia/2');
+    await dwell(4);
+    expect(frame()?.getAttribute('src')).toBe(parked);
+  });
+
+  it('never claims a swept source did or did not play', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<PpvPlayer event={many(2)} />);
+    await act(async () => {
+      fireEvent.click(sweepButton());
+    });
+    const status = screen.getByText(/Trying source 1 of 2/i);
+    expect(status.textContent).toMatch(/cannot detect that from inside the frame/i);
+    expect(status.textContent).not.toMatch(/\b(playing|failed|dead|working|offline)\b/i);
+  });
+
+  it('jumps straight to any source through the picker', async () => {
+    render(<PpvPlayer event={many(15)} />);
+    const picker = screen.getByRole('combobox', { name: 'Choose PPV source' });
+    expect(screen.getAllByRole('option')).toHaveLength(15);
+
+    await act(async () => {
+      fireEvent.change(picker, { target: { value: '11' } });
+    });
+    expect(frame()?.getAttribute('src')).toBe('https://embed.st/embed/delta/garcia/11');
+    expect(screen.getByRole('button', { name: 'Next PPV source' }).textContent).toContain('12/15');
+  });
+
+  it('cancels an in-flight sweep when the viewer picks a source by hand', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<PpvPlayer event={many(6)} />);
+    await act(async () => {
+      fireEvent.click(sweepButton());
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByRole('combobox', { name: 'Choose PPV source' }), {
+        target: { value: '4' },
+      });
+    });
+
+    expect(screen.queryByRole('button', { name: 'Stop sweeping PPV sources' })).toBeNull();
+    await dwell(3);
+    expect(frame()?.getAttribute('src')).toBe('https://embed.st/embed/delta/garcia/4');
+  });
+
+  it('offers no sweep or picker for a single source', () => {
+    render(
+      <PpvPlayer
+        event={eventWith({
+          embeds: [{ provider: 'streamed', source: 'delta', url: 'https://embed.st/only/1' }],
+        })}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Try all PPV sources' })).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Choose PPV source' })).toBeNull();
+  });
+
+  it('suppresses the stall notice while a sweep is running', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    render(<PpvPlayer event={many(4)} />);
+    await act(async () => {
+      fireEvent.load(frame() as HTMLIFrameElement);
+    });
+    await passTheDeadline();
+    expect(screen.getByText(STALL_NOTICE)).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(sweepButton());
+    });
+    expect(screen.queryByText(STALL_NOTICE)).not.toBeInTheDocument();
   });
 });

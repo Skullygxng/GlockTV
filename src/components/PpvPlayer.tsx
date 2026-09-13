@@ -1,11 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, LoaderCircle, Radio, RotateCw, SkipForward, Tv } from 'lucide-react';
+import {
+  CircleStop,
+  ExternalLink,
+  LoaderCircle,
+  Radio,
+  RotateCw,
+  ScanSearch,
+  SkipForward,
+  Tv,
+} from 'lucide-react';
 import type { PpvEmbed, PpvEvent, PpvPlaybackSource } from '../lib/ppv';
 import { formatPpvStart, loadPpvEmbeds } from '../lib/ppv';
 import { discoverPpvEmbeds } from '../lib/ppv';
 import {
   PPV_IFRAME_PROBE_MS,
   PPV_SOURCE_LOAD_DEADLINE_MS,
+  PPV_SWEEP_DWELL_MS,
   diagnosticHostname,
   emptyEventDiagnostics,
   emptyFailoverDiagnostics,
@@ -92,6 +102,18 @@ export function PpvPlayer({
   const [diagnostics, setDiagnostics] = useState<PpvEventDiagnostics | null>(null);
   const [iframeTrace, setIframeTrace] = useState<PpvIframeDiagnostics>(emptyIframeDiagnostics);
   const [failover, setFailover] = useState<PpvFailoverDiagnostics>(emptyFailoverDiagnostics);
+  /*
+   * Sweep state.
+   *
+   * A long source list is only useful if trying it is cheap. Nothing in the
+   * browser can tell a black cross-origin frame from a working one - but the
+   * person watching can, instantly. So the sweep splits the job the only way
+   * it can be split: it mounts every source in turn, and the viewer stops it
+   * on the one that paints. That is not a workaround for the missing playback
+   * signal, it is the honest division of labour given there isn't one.
+   */
+  const [sweeping, setSweeping] = useState(false);
+  const [sweepFinished, setSweepFinished] = useState(false);
 
   const debugEnabled = debug ?? isPpvDebugEnabled();
   const officialWatchUrl = event.officialWatchUrl ?? '';
@@ -137,6 +159,8 @@ export function PpvPlayer({
       const ticket = ++generation.current;
       documentLoaded.current = new Set<number>();
       userSelected.current = false;
+      setSweeping(false);
+      setSweepFinished(false);
       setLoading(true);
       setError('');
       void resolve(target)
@@ -170,6 +194,8 @@ export function PpvPlayer({
     setDiagnostics(null);
     documentLoaded.current = new Set<number>();
     userSelected.current = false;
+    setSweeping(false);
+    setSweepFinished(false);
     setIframeTrace(emptyIframeDiagnostics());
     setFailover(emptyFailoverDiagnostics());
     const inline = inlineSourcesFor(target);
@@ -337,6 +363,52 @@ export function PpvPlayer({
   };
 
   /*
+   * Jump straight to a source. With a long list, stepping through one at a
+   * time to reach number twelve is the whole problem, so the picker addresses
+   * every source directly. Like Source, it is a deliberate choice and stops
+   * automatic failover for this event.
+   */
+  const selectSource = (next: number) => {
+    if (next < 0 || next >= sources.length || next === index) return;
+    userSelected.current = true;
+    setSweeping(false);
+    setIndex(next);
+  };
+
+  const startSweep = () => {
+    if (sources.length < 2) return;
+    userSelected.current = true;
+    setSweepFinished(false);
+    setSweeping(true);
+    setIndex(0);
+  };
+
+  /* Stopping parks the sweep on whatever is on screen right now. */
+  const stopSweep = () => setSweeping(false);
+
+  /*
+   * The sweep driver. It only ever moves the index - it never reports that a
+   * source worked or failed, because it cannot know either. It stops at the
+   * end of one pass rather than cycling, so it always terminates.
+   */
+  useEffect(() => {
+    if (!sweeping) return;
+    if (sources.length < 2) {
+      setSweeping(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (index + 1 >= sources.length) {
+        setSweeping(false);
+        setSweepFinished(true);
+        return;
+      }
+      setIndex(index + 1);
+    }, PPV_SWEEP_DWELL_MS);
+    return () => clearTimeout(timer);
+  }, [sweeping, index, sources.length]);
+
+  /*
    * Exhaustion is a user-visible state, not a diagnostics-only flag. Leaving
    * the last failed frame mounted told the viewer nothing at all, which made
    * the claim that they are told when sources run out simply untrue.
@@ -359,7 +431,8 @@ export function PpvPlayer({
    * The deadline passed with a document load on record. Says nothing about
    * playback in either direction - the notice below is worded accordingly.
    */
-  const stalled = !idle && Boolean(source) && iframeTrace.deadlineElapsedAfterLoad;
+  const stalled =
+    !idle && !sweeping && Boolean(source) && iframeTrace.deadlineElapsedAfterLoad;
 
   const retrySources = () => runLoad(eventRef.current);
 
@@ -452,7 +525,19 @@ export function PpvPlayer({
           </div>
         )}
       </div>
-      {stalled && (
+      {sweeping && (
+        <p className="ppv-player__stall ppv-player__stall--sweep" role="status">
+          Trying source {index + 1} of {sources.length}. Watch for a picture and press
+          Stop here when you see one — GlockTV cannot detect that from inside the frame.
+        </p>
+      )}
+      {sweepFinished && !sweeping && (
+        <p className="ppv-player__stall" role="status">
+          Tried all {sources.length} sources. If none of them showed a picture, they are
+          not reachable right now — open the official page instead.
+        </p>
+      )}
+      {stalled && !sweepFinished && (
         <p className="ppv-player__stall" role="status">
           This source loaded, but GlockTV cannot see inside a third-party player. If the
           picture is still black, try another source, reload, or open the official page.
@@ -473,11 +558,38 @@ export function PpvPlayer({
         </div>
         <div className="ppv-player__actions">
           {sources.length > 1 && (
+            <select
+              className="ppv-player__picker"
+              aria-label="Choose PPV source"
+              value={index}
+              onChange={(changed) => selectSource(Number(changed.target.value))}
+            >
+              {sources.map((entry, position) => (
+                <option key={entry.url} value={position}>
+                  {position + 1}/{sources.length}
+                  {entry.label ? ` · ${entry.label}` : ''}
+                </option>
+              ))}
+            </select>
+          )}
+          {sources.length > 1 && (
             <button type="button" onClick={nextSource} aria-label="Next PPV source">
               <SkipForward />
               Source {index + 1}/{sources.length}
             </button>
           )}
+          {sources.length > 1 &&
+            (sweeping ? (
+              <button type="button" onClick={stopSweep} aria-label="Stop sweeping PPV sources">
+                <CircleStop />
+                Stop here
+              </button>
+            ) : (
+              <button type="button" onClick={startSweep} aria-label="Try all PPV sources">
+                <ScanSearch />
+                Try all
+              </button>
+            ))}
           <button type="button" onClick={() => runLoad(eventRef.current)} aria-label="Reload PPV embeds">
             <RotateCw />
             Reload
